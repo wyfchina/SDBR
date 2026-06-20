@@ -1,0 +1,368 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import shutil
+import sqlite3
+from threading import RLock
+
+from sdbr.operational_state import (
+    OperationalStateSnapshot,
+    create_operational_state_snapshot,
+)
+from sdbr.planner_view import InventoryBufferPolicy
+from sdbr.release_authorization import ReleaseAuthorization
+from sdbr.release_candidates import MaterialAvailability, WipLimit
+from sdbr.replanning import ReplanRequest
+
+
+class StateStoreRevisionConflict(RuntimeError):
+    def __init__(self, *, expected_revision: int, current_revision: int) -> None:
+        super().__init__("Workbench state was changed by another writer.")
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+
+
+@dataclass(slots=True)
+class WorkbenchStateStore:
+    execution_events: list[dict[str, object]] = field(default_factory=list)
+    replan_requests: list[ReplanRequest] = field(default_factory=list)
+    replan_schedule_snapshots: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    release_authorizations: list[ReleaseAuthorization] = field(default_factory=list)
+    operational_state_snapshots: dict[str, OperationalStateSnapshot] = field(
+        default_factory=dict
+    )
+    release_decision_packages: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    dbr_release_policies: dict[str, dict[str, object]] = field(default_factory=dict)
+    master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
+    planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
+    audit_events: list[dict[str, object]] = field(default_factory=list)
+    revision: int = 0
+
+    def save(self) -> None:
+        self.revision += 1
+
+    def health(self) -> dict[str, object]:
+        return {
+            "Backend": "Memory",
+            "Status": "Healthy",
+            "SchemaVersion": None,
+            "Revision": self.current_revision(),
+            "RecoveryStatus": "NotApplicable",
+            "LastSavedAt": None,
+            "StateCounts": _state_counts(self),
+        }
+
+    def reload(self) -> None:
+        return None
+
+    def current_revision(self) -> int:
+        return self.revision
+
+
+class SQLiteWorkbenchStateStore(WorkbenchStateStore):
+    SCHEMA_VERSION = 1
+
+    def __init__(self, database_path: str | Path) -> None:
+        super().__init__()
+        self.database_path = Path(database_path)
+        self.backup_path = self.database_path.with_suffix(
+            self.database_path.suffix + ".bak"
+        )
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = RLock()
+        self._last_saved_at: str | None = None
+        self._recovery_status = "Normal"
+        self._revision = 0
+        try:
+            self._initialize()
+            self._load()
+        except sqlite3.DatabaseError:
+            if not self.backup_path.exists():
+                raise
+            shutil.copy2(self.backup_path, self.database_path)
+            self._clear()
+            self._initialize()
+            self._load()
+            self._recovery_status = "RecoveredFromBackup"
+
+    def save(self) -> None:
+        payloads = {
+            "execution_events": self.execution_events,
+            "replan_requests": [asdict(item) for item in self.replan_requests],
+            "replan_schedule_snapshots": self.replan_schedule_snapshots,
+            "release_authorizations": [
+                asdict(item) for item in self.release_authorizations
+            ],
+            "operational_state_snapshots": [
+                asdict(item) for item in self.operational_state_snapshots.values()
+            ],
+            "release_decision_packages": self.release_decision_packages,
+            "dbr_release_policies": self.dbr_release_policies,
+            "master_data_versions": self.master_data_versions,
+            "planning_runs": self.planning_runs,
+            "audit_events": self.audit_events,
+        }
+        saved_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            connection = sqlite3.connect(self.database_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                current_revision = int(
+                    connection.execute(
+                        """
+                        SELECT metadata_value FROM workbench_metadata
+                        WHERE metadata_key = 'state_revision'
+                        """
+                    ).fetchone()[0]
+                )
+                if current_revision != self._revision:
+                    raise StateStoreRevisionConflict(
+                        expected_revision=self._revision,
+                        current_revision=current_revision,
+                    )
+                connection.executemany(
+                    """
+                    INSERT INTO workbench_state (state_key, payload)
+                    VALUES (?, ?)
+                    ON CONFLICT(state_key) DO UPDATE SET payload = excluded.payload
+                    """,
+                    [
+                        (
+                            state_key,
+                            json.dumps(
+                                _jsonable(payload),
+                                ensure_ascii=True,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                        )
+                        for state_key, payload in payloads.items()
+                    ],
+                )
+                next_revision = current_revision + 1
+                connection.executemany(
+                    """
+                    INSERT INTO workbench_metadata (metadata_key, metadata_value)
+                    VALUES (?, ?)
+                    ON CONFLICT(metadata_key) DO UPDATE
+                    SET metadata_value = excluded.metadata_value
+                    """,
+                    (
+                        ("last_saved_at", saved_at),
+                        ("state_revision", str(next_revision)),
+                    ),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        self._last_saved_at = saved_at
+        self._revision = next_revision
+        self._create_backup()
+
+    def health(self) -> dict[str, object]:
+        with self._lock, sqlite3.connect(self.database_path) as connection:
+            quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        return {
+            "Backend": "SQLite",
+            "Status": (
+                "Healthy"
+                if quick_check is not None and quick_check[0] == "ok"
+                else "Unhealthy"
+            ),
+            "SchemaVersion": self.SCHEMA_VERSION,
+            "Revision": self._revision,
+            "RecoveryStatus": self._recovery_status,
+            "DatabasePath": str(self.database_path.resolve()),
+            "BackupPath": str(self.backup_path.resolve()),
+            "LastSavedAt": self._last_saved_at,
+            "StateCounts": _state_counts(self),
+        }
+
+    def current_revision(self) -> int:
+        return self._revision
+
+    def _initialize(self) -> None:
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workbench_state (
+                    state_key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workbench_metadata (
+                    metadata_key TEXT PRIMARY KEY,
+                    metadata_value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO workbench_metadata (metadata_key, metadata_value)
+                VALUES ('schema_version', ?)
+                ON CONFLICT(metadata_key) DO NOTHING
+                """,
+                (str(self.SCHEMA_VERSION),),
+            )
+            connection.execute(
+                """
+                INSERT INTO workbench_metadata (metadata_key, metadata_value)
+                VALUES ('state_revision', '0')
+                ON CONFLICT(metadata_key) DO NOTHING
+                """
+            )
+
+    def _load(self) -> None:
+        with self._lock, sqlite3.connect(self.database_path) as connection:
+            rows = dict(connection.execute("SELECT state_key, payload FROM workbench_state"))
+            metadata = dict(
+                connection.execute(
+                    "SELECT metadata_key, metadata_value FROM workbench_metadata"
+                )
+            )
+        schema_version = int(metadata.get("schema_version", "0"))
+        if schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported workbench schema version: {schema_version}."
+            )
+        self._last_saved_at = metadata.get("last_saved_at")
+        self._revision = int(metadata.get("state_revision", "0"))
+        if not rows:
+            return
+        payloads = {
+            state_key: json.loads(payload) for state_key, payload in rows.items()
+        }
+        self.execution_events.extend(payloads.get("execution_events", []))
+        self.replan_requests.extend(
+            _replan_request_from_dict(item)
+            for item in payloads.get("replan_requests", [])
+        )
+        self.replan_schedule_snapshots.update(
+            payloads.get("replan_schedule_snapshots", {})
+        )
+        self.release_authorizations.extend(
+            _release_authorization_from_dict(item)
+            for item in payloads.get("release_authorizations", [])
+        )
+        self.operational_state_snapshots.update(
+            (
+                snapshot.snapshot_id,
+                snapshot,
+            )
+            for snapshot in (
+                _operational_state_snapshot_from_dict(item)
+                for item in payloads.get("operational_state_snapshots", [])
+            )
+        )
+        self.release_decision_packages.update(
+            payloads.get("release_decision_packages", {})
+        )
+        self.dbr_release_policies.update(payloads.get("dbr_release_policies", {}))
+        self.master_data_versions.update(payloads.get("master_data_versions", {}))
+        self.planning_runs.update(payloads.get("planning_runs", {}))
+        self.audit_events.extend(payloads.get("audit_events", []))
+
+    def _create_backup(self) -> None:
+        with self._lock, sqlite3.connect(self.database_path) as source:
+            with sqlite3.connect(self.backup_path) as destination:
+                source.backup(destination)
+
+    def reload(self) -> None:
+        with self._lock:
+            self._clear()
+            self._load()
+
+    def _clear(self) -> None:
+        self.execution_events.clear()
+        self.replan_requests.clear()
+        self.replan_schedule_snapshots.clear()
+        self.release_authorizations.clear()
+        self.operational_state_snapshots.clear()
+        self.release_decision_packages.clear()
+        self.dbr_release_policies.clear()
+        self.master_data_versions.clear()
+        self.planning_runs.clear()
+        self.audit_events.clear()
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
+    return {
+        "ExecutionEvents": len(store.execution_events),
+        "ReplanRequests": len(store.replan_requests),
+        "ReplanScheduleSnapshots": len(store.replan_schedule_snapshots),
+        "ReleaseAuthorizations": len(store.release_authorizations),
+        "OperationalStateSnapshots": len(store.operational_state_snapshots),
+        "ReleaseDecisionPackages": len(store.release_decision_packages),
+        "DbrReleasePolicies": len(store.dbr_release_policies),
+        "MasterDataVersions": len(store.master_data_versions),
+        "PlanningRuns": len(store.planning_runs),
+        "AuditEvents": len(store.audit_events),
+    }
+
+
+def _replan_request_from_dict(value: dict[str, object]) -> ReplanRequest:
+    data = dict(value)
+    for key in (
+        "planned_release_at",
+        "detected_at",
+        "decided_at",
+        "execution_started_at",
+        "execution_completed_at",
+    ):
+        if data.get(key) is not None:
+            data[key] = datetime.fromisoformat(str(data[key]))
+    return ReplanRequest(**data)
+
+
+def _release_authorization_from_dict(
+    value: dict[str, object],
+) -> ReleaseAuthorization:
+    data = dict(value)
+    data["released_at"] = datetime.fromisoformat(str(data["released_at"]))
+    return ReleaseAuthorization(**data)
+
+
+def _operational_state_snapshot_from_dict(
+    value: dict[str, object],
+) -> OperationalStateSnapshot:
+    material_availability = []
+    for item in value.get("material_availability", []):
+        data = dict(item)
+        if data.get("inbound_available_at") is not None:
+            data["inbound_available_at"] = datetime.fromisoformat(
+                str(data["inbound_available_at"])
+            )
+        material_availability.append(MaterialAvailability(**data))
+    return create_operational_state_snapshot(
+        snapshot_id=str(value["snapshot_id"]),
+        captured_at=datetime.fromisoformat(str(value["captured_at"])),
+        inventory_buffers=[
+            InventoryBufferPolicy(**item)
+            for item in value.get("inventory_buffers", [])
+        ],
+        material_availability=material_availability,
+        wip_limits=[WipLimit(**item) for item in value.get("wip_limits", [])],
+    )

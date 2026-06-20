@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.tmp/
+
+*.log
+
+data/**/*.db
+data/**/*.db.bak
+data/**/*.bak
+
+.superpowers/
+
+.env
+.env.*
+!.env.example

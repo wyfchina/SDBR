@@ -57,7 +57,7 @@ const I18N = {
     timeRange: "时间范围", allTime: "全部时间", last24Hours: "最近 24 小时", last7Days: "最近 7 天",
     last30Days: "最近 30 天", allSolvers: "全部求解器", startedAt: "开始时间",
     createPlanningRun: "创建排程", runsLoadFailed: "无法读取排程任务", runsRetryAdvice: "请重新加载后再操作。",
-    runId: "Run ID", problem: "计划问题", solver: "求解器", requestedAt: "请求时间", duration: "耗时",
+    runId: "Run ID", problem: "计划场景", solver: "求解器", requestedAt: "请求时间", duration: "耗时",
     attempts: "尝试", actions: "操作", noPlanningRuns: "尚无排程任务", noPlanningRunsDescription: "选择有效输入后创建第一项排程任务。",
     wizardTitle: "新建 Planning Run", wizardSteps: "创建排程步骤", selectInputs: "选择输入", setPolicy: "设置策略",
     reviewSubmit: "验证并提交", scheduleStart: "计划起点", selectInputsFirst: "请先在数据就绪中心选择有效输入。",
@@ -149,15 +149,22 @@ const I18N = {
     administrationRetryAdvice: "请确认本地服务可用后重试。", adminMasterDataTitle: "主数据后台", importPreview: "导入预览",
     importPreviewDescription: "选择对象后先查看结构化预览和预校验结果，再生成主数据版本。", importFile: "导入文件", preValidate: "预校验",
     generateVersion: "生成版本", routingImport: "导入工艺路线", noImportSelected: "尚未选择导入对象", rawJsonHidden: "原始 JSON 默认隐藏，仅管理员调试模式可查看。",
-    adminSystemTitle: "集成与求解器设置", policyConfiguration: "排程策略配置", calendar: "日历", calendarLayers: "资源日历四层",
-    readOnly: "只读", objectCount: "当前数量", importEndpoint: "导入接口", reservedFields: "预留字段", structuredPreview: "结构化预览",
+    adminSystemTitle: "集成与求解器设置", policyConfiguration: "排程策略配置", cpSatAssumptions: "CP-SAT 建模假设",
+    tunableParameters: "可调参数", deferredRules: "延后规则", driverStatus: "驱动状态", calendar: "日历", calendarLayers: "资源日历四层",
+    readOnly: "只读", partialEditable: "部分可配置", objectCount: "当前数量", importEndpoint: "导入接口", reservedFields: "预留字段", structuredPreview: "结构化预览",
     preValidationRequired: "导入前预校验", versionAfterImport: "导入后生成版本", capabilityStatus: "能力状态", lastSync: "最近同步",
     workerQueue: "Worker 队列", stateStore: "状态存储", DayDefinition: "日定义", WeekDefinition: "周定义", TemporaryShiftOverride: "临时班次覆盖",
-    ExclusionOrMaintenance: "排除/维护修改", RateInterpretation: "速率解释方式", Units: "单位", SchedulingWindow: "排程窗口",
+    ExclusionOrMaintenance: "排除/维护修改", Overtime: "加班", calendarOverrides: "临时覆盖", calendarOverrideConfig: "日历临时覆盖配置",
+    overrideId: "覆盖编号", calendarId: "日历编号", overrideType: "覆盖类型", effectiveStart: "生效开始", effectiveEnd: "生效结束",
+    capacityDelta: "产能增减分钟", shiftName: "班次名称", reason: "原因", createOverride: "创建覆盖", calendarOverride: "日历覆盖",
+    noCalendarOverrides: "尚无临时日历覆盖。", calendarOverrideCreated: "日历覆盖已创建。", calendarOverrideFailed: "日历覆盖创建失败。",
+    calendarOverrideBoundary: "当前仅支持临时覆盖台账；基础日历、班次模板和覆盖直接驱动 CP-SAT 仍待后续规则确认。",
+    RateInterpretation: "速率解释方式", Units: "单位", SchedulingWindow: "排程窗口",
     BufferBoundaries: "缓冲区边界比例", PiecesPerHour: "件/小时", HoursPerPiece: "小时/件", MinutesPerPiece: "分钟/件",
     BufferMinutes: "缓冲分钟", SetupMinutes: "换型分钟", DurationMinutes: "持续分钟", FixedOffsetMinutes: "固定偏移分钟",
     WindowStart: "窗口起点", PreferredCompletionTime: "首选完工时间", ShipmentCutoffRule: "发货截止规则", GreenRatio: "绿区比例",
     YellowRatio: "黄区比例", RedRatio: "红区比例", NotConfigured: "未配置", Paused: "已暂停", Available: "可用", Unavailable: "不可用",
+    Applied: "已应用", PartiallyApplied: "部分应用",
     Idle: "空闲", Online: "在线", Healthy: "健康", Unhealthy: "异常"
   },
   en: {
@@ -215,7 +222,7 @@ const I18N = {
     timeRange: "Time range", allTime: "All time", last24Hours: "Last 24 hours", last7Days: "Last 7 days",
     last30Days: "Last 30 days", allSolvers: "All solvers", startedAt: "Started at",
     createPlanningRun: "Create planning run", runsLoadFailed: "Planning runs could not be loaded", runsRetryAdvice: "Reload before trying the operation again.",
-    runId: "Run ID", problem: "Planning problem", solver: "Solver", requestedAt: "Requested at", duration: "Duration",
+    runId: "Run ID", problem: "Planning scenario", solver: "Solver", requestedAt: "Requested at", duration: "Duration",
     attempts: "Attempts", actions: "Actions", noPlanningRuns: "No planning runs", noPlanningRunsDescription: "Select valid inputs and create the first planning run.",
     wizardTitle: "New Planning Run", wizardSteps: "Create planning run steps", selectInputs: "Select inputs", setPolicy: "Set policy",
     reviewSubmit: "Review and submit", scheduleStart: "Schedule start", selectInputsFirst: "Select valid inputs in Data Readiness first.",
@@ -307,15 +314,22 @@ const I18N = {
     administrationRetryAdvice: "Check the local service and retry.", adminMasterDataTitle: "Master Data Administration", importPreview: "Import preview",
     importPreviewDescription: "Select an object, review structured preview and pre-validation, then generate a master data version.", importFile: "Import file", preValidate: "Pre-validate",
     generateVersion: "Generate version", routingImport: "Import routings", noImportSelected: "No import object selected", rawJsonHidden: "Raw JSON is hidden by default and available only in administrator debug mode.",
-    adminSystemTitle: "Integration and Solver Settings", policyConfiguration: "Scheduling policy configuration", calendar: "Calendar", calendarLayers: "Four resource-calendar layers",
-    readOnly: "Read-only", objectCount: "Current count", importEndpoint: "Import endpoint", reservedFields: "Reserved fields", structuredPreview: "Structured preview",
+    adminSystemTitle: "Integration and Solver Settings", policyConfiguration: "Scheduling policy configuration", cpSatAssumptions: "CP-SAT Modeling Assumptions",
+    tunableParameters: "Tunable parameters", deferredRules: "Deferred rules", driverStatus: "Driver status", calendar: "Calendar", calendarLayers: "Four resource-calendar layers",
+    readOnly: "Read-only", partialEditable: "Partially configurable", objectCount: "Current count", importEndpoint: "Import endpoint", reservedFields: "Reserved fields", structuredPreview: "Structured preview",
     preValidationRequired: "Pre-validation before import", versionAfterImport: "Version after import", capabilityStatus: "Capability status", lastSync: "Last sync",
     workerQueue: "Worker queue", stateStore: "State store", DayDefinition: "Day definition", WeekDefinition: "Week definition", TemporaryShiftOverride: "Temporary shift override",
-    ExclusionOrMaintenance: "Exclusion or maintenance change", RateInterpretation: "Rate interpretation", Units: "Units", SchedulingWindow: "Scheduling window",
+    ExclusionOrMaintenance: "Exclusion or maintenance change", Overtime: "Overtime", calendarOverrides: "Temporary overrides", calendarOverrideConfig: "Calendar temporary override configuration",
+    overrideId: "Override ID", calendarId: "Calendar ID", overrideType: "Override type", effectiveStart: "Effective start", effectiveEnd: "Effective end",
+    capacityDelta: "Capacity delta minutes", shiftName: "Shift name", reason: "Reason", createOverride: "Create override", calendarOverride: "Calendar override",
+    noCalendarOverrides: "No temporary calendar overrides.", calendarOverrideCreated: "Calendar override created.", calendarOverrideFailed: "Calendar override creation failed.",
+    calendarOverrideBoundary: "Only the temporary override ledger is configurable now; base calendars, shift templates, and direct CP-SAT driving remain pending business rules.",
+    RateInterpretation: "Rate interpretation", Units: "Units", SchedulingWindow: "Scheduling window",
     BufferBoundaries: "Buffer boundary ratios", PiecesPerHour: "Pieces/hour", HoursPerPiece: "Hours/piece", MinutesPerPiece: "Minutes/piece",
     BufferMinutes: "Buffer minutes", SetupMinutes: "Setup minutes", DurationMinutes: "Duration minutes", FixedOffsetMinutes: "Fixed offset minutes",
     WindowStart: "Window start", PreferredCompletionTime: "Preferred completion time", ShipmentCutoffRule: "Shipment cutoff rule", GreenRatio: "Green ratio",
     YellowRatio: "Yellow ratio", RedRatio: "Red ratio", NotConfigured: "Not configured", Paused: "Paused", Available: "Available", Unavailable: "Unavailable",
+    Applied: "Applied", PartiallyApplied: "Partially applied",
     Idle: "Idle", Online: "Online", Healthy: "Healthy", Unhealthy: "Unhealthy"
   }
 };
@@ -353,6 +367,7 @@ let selectedBufferRunID = null;
 let selectedBufferOrder = null;
 let exceptionCenterData = null;
 let administrationData = null;
+let calendarOverridesData = [];
 
 function translate(key) {
   return I18N[currentLanguage][key] || I18N.en[key] || key;
@@ -2255,10 +2270,19 @@ async function openExceptionDetail(exceptionId) {
 
 async function loadAdministration() {
   try {
-    const response = await fetch("/planner/workbench/administration/workbench", { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    administrationData = payload.Data;
+    const [administrationResponse, cpSatResponse, calendarOverridesResponse] = await Promise.all([
+      fetch("/planner/workbench/administration/workbench", { headers: { Accept: "application/json" } }),
+      fetch("/planner/workbench/admin/cp-sat/assumptions", { headers: { Accept: "application/json" } }),
+      fetch("/planner/workbench/admin/calendar-overrides", { headers: { Accept: "application/json" } })
+    ]);
+    if (!administrationResponse.ok) throw new Error(`HTTP ${administrationResponse.status}`);
+    if (!cpSatResponse.ok) throw new Error(`HTTP ${cpSatResponse.status}`);
+    if (!calendarOverridesResponse.ok) throw new Error(`HTTP ${calendarOverridesResponse.status}`);
+    const administrationPayload = await administrationResponse.json();
+    const cpSatPayload = await cpSatResponse.json();
+    const calendarOverridesPayload = await calendarOverridesResponse.json();
+    administrationData = { ...administrationPayload.Data, CpSatAssumptions: cpSatPayload.Data };
+    calendarOverridesData = calendarOverridesPayload.Data?.Overrides || [];
     renderAdministration();
     document.getElementById("administration-error").hidden = true;
     document.getElementById("administration-content").hidden = false;
@@ -2270,11 +2294,13 @@ async function loadAdministration() {
 
 function renderAdministration() {
   if (!administrationData) return;
-  setText("admin-mode-chip", translate("readOnly"));
+  setText("admin-mode-chip", translate("partialEditable"));
   renderAdminObjects(administrationData.MasterDataObjects || []);
   renderAdminCapabilities(administrationData);
+  renderAdminCpSatAssumptions(administrationData.CpSatAssumptions);
   renderAdminPolicyGroups(administrationData.PolicyGroups || []);
   renderAdminCalendarLayers(administrationData.CalendarLayers || []);
+  renderCalendarOverrides();
 }
 
 function renderAdminObjects(objects) {
@@ -2342,6 +2368,36 @@ function renderAdminCapabilities(data) {
   });
 }
 
+function renderAdminCpSatAssumptions(data) {
+  const container = document.getElementById("admin-cp-sat-assumptions");
+  container.replaceChildren();
+  if (!data) {
+    container.append(detailSection("cpSatAssumptions", [["statusUnavailable", translate("notAvailable")]]));
+    return;
+  }
+  const assumptions = (data.ModelingAssumptions || [])
+    .map((item) => `${item.AssumptionID}: ${currentLanguage === "zh" && item.DescriptionZh ? item.DescriptionZh : item.Description}`)
+    .join("\n");
+  const parameters = (data.TunableParameters || [])
+    .map((item) => `${item.ParameterID} · ${translate("driverStatus")}: ${translate(item.DriverStatus) || item.DriverStatus}`)
+    .join("\n");
+  const deferred = (data.DeferredRules || []).join(" / ");
+  [
+    ["cpSatAssumptions", assumptions],
+    ["tunableParameters", parameters],
+    ["deferredRules", deferred]
+  ].forEach(([key, value]) => {
+    const row = document.createElement("div");
+    row.className = "policy-group";
+    const title = document.createElement("strong");
+    title.textContent = translate(key);
+    const values = document.createElement("span");
+    values.textContent = value || "-";
+    row.append(title, values);
+    container.append(row);
+  });
+}
+
 function renderAdminPolicyGroups(groups) {
   const container = document.getElementById("admin-policy-groups");
   container.replaceChildren();
@@ -2370,6 +2426,74 @@ function renderAdminCalendarLayers(layers) {
     item.append(order, label);
     container.append(item);
   });
+}
+
+function renderCalendarOverrides() {
+  const container = document.getElementById("admin-calendar-overrides");
+  container.replaceChildren();
+  if (!calendarOverridesData.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = translate("noCalendarOverrides");
+    container.append(empty);
+    return;
+  }
+  calendarOverridesData.forEach((item) => {
+    const card = document.createElement("section");
+    card.className = "calendar-override-card";
+    const heading = document.createElement("div");
+    heading.className = "calendar-override-heading";
+    const title = document.createElement("strong");
+    title.textContent = item.OverrideID;
+    const status = document.createElement("span");
+    status.className = `status-chip ${item.Status === "Active" ? "is-valid" : "neutral"}`;
+    status.textContent = translate(item.Status) || item.Status;
+    heading.append(title, status);
+    card.append(heading, detailSection("calendarOverride", [
+      ["calendarId", item.CalendarID],
+      ["resource", item.ResourceID || translate("notProvided")],
+      ["overrideType", translate(item.OverrideType)],
+      ["effectiveStart", formatDate(item.EffectiveStartAt)],
+      ["effectiveEnd", formatDate(item.EffectiveEndAt)],
+      ["capacityDelta", item.CapacityDeltaMinutes],
+      ["reason", item.Reason || translate("notProvided")]
+    ]));
+    container.append(card);
+  });
+}
+
+function localInputToIso(id) {
+  const value = document.getElementById(id).value;
+  return value ? new Date(value).toISOString() : null;
+}
+
+async function submitCalendarOverride(event) {
+  event.preventDefault();
+  const payload = {
+    OverrideID: document.getElementById("calendar-override-id").value.trim(),
+    CalendarID: document.getElementById("calendar-id").value.trim(),
+    ResourceID: document.getElementById("calendar-resource-id").value.trim() || null,
+    OverrideType: document.getElementById("calendar-override-type").value,
+    EffectiveStartAt: localInputToIso("calendar-effective-start"),
+    EffectiveEndAt: localInputToIso("calendar-effective-end"),
+    CapacityDeltaMinutes: Number(document.getElementById("calendar-capacity-delta").value || 0),
+    ShiftName: document.getElementById("calendar-shift-name").value.trim() || null,
+    Reason: document.getElementById("calendar-reason").value.trim() || null,
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: "Active"
+  };
+  const response = await fetch("/planner/workbench/admin/calendar-overrides", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("calendarOverrideFailed"), "error");
+    return;
+  }
+  showNotification(translate("calendarOverrideCreated"), "success");
+  await loadAdministration();
 }
 
 function openSideDrawer(id) {
@@ -2514,6 +2638,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("exception-source-filter").addEventListener("change", renderExceptionCenter);
   document.getElementById("close-exception-detail").addEventListener("click", () => closeSideDrawer("exception-detail"));
   document.getElementById("refresh-administration").addEventListener("click", loadAdministration);
+  document.getElementById("admin-calendar-override-form").addEventListener("submit", submitCalendarOverride);
   document.getElementById("admin-routings-import").addEventListener("click", () => {
     const routingObject = (administrationData?.MasterDataObjects || []).find((item) => item.ObjectKey === "Routings");
     if (routingObject) selectAdminImportObject(routingObject);

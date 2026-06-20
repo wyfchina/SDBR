@@ -53,7 +53,10 @@ def test_test_case_catalog_documents_business_acceptance_cases():
     assert payload["CaseCount"] == 3
     cases = {case["CaseID"]: case for case in payload["Cases"]}
     assert cases["TST-CASE-BASELINE"]["PlanningRunID"] == "TST-RUN-BASELINE-001"
+    assert cases["TST-CASE-BASELINE"]["InputSummaryZh"].startswith("使用基准主数据")
+    assert "12 张工单" in cases["TST-CASE-BASELINE"]["ExpectedScheduleZh"]
     assert cases["TST-CASE-BASELINE"]["ExpectedReleaseReadyMin"] == 1
+    assert cases["TST-CASE-BASELINE"]["ExpectedPublicationStatus"] == "Draft"
     assert cases["TST-CASE-MATERIAL-SHORTAGE"]["ExpectedBlockingCodes"] == [
         "MATERIAL_SHORTAGE"
     ]
@@ -158,10 +161,69 @@ def test_test_case_acceptance_endpoint_marks_pending_cases_as_needing_execution(
 
     assert response.status_code == 200
     data = response.json()["Data"]
+    assert data["AcceptancePackageID"] == "TST-ACP-BASELINE-20260619"
+    assert data["Summary"]["PendingHumanDecisionCount"] == 0
     assert data["Summary"]["NeedsExecutionCount"] == 3
     assert {case["AcceptanceStatus"] for case in data["Cases"]} == {
         "NeedsExecution"
     }
+    assert all(case["ActualVsExpected"] for case in data["Cases"])
+
+
+def test_test_case_acceptance_decisions_persist_in_sqlite_store(tmp_path):
+    database_path = tmp_path / "workbench-state.db"
+    store = SQLiteWorkbenchStateStore(database_path)
+    seed_baseline_test_data(store)
+    store.save()
+    client = TestClient(create_app(state_store=store))
+    for run_id in [
+        "TST-RUN-BASELINE-001",
+        "TST-RUN-MATERIAL-SHORTAGE-001",
+        "TST-RUN-WIP-LIMIT-001",
+    ]:
+        assert client.post(
+            f"/planner/workbench/planning-runs/{run_id}/enqueue",
+            json={
+                "EnqueuedBy": "planner-test",
+                "EnqueuedAt": "2026-06-19T08:01:00+00:00",
+            },
+        ).status_code == 200
+        claim = client.post(
+            "/planner/workbench/planning-runs/jobs/claim-next",
+            json={
+                "WorkerID": "worker-test",
+                "ClaimedAt": "2026-06-19T08:02:00+00:00",
+                "LeaseSeconds": 600,
+            },
+        )
+        assert claim.status_code == 200
+        assert client.post(
+            f"/planner/workbench/planning-runs/{run_id}/execute",
+            json={
+                "ExecutedBy": "worker-test",
+                "StartedAt": "2026-06-19T08:03:00+00:00",
+                "CompletedAt": "2026-06-19T08:04:00+00:00",
+                "TimeLimitSeconds": 30,
+                "LeaseToken": claim.json()["Data"]["PlanningRun"]["LeaseToken"],
+            },
+        ).status_code == 200
+    assert client.post(
+        "/planner/workbench/test-data/acceptance/TST-CASE-BASELINE/decision",
+        json={
+            "Decision": "Confirm",
+            "ActorID": "planner-test",
+            "DecidedAt": "2026-06-20T10:15:00+00:00",
+        },
+    ).status_code == 200
+
+    reloaded = TestClient(create_app(state_store=SQLiteWorkbenchStateStore(database_path)))
+    response = reloaded.get("/planner/workbench/test-data/acceptance")
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["Summary"]["ConfirmedCount"] == 1
+    cases = {case["CaseID"]: case for case in data["Cases"]}
+    assert cases["TST-CASE-BASELINE"]["LatestDecision"]["ActorID"] == "planner-test"
 
 
 def test_test_data_cli_lists_cases_without_rebuild(capsys):

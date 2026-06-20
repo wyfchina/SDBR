@@ -32,6 +32,14 @@ from sdbr.exception_center_view import (
     build_exception_detail,
 )
 from sdbr.inventory_import import InventoryBufferImportRow, import_inventory_buffers_from_rows
+from sdbr.integration_contracts import (
+    find_integration_contract,
+    integration_contracts_payload,
+    integration_dead_letters,
+    integration_message_record,
+    replay_integration_message,
+    validate_integration_message,
+)
 from sdbr.master_data_validation import (
     MasterDataValidationResult,
     MaterialRequirement,
@@ -121,6 +129,7 @@ from sdbr.schedule_output import (
 )
 from sdbr.scheduling_solver import (
     ACTIVE_SOLVER_BACKEND_ID,
+    BUILT_IN_OBJECTIVE_STRATEGY_IDS,
     FixedOperationAssignment,
     PAUSED_SOLVER_BACKEND_IDS,
     SchedulingObjective,
@@ -149,6 +158,7 @@ from sdbr.test_data import test_case_catalog_payload
 from sdbr.test_case_acceptance import (
     DEFAULT_CASE_EVALUATED_AT,
     build_test_case_acceptance_workbench,
+    create_test_case_acceptance_decision,
 )
 
 
@@ -392,6 +402,37 @@ class DbrReleasePolicyPayload(BaseModel):
     Status: Literal["Draft", "Active", "Retired"] = "Draft"
 
 
+class CalendarOverridePayload(BaseModel):
+    OverrideID: str
+    CalendarID: str
+    ResourceID: str | None = None
+    OverrideType: Literal[
+        "TemporaryShiftOverride",
+        "ExclusionOrMaintenance",
+        "Overtime",
+    ]
+    EffectiveStartAt: datetime
+    EffectiveEndAt: datetime
+    CapacityDeltaMinutes: int = 0
+    ShiftName: str | None = None
+    Reason: str | None = None
+    CreatedAt: datetime
+    CreatedBy: str
+    Status: Literal["Draft", "Active", "Retired"] = "Draft"
+
+
+class SchedulingStrategyPayload(BaseModel):
+    StrategyID: str
+    DisplayName: str
+    CreatedAt: datetime
+    CreatedBy: str
+    TardinessWeight: int = Field(default=100, ge=0)
+    MakespanWeight: int = Field(default=1, ge=0)
+    AlternateResourcePenaltyWeight: int = Field(default=10, ge=0)
+    Description: str | None = None
+    Status: Literal["Draft", "Active", "Retired"] = "Draft"
+
+
 class PlanningRunPayload(BaseModel):
     RunID: str
     ProblemID: str
@@ -585,6 +626,27 @@ class ExecutionVarianceReplanPayload(BaseModel):
     LastReplanAt: datetime | None = None
 
 
+class IntegrationMessagePayload(BaseModel):
+    ContractID: str
+    MessageID: str | None = None
+    MessageType: str | None = None
+    SourceSystem: str | None = None
+    OccurredAt: datetime | None = None
+    Payload: dict[str, object] | None = None
+
+
+class IntegrationReplayPayload(BaseModel):
+    ActorID: str
+    ReplayedAt: datetime
+
+
+class TestCaseAcceptanceDecisionPayload(BaseModel):
+    Decision: Literal["Confirm", "Reject"]
+    ActorID: str
+    DecidedAt: datetime
+    Comment: str | None = None
+
+
 def _client_revision_from_if_match(value: str | None) -> int | None:
     if value is None:
         return None
@@ -751,6 +813,10 @@ def create_app(
     operational_state_snapshots = active_store.operational_state_snapshots
     release_decision_packages = active_store.release_decision_packages
     dbr_release_policies = active_store.dbr_release_policies
+    calendar_overrides = active_store.calendar_overrides
+    scheduling_strategy_versions = active_store.scheduling_strategy_versions
+    integration_messages = active_store.integration_messages
+    test_case_acceptance_decisions = active_store.test_case_acceptance_decisions
     master_data_versions = active_store.master_data_versions
     planning_runs = active_store.planning_runs
     audit_events = active_store.audit_events
@@ -835,6 +901,15 @@ def create_app(
 
     @app.post("/planner/workbench/calculate")
     def planner_workbench_calculate(payload: PlannerWorkbenchCalculatePayload):
+        objective = _objective_for_strategy_id(
+            strategy_id=payload.ObjectiveStrategyID,
+            scheduling_strategy_versions=scheduling_strategy_versions,
+        )
+        if objective is None:
+            return _objective_strategy_not_found_response(
+                endpoint="/planner/workbench/calculate",
+                strategy_id=payload.ObjectiveStrategyID,
+            )
         validation = _validate_master_data_payload(payload)
         if not validation.is_valid:
             return JSONResponse(
@@ -847,7 +922,7 @@ def create_app(
                     },
                 },
             )
-        data = _calculate_workbench_data(payload, validation)
+        data = _calculate_workbench_data(payload, validation, objective=objective)
         return {
             "Endpoint": "/planner/workbench/calculate",
             "StatusCode": 200,
@@ -1091,10 +1166,100 @@ def create_app(
                     master_data_versions=master_data_versions,
                     operational_state_snapshots=operational_state_snapshots,
                     release_authorizations=release_authorizations,
+                    acceptance_decisions=test_case_acceptance_decisions,
                     evaluated_at=evaluated_at,
                 ),
                 "Environment": active_environment.to_dict(),
             },
+        }
+
+    @app.get("/planner/workbench/test-data/acceptance/decisions")
+    def planner_workbench_test_data_acceptance_decisions() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/test-data/acceptance/decisions",
+            "StatusCode": 200,
+            "Data": {
+                "Count": len(test_case_acceptance_decisions),
+                "Decisions": sorted(
+                    test_case_acceptance_decisions,
+                    key=lambda item: str(item.get("DecidedAt", "")),
+                    reverse=True,
+                ),
+            },
+        }
+
+    @app.post("/planner/workbench/test-data/acceptance/{case_id}/decision")
+    def planner_workbench_test_data_acceptance_decision_create(
+        case_id: str,
+        payload: TestCaseAcceptanceDecisionPayload,
+        evaluated_at: datetime = DEFAULT_CASE_EVALUATED_AT,
+    ):
+        endpoint = f"/planner/workbench/test-data/acceptance/{case_id}/decision"
+        workbench = build_test_case_acceptance_workbench(
+            planning_runs=planning_runs,
+            master_data_versions=master_data_versions,
+            operational_state_snapshots=operational_state_snapshots,
+            release_authorizations=release_authorizations,
+            acceptance_decisions=test_case_acceptance_decisions,
+            evaluated_at=evaluated_at,
+        )
+        case = next(
+            (item for item in workbench["Cases"] if item["CaseID"] == case_id),
+            None,
+        )
+        if case is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "CaseID": case_id,
+                        "Status": "TestCaseNotFound",
+                        "Message": f"Test case {case_id} was not found.",
+                    },
+                },
+            )
+        if payload.Decision == "Confirm" and case["AcceptanceStatus"] != "Passed":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "CaseID": case_id,
+                        "Status": "TestCaseNotPassed",
+                        "AcceptanceStatus": case["AcceptanceStatus"],
+                        "FailureReasons": case.get("FailureReasons", []),
+                        "Message": "Only passed test cases can be confirmed.",
+                    },
+                },
+            )
+        decision = create_test_case_acceptance_decision(
+            case=case,
+            decision=payload.Decision,
+            actor_id=payload.ActorID,
+            decided_at=payload.DecidedAt,
+            comment=payload.Comment,
+            existing_decisions=test_case_acceptance_decisions,
+        )
+        test_case_acceptance_decisions.append(decision)
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=case_id,
+            action="TestCaseAcceptanceDecision",
+            actor_id=payload.ActorID,
+            occurred_at=payload.DecidedAt,
+            details={
+                "Decision": payload.Decision,
+                "AcceptancePackageID": decision["AcceptancePackageID"],
+                "AcceptanceStatusAtDecision": decision["AcceptanceStatusAtDecision"],
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Decision": decision},
         }
 
     @app.get("/planner/workbench/administration/workbench")
@@ -1106,9 +1271,329 @@ def create_app(
             "Data": build_administration_workbench(
                 master_data_versions=master_data_versions.values(),
                 planning_runs=planning_runs.values(),
+                dbr_release_policies=dbr_release_policies.values(),
+                calendar_overrides=calendar_overrides.values(),
+                scheduling_strategies=scheduling_strategy_versions.values(),
+                integration_contracts=integration_contracts_payload()["Contracts"],
+                integration_messages=integration_messages,
                 state_store_health=active_store.health(),
                 ortools_available=availability.available,
             ),
+        }
+
+    @app.post("/planner/workbench/admin/calendar-overrides")
+    def planner_workbench_calendar_override_create(payload: CalendarOverridePayload):
+        endpoint = "/planner/workbench/admin/calendar-overrides"
+        if payload.OverrideID in calendar_overrides:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "OverrideID": payload.OverrideID,
+                        "Status": "CalendarOverrideConflict",
+                        "Message": (
+                            f"Calendar override {payload.OverrideID} already exists."
+                        ),
+                    },
+                },
+            )
+        if payload.EffectiveEndAt <= payload.EffectiveStartAt:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 422,
+                    "Data": {
+                        "OverrideID": payload.OverrideID,
+                        "Status": "CalendarOverrideInvalid",
+                        "Message": "EffectiveEndAt must be later than EffectiveStartAt.",
+                    },
+                },
+            )
+        override = _calendar_override_from_payload(payload)
+        calendar_overrides[payload.OverrideID] = override
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=payload.OverrideID,
+            action="CalendarOverrideCreated",
+            actor_id=payload.CreatedBy,
+            occurred_at=payload.CreatedAt,
+            details={
+                "CalendarID": payload.CalendarID,
+                "ResourceID": payload.ResourceID,
+                "OverrideType": payload.OverrideType,
+                "Status": payload.Status,
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Override": override},
+        }
+
+    @app.get("/planner/workbench/admin/calendar-overrides")
+    def planner_workbench_calendar_override_list() -> dict[str, object]:
+        overrides = sorted(
+            calendar_overrides.values(),
+            key=lambda item: str(item.get("EffectiveStartAt", "")),
+            reverse=True,
+        )
+        return {
+            "Endpoint": "/planner/workbench/admin/calendar-overrides",
+            "StatusCode": 200,
+            "Data": {
+                "OverrideCount": len(overrides),
+                "ActiveOverrideCount": sum(
+                    1 for item in overrides if item.get("Status") == "Active"
+                ),
+                "ConflictCheckStatus": "NotEnforced",
+                "Overrides": overrides,
+            },
+        }
+
+    @app.get("/planner/workbench/admin/calendar-overrides/{override_id}")
+    def planner_workbench_calendar_override_get(override_id: str):
+        endpoint = f"/planner/workbench/admin/calendar-overrides/{override_id}"
+        override = calendar_overrides.get(override_id)
+        if override is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "OverrideID": override_id,
+                        "Status": "CalendarOverrideNotFound",
+                        "Message": f"Calendar override {override_id} was not found.",
+                    },
+                },
+            )
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Override": override}}
+
+    @app.post("/planner/workbench/admin/scheduling-strategies")
+    def planner_workbench_scheduling_strategy_create(
+        payload: SchedulingStrategyPayload,
+    ):
+        endpoint = "/planner/workbench/admin/scheduling-strategies"
+        if payload.StrategyID in scheduling_strategy_versions:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "StrategyID": payload.StrategyID,
+                        "Status": "SchedulingStrategyConflict",
+                        "Message": (
+                            f"Scheduling strategy {payload.StrategyID} already exists."
+                        ),
+                    },
+                },
+            )
+        strategy = _scheduling_strategy_from_payload(payload)
+        if strategy["Status"] == "Active":
+            _retire_other_active_scheduling_strategies(
+                scheduling_strategy_versions=scheduling_strategy_versions,
+                active_strategy_id=payload.StrategyID,
+            )
+        scheduling_strategy_versions[payload.StrategyID] = strategy
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=payload.StrategyID,
+            action="SchedulingStrategyCreated",
+            actor_id=payload.CreatedBy,
+            occurred_at=payload.CreatedAt,
+            details={
+                "StrategyID": payload.StrategyID,
+                "Status": payload.Status,
+                "ObjectiveWeights": strategy["ObjectiveWeights"],
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Strategy": strategy},
+        }
+
+    @app.get("/planner/workbench/admin/scheduling-strategies")
+    def planner_workbench_scheduling_strategy_list() -> dict[str, object]:
+        strategies = sorted(
+            scheduling_strategy_versions.values(),
+            key=lambda item: str(item.get("CreatedAt", "")),
+            reverse=True,
+        )
+        active = next(
+            (item for item in strategies if item.get("Status") == "Active"),
+            None,
+        )
+        return {
+            "Endpoint": "/planner/workbench/admin/scheduling-strategies",
+            "StatusCode": 200,
+            "Data": {
+                "StrategyCount": len(strategies),
+                "ActiveStrategyID": active.get("StrategyID") if active else None,
+                "BuiltInStrategyIDs": [
+                    "balanced",
+                    "delivery_first",
+                    "flow_first",
+                    "bottleneck_protect",
+                ],
+                "CustomWeightPersistenceStatus": "Available",
+                "Strategies": strategies,
+            },
+        }
+
+    @app.get("/planner/workbench/admin/scheduling-strategies/{strategy_id}")
+    def planner_workbench_scheduling_strategy_get(strategy_id: str):
+        endpoint = f"/planner/workbench/admin/scheduling-strategies/{strategy_id}"
+        strategy = scheduling_strategy_versions.get(strategy_id)
+        if strategy is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "StrategyID": strategy_id,
+                        "Status": "SchedulingStrategyNotFound",
+                        "Message": f"Scheduling strategy {strategy_id} was not found.",
+                    },
+                },
+            )
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Strategy": strategy}}
+
+    @app.get("/planner/workbench/admin/cp-sat/assumptions")
+    def planner_workbench_cp_sat_assumptions() -> dict[str, object]:
+        endpoint = "/planner/workbench/admin/cp-sat/assumptions"
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": _cp_sat_assumptions_payload(
+                scheduling_strategy_versions=scheduling_strategy_versions,
+                dbr_release_policies=dbr_release_policies,
+            ),
+        }
+
+    @app.get("/planner/workbench/integrations/contracts")
+    def planner_workbench_integration_contracts() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/integrations/contracts",
+            "StatusCode": 200,
+            "Data": integration_contracts_payload(),
+        }
+
+    @app.get("/planner/workbench/integrations/contracts/{contract_id}")
+    def planner_workbench_integration_contract_get(contract_id: str):
+        endpoint = f"/planner/workbench/integrations/contracts/{contract_id}"
+        contract = find_integration_contract(contract_id)
+        if contract is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "ContractID": contract_id,
+                        "Status": "IntegrationContractNotFound",
+                        "Message": f"Integration contract {contract_id} was not found.",
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Contract": contract.to_dict()},
+        }
+
+    @app.post("/planner/workbench/integrations/messages")
+    def planner_workbench_integration_message_create(
+        payload: IntegrationMessagePayload,
+    ):
+        endpoint = "/planner/workbench/integrations/messages"
+        contract = find_integration_contract(payload.ContractID)
+        if contract is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "ContractID": payload.ContractID,
+                        "Status": "IntegrationContractNotFound",
+                        "Message": f"Integration contract {payload.ContractID} was not found.",
+                    },
+                },
+            )
+        received_at = datetime.now(timezone.utc)
+        message = payload.model_dump(mode="json", exclude={"ContractID"})
+        validation = validate_integration_message(
+            contract=contract,
+            message=message,
+            existing_messages=integration_messages,
+            received_at=received_at,
+        )
+        if validation["Status"] == "Accepted" or validation["Status"] == "Rejected":
+            integration_messages.append(
+                integration_message_record(
+                    contract=contract,
+                    message=message,
+                    validation=validation,
+                )
+            )
+        status_code = 200 if validation["Accepted"] else 409
+        body = {
+            "Endpoint": endpoint,
+            "StatusCode": status_code,
+            "Data": validation,
+        }
+        if status_code != 200:
+            active_store.save()
+            return JSONResponse(status_code=status_code, content=body)
+        return body
+
+    @app.get("/planner/workbench/integrations/messages/dead-letter")
+    def planner_workbench_integration_dead_letters() -> dict[str, object]:
+        rows = integration_dead_letters(integration_messages)
+        return {
+            "Endpoint": "/planner/workbench/integrations/messages/dead-letter",
+            "StatusCode": 200,
+            "Data": {
+                "Count": len(rows),
+                "Messages": rows,
+            },
+        }
+
+    @app.post("/planner/workbench/integrations/messages/{message_id}/replay")
+    def planner_workbench_integration_message_replay(
+        message_id: str,
+        payload: IntegrationReplayPayload,
+    ):
+        endpoint = f"/planner/workbench/integrations/messages/{message_id}/replay"
+        replayed = replay_integration_message(
+            message_id=message_id,
+            messages=integration_messages,
+            replayed_at=payload.ReplayedAt,
+            actor_id=payload.ActorID,
+        )
+        if replayed is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "MessageID": message_id,
+                        "Status": "IntegrationMessageNotFound",
+                        "Message": f"Integration message {message_id} was not found.",
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Message": replayed},
         }
 
     @app.get("/planner/workbench/data-readiness")
@@ -1412,6 +1897,36 @@ def create_app(
             "Data": {"Policy": policy},
         }
 
+    @app.get("/planner/workbench/dbr/release-policies")
+    def planner_workbench_dbr_release_policy_list() -> dict[str, object]:
+        policies = sorted(
+            dbr_release_policies.values(),
+            key=lambda item: str(item.get("CreatedAt", "")),
+            reverse=True,
+        )
+        active = next(
+            (policy for policy in policies if policy.get("Status") == "Active"),
+            None,
+        )
+        return {
+            "Endpoint": "/planner/workbench/dbr/release-policies",
+            "StatusCode": 200,
+            "Data": {
+                "PolicyCount": len(policies),
+                "ActivePolicyVersionID": (
+                    active.get("VersionID") if active is not None else None
+                ),
+                "Policies": policies,
+                "ConfigurableParameters": [
+                    "RopeBufferMinutes",
+                    "TimeBufferRatios",
+                    "MaxWipCount",
+                    "MaterialLookaheadMinutes",
+                    "StabilityPolicy",
+                ],
+            },
+        }
+
     @app.get("/planner/workbench/dbr/release-policies/{version_id}")
     def planner_workbench_dbr_release_policy_get(version_id: str):
         endpoint = f"/planner/workbench/dbr/release-policies/{version_id}"
@@ -1528,6 +2043,15 @@ def create_app(
                         },
                     },
                 )
+        scheduling_strategy = _scheduling_strategy_snapshot_for_id(
+            strategy_id=payload.ObjectiveStrategyID,
+            scheduling_strategy_versions=scheduling_strategy_versions,
+        )
+        if scheduling_strategy is None:
+            return _objective_strategy_not_found_response(
+                endpoint=endpoint,
+                strategy_id=payload.ObjectiveStrategyID,
+            )
         release_policy = None
         if payload.ReleasePolicyVersionID is not None:
             release_policy = dbr_release_policies.get(payload.ReleasePolicyVersionID)
@@ -1549,6 +2073,7 @@ def create_app(
             master_data_version=master_data_version,
             operational_snapshot=operational_snapshot,
             release_policy=release_policy,
+            scheduling_strategy=scheduling_strategy,
         )
         planning_runs[payload.RunID] = planning_run
         _append_planning_run_audit_event(
@@ -1810,6 +2335,8 @@ def create_app(
                 master_data_version=master_data_version,
                 operational_snapshot=operational_snapshot,
                 solver_time_limit_seconds=payload.TimeLimitSeconds,
+                scheduling_strategy_versions=scheduling_strategy_versions,
+                frozen_scheduling_strategy=planning_run.get("FrozenSchedulingStrategy"),
             )
             completed_run = {**planning_run, **completed_run}
         except Exception as error:
@@ -3241,8 +3768,34 @@ def create_app(
                     },
                 },
             )
-        baseline_view = _calculate_workbench_data(payload.Baseline, baseline_validation)
-        candidate_view = _calculate_workbench_data(payload.Candidate, candidate_validation)
+        baseline_objective = _objective_for_strategy_id(
+            strategy_id=payload.Baseline.ObjectiveStrategyID,
+            scheduling_strategy_versions=scheduling_strategy_versions,
+        )
+        if baseline_objective is None:
+            return _objective_strategy_not_found_response(
+                endpoint="/planner/workbench/scenarios/compare",
+                strategy_id=payload.Baseline.ObjectiveStrategyID,
+            )
+        candidate_objective = _objective_for_strategy_id(
+            strategy_id=payload.Candidate.ObjectiveStrategyID,
+            scheduling_strategy_versions=scheduling_strategy_versions,
+        )
+        if candidate_objective is None:
+            return _objective_strategy_not_found_response(
+                endpoint="/planner/workbench/scenarios/compare",
+                strategy_id=payload.Candidate.ObjectiveStrategyID,
+            )
+        baseline_view = _calculate_workbench_data(
+            payload.Baseline,
+            baseline_validation,
+            objective=baseline_objective,
+        )
+        candidate_view = _calculate_workbench_data(
+            payload.Candidate,
+            candidate_validation,
+            objective=candidate_objective,
+        )
         return {
             "Endpoint": "/planner/workbench/scenarios/compare",
             "StatusCode": 200,
@@ -3573,6 +4126,15 @@ def create_app(
             planning_runs=planning_runs,
             audit_events=audit_events,
         )
+        objective = _objective_for_strategy_id(
+            strategy_id=payload.ObjectiveStrategyID,
+            scheduling_strategy_versions=scheduling_strategy_versions,
+        )
+        if objective is None:
+            return _objective_strategy_not_found_response(
+                endpoint=endpoint,
+                strategy_id=payload.ObjectiveStrategyID,
+            )
         source_run = _source_run_for_replan(
             problem_id=current_request.problem_id,
             source_run_id=payload.SourceRunID,
@@ -3582,6 +4144,7 @@ def create_app(
             payload,
             validation,
             fixed_assignments=fixed_assignments,
+            objective=objective,
         )
         if source_run is not None:
             schedule["SourceRunID"] = source_run.get("RunID")
@@ -5835,6 +6398,7 @@ def _pending_planning_run(
     master_data_version: dict[str, object],
     operational_snapshot: OperationalStateSnapshot,
     release_policy: dict[str, object] | None = None,
+    scheduling_strategy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "RunID": payload.RunID,
@@ -5851,6 +6415,9 @@ def _pending_planning_run(
         "TimeBufferMinutes": payload.TimeBufferMinutes,
         "FreezeWindowMinutes": payload.FreezeWindowMinutes,
         "ObjectiveStrategyID": payload.ObjectiveStrategyID,
+        "FrozenSchedulingStrategy": (
+            dict(scheduling_strategy) if scheduling_strategy else None
+        ),
         "SetupTransitions": _setup_transitions_to_payload_dict(
             _setup_transitions_from_payload(payload.SetupTransitions)
         ),
@@ -5909,7 +6476,22 @@ def _execute_planning_run(
     master_data_version: dict[str, object],
     operational_snapshot: OperationalStateSnapshot,
     solver_time_limit_seconds: float | None = None,
+    scheduling_strategy_versions: dict[str, dict[str, object]] | None = None,
+    frozen_scheduling_strategy: object | None = None,
 ) -> dict[str, object]:
+    objective = _objective_for_strategy_id(
+        strategy_id=payload.ObjectiveStrategyID,
+        scheduling_strategy_versions=scheduling_strategy_versions or {},
+        frozen_scheduling_strategy=(
+            frozen_scheduling_strategy
+            if isinstance(frozen_scheduling_strategy, dict)
+            else None
+        ),
+    )
+    if objective is None:
+        raise ValueError(
+            f"Scheduling objective strategy {payload.ObjectiveStrategyID} was not found."
+        )
     resources = _resources_from_payload(
         [ResourcePayload(**item) for item in master_data_version["Resources"]]
     )
@@ -5956,7 +6538,8 @@ def _execute_planning_run(
         generated_at=payload.RequestedAt,
         solver_time_limit_seconds=solver_time_limit_seconds,
         setup_transitions=_setup_transitions_from_payload(payload.SetupTransitions),
-        objective=SchedulingObjective(strategy_id=payload.ObjectiveStrategyID),
+        objective=objective,
+        align_release_to_schedule=True,
     )
     schedule["ProblemID"] = payload.ProblemID
     solver_status = str(schedule["SolverStatus"])
@@ -6007,6 +6590,7 @@ def _calculate_workbench_data(
     payload: PlannerWorkbenchCalculatePayload,
     validation: MasterDataValidationResult,
     fixed_assignments: list[FixedOperationAssignment] | None = None,
+    objective: SchedulingObjective | None = None,
 ) -> dict[str, object]:
     data = _calculate_workbench_data_from_entities(
         problem_id=payload.ProblemID,
@@ -6022,9 +6606,12 @@ def _calculate_workbench_data(
         generated_at=payload.GeneratedAt,
         fixed_assignments=fixed_assignments,
         setup_transitions=_setup_transitions_from_payload(payload.SetupTransitions),
-        objective=SchedulingObjective(strategy_id=payload.ObjectiveStrategyID),
+        objective=objective or SchedulingObjective(strategy_id=payload.ObjectiveStrategyID),
     )
     data["ObjectiveStrategyID"] = payload.ObjectiveStrategyID
+    data["ObjectiveWeights"] = _objective_to_payload_dict(
+        objective or SchedulingObjective(strategy_id=payload.ObjectiveStrategyID)
+    )
     if payload.SetupTransitions:
         data["SetupTransitions"] = _setup_transitions_to_payload_dict(
             _setup_transitions_from_payload(payload.SetupTransitions)
@@ -6314,6 +6901,249 @@ def _retire_other_active_policies(
             policy["RetiredByPolicyVersionID"] = active_version_id
 
 
+def _calendar_override_from_payload(
+    payload: CalendarOverridePayload,
+) -> dict[str, object]:
+    return {
+        "OverrideID": payload.OverrideID,
+        "CalendarID": payload.CalendarID,
+        "ResourceID": payload.ResourceID,
+        "OverrideType": payload.OverrideType,
+        "EffectiveStartAt": payload.EffectiveStartAt.isoformat(),
+        "EffectiveEndAt": payload.EffectiveEndAt.isoformat(),
+        "CapacityDeltaMinutes": payload.CapacityDeltaMinutes,
+        "ShiftName": payload.ShiftName,
+        "Reason": payload.Reason,
+        "CreatedAt": payload.CreatedAt.isoformat(),
+        "CreatedBy": payload.CreatedBy,
+        "Status": payload.Status,
+        "SolverDriverStatus": "NotApplied",
+    }
+
+
+def _scheduling_strategy_from_payload(
+    payload: SchedulingStrategyPayload,
+) -> dict[str, object]:
+    return {
+        "StrategyID": payload.StrategyID,
+        "DisplayName": payload.DisplayName,
+        "CreatedAt": payload.CreatedAt.isoformat(),
+        "CreatedBy": payload.CreatedBy,
+        "Description": payload.Description,
+        "ObjectiveWeights": {
+            "TardinessWeight": payload.TardinessWeight,
+            "MakespanWeight": payload.MakespanWeight,
+            "AlternateResourcePenaltyWeight": (
+                payload.AlternateResourcePenaltyWeight
+            ),
+        },
+        "Status": payload.Status,
+        "SolverDriverStatus": "AppliedWhenSelected",
+    }
+
+
+def _objective_for_strategy_id(
+    *,
+    strategy_id: str,
+    scheduling_strategy_versions: dict[str, dict[str, object]],
+    frozen_scheduling_strategy: dict[str, object] | None = None,
+) -> SchedulingObjective | None:
+    if strategy_id in BUILT_IN_OBJECTIVE_STRATEGY_IDS:
+        return SchedulingObjective(strategy_id=strategy_id)
+    strategy = (
+        frozen_scheduling_strategy
+        if frozen_scheduling_strategy is not None
+        else scheduling_strategy_versions.get(strategy_id)
+    )
+    if strategy is None:
+        return None
+    weights = strategy.get("ObjectiveWeights")
+    if not isinstance(weights, dict):
+        return None
+    return SchedulingObjective(
+        strategy_id=strategy_id,
+        tardiness_weight=float(weights.get("TardinessWeight", 1.0)),
+        makespan_weight=float(weights.get("MakespanWeight", 0.001)),
+        alternate_resource_weight=float(
+            weights.get("AlternateResourcePenaltyWeight", 0.01)
+        ),
+    )
+
+
+def _scheduling_strategy_snapshot_for_id(
+    *,
+    strategy_id: str,
+    scheduling_strategy_versions: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    if strategy_id in BUILT_IN_OBJECTIVE_STRATEGY_IDS:
+        return {
+            "StrategyID": strategy_id,
+            "Source": "BuiltIn",
+            "ObjectiveWeights": _objective_to_payload_dict(
+                SchedulingObjective(strategy_id=strategy_id)
+            ),
+            "Status": "Active",
+        }
+    strategy = scheduling_strategy_versions.get(strategy_id)
+    return dict(strategy) if strategy is not None else None
+
+
+def _objective_to_payload_dict(objective: SchedulingObjective) -> dict[str, object]:
+    return {
+        "StrategyID": objective.strategy_id,
+        "TardinessWeight": objective.tardiness_weight,
+        "MakespanWeight": objective.makespan_weight,
+        "AlternateResourcePenaltyWeight": objective.alternate_resource_weight,
+    }
+
+
+def _objective_strategy_not_found_response(
+    *,
+    endpoint: str,
+    strategy_id: str,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "Endpoint": endpoint,
+            "StatusCode": 404,
+            "Data": {
+                "StrategyID": strategy_id,
+                "Status": "SchedulingStrategyNotFound",
+                "Message": (
+                    f"Scheduling strategy {strategy_id} was not found. "
+                    "Use a built-in strategy or create it in the strategy catalog."
+                ),
+            },
+        },
+    )
+
+
+def _cp_sat_assumptions_payload(
+    *,
+    scheduling_strategy_versions: dict[str, dict[str, object]],
+    dbr_release_policies: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    active_strategy = next(
+        (
+            strategy
+            for strategy in scheduling_strategy_versions.values()
+            if strategy.get("Status") == "Active"
+        ),
+        None,
+    )
+    active_release_policy = next(
+        (
+            policy
+            for policy in dbr_release_policies.values()
+            if policy.get("Status") == "Active"
+        ),
+        None,
+    )
+    return {
+        "SolverBackendID": ACTIVE_SOLVER_BACKEND_ID,
+        "PausedSolverBackendIDs": sorted(PAUSED_SOLVER_BACKEND_IDS),
+        "ModelingAssumptions": [
+            {
+                "AssumptionID": "TIME_INTEGER_MINUTES",
+                "Description": "Scheduling time is represented as integer minutes.",
+                "DescriptionZh": "排程时间按整数分钟表示，不使用秒级或小数分钟。",
+                "Status": "Active",
+            },
+            {
+                "AssumptionID": "PARALLEL_RESOURCE_POOL",
+                "Description": "CapacityUnits model a homogeneous resource pool.",
+                "DescriptionZh": "CapacityUnits 表示同质资源池的并行能力，不追踪池内具体机台。",
+                "Status": "Active",
+            },
+            {
+                "AssumptionID": "FINITE_CONSTRAINT_RESOURCES",
+                "Description": "Constraint resources are finite; non-constraints keep infinite-capacity semantics.",
+                "DescriptionZh": "约束资源按有限产能排程，非约束资源保持无限产能语义。",
+                "Status": "Active",
+            },
+            {
+                "AssumptionID": "NO_FULL_MRP_IN_SOLVER",
+                "Description": "Material, inbound supply and WIP are evaluated by release gating, not as CP-SAT hard constraints.",
+                "DescriptionZh": "物料、在途和 WIP 由释放门控判断，不作为当前 CP-SAT 硬约束。",
+                "Status": "Active",
+            },
+            {
+                "AssumptionID": "SINGLE_UNIT_SETUP_ONLY",
+                "Description": "Sequence-dependent setup is active only on finite single-unit resources.",
+                "DescriptionZh": "顺序相关换型仅在单台有限资源上启用，多机台换型待后续建模。",
+                "Status": "Active",
+            },
+        ],
+        "TunableParameters": [
+            {
+                "ParameterID": "TimeLimitSeconds",
+                "Layer": "CP-SAT",
+                "DriverStatus": "Applied",
+                "Description": "Passed to CP-SAT max_time_in_seconds.",
+                "DescriptionZh": "传入 CP-SAT 的最大求解时间。",
+            },
+            {
+                "ParameterID": "ObjectiveStrategyID",
+                "Layer": "CP-SAT",
+                "DriverStatus": "Applied",
+                "Description": "Selects a built-in strategy or a custom strategy catalog entry.",
+                "DescriptionZh": "选择内置目标策略或后台自定义策略。",
+            },
+            {
+                "ParameterID": "ObjectiveWeights",
+                "Layer": "CP-SAT",
+                "DriverStatus": "Applied",
+                "Description": "Custom tardiness, makespan and alternate-resource weights drive the weighted objective.",
+                "DescriptionZh": "自定义迟期、完工跨度和备用资源权重会驱动加权目标。",
+            },
+            {
+                "ParameterID": "TimeBufferMinutes",
+                "Layer": "PlanningInput",
+                "DriverStatus": "PartiallyApplied",
+                "Description": "Used for protected due date semantics; not a complete DBR hard-constraint model.",
+                "DescriptionZh": "用于保护交期语义，但不是完整 DBR 硬约束模型。",
+            },
+            {
+                "ParameterID": "ReleasePolicy",
+                "Layer": "ReleaseGate",
+                "DriverStatus": "PartiallyApplied",
+                "Description": "Frozen for release evaluation and traceability; not fully back-propagated into CP-SAT.",
+                "DescriptionZh": "用于释放评估和追溯，尚未完整反向驱动 CP-SAT。",
+            },
+        ],
+        "BuiltInObjectiveStrategies": sorted(BUILT_IN_OBJECTIVE_STRATEGY_IDS),
+        "CustomStrategyCount": len(scheduling_strategy_versions),
+        "ActiveCustomStrategyID": (
+            active_strategy.get("StrategyID") if active_strategy else None
+        ),
+        "ActiveReleasePolicyVersionID": (
+            active_release_policy.get("VersionID")
+            if active_release_policy
+            else None
+        ),
+        "DeferredRules": [
+            "Batching",
+            "MergeSplit",
+            "MultiMachineSetup",
+            "BomMrp",
+            "CrewSize",
+            "SimioFeedback",
+        ],
+    }
+
+
+def _retire_other_active_scheduling_strategies(
+    *,
+    scheduling_strategy_versions: dict[str, dict[str, object]],
+    active_strategy_id: str,
+) -> None:
+    for strategy_id, strategy in scheduling_strategy_versions.items():
+        if strategy_id != active_strategy_id and strategy.get("Status") == "Active":
+            strategy["Status"] = "Retired"
+            strategy["RetiredByStrategyID"] = active_strategy_id
+
+
 def _master_data_version_diff(
     *,
     baseline: dict[str, object],
@@ -6402,6 +7232,7 @@ def _calculate_workbench_data_from_entities(
     fixed_assignments: list[FixedOperationAssignment] | None = None,
     setup_transitions: list[SetupTransition] | None = None,
     objective: SchedulingObjective | None = None,
+    align_release_to_schedule: bool = False,
 ) -> dict[str, object]:
     view = build_planner_workbench_view(
         problem_id=problem_id,
@@ -6418,9 +7249,11 @@ def _calculate_workbench_data_from_entities(
         fixed_assignments=fixed_assignments,
         setup_transitions=setup_transitions,
         objective=objective,
+        align_release_to_schedule=align_release_to_schedule,
     )
     data = planner_workbench_view_to_dict(view)
     data["Validation"] = _master_data_validation_to_dict(validation)
+    data["ObjectiveWeights"] = _objective_to_payload_dict(objective or SchedulingObjective())
     return data
 
 

@@ -837,6 +837,46 @@ def test_be_solver_012_planning_run_freezes_source_run_and_release_policy():
     assert detail["FrozenReleasePolicy"]["VersionID"] == "DBR-POLICY-1"
 
 
+def test_be_rel_012_release_policy_list_supports_admin_configuration():
+    # BE-REL-012 / BE-UI-006
+    client = TestClient(create_app())
+    assert client.post(
+        "/planner/workbench/dbr/release-policies",
+        json={
+            "VersionID": "DBR-POLICY-CONFIG-1",
+            "CreatedAt": "2026-06-20T08:00:00+00:00",
+            "CreatedBy": "admin-1",
+            "RopeBufferMinutes": 150,
+            "GreenZoneRatio": 0.4,
+            "YellowZoneRatio": 0.35,
+            "RedZoneRatio": 0.25,
+            "MaxWipCount": 12,
+            "MaterialLookaheadMinutes": 720,
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    response = client.get("/planner/workbench/dbr/release-policies")
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["PolicyCount"] == 1
+    assert data["ActivePolicyVersionID"] == "DBR-POLICY-CONFIG-1"
+    assert data["Policies"][0]["RopeBufferMinutes"] == 150
+    assert data["Policies"][0]["TimeBufferRatios"] == {
+        "Green": 0.4,
+        "Yellow": 0.35,
+        "Red": 0.25,
+    }
+    assert "MaterialLookaheadMinutes" in data["ConfigurableParameters"]
+
+    admin = client.get("/planner/workbench/administration/workbench").json()["Data"]
+    assert (
+        admin["ReleasePolicyConfiguration"]["ActivePolicyVersionID"]
+        == "DBR-POLICY-CONFIG-1"
+    )
+
+
 def test_pending_planning_run_can_be_cancelled_but_not_executed():
     client = TestClient(create_app())
     master_data_payload = _master_data_import_calculate_payload()
@@ -1686,7 +1726,7 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'value="en"' in html
     assert "需求驱动计划员工作台" in html
     assert 'href="/planner/assets/planner-workbench.css"' in html
-    assert 'src="/planner/assets/planner-workbench.js"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260620-ui-confirmation"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -2780,6 +2820,20 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
         "TemporaryShiftOverride",
         "ExclusionOrMaintenance",
     ]
+    assert data["CalendarConfiguration"]["Status"] == "EditableViaVersionedMasterData"
+    assert data["CalendarConfiguration"]["TemporaryOverrideApiStatus"] == "Available"
+    assert data["CalendarConfiguration"]["OverrideCount"] == 0
+    assert data["ReleasePolicyConfiguration"]["Status"] == "Versioned"
+    assert "RopeBufferMinutes" in data["ReleasePolicyConfiguration"]["ConfigurableParameters"]
+    assert data["SchedulingStrategyConfiguration"]["ActiveSolverBackendID"] == "ortools"
+    assert "gurobi" in data["SchedulingStrategyConfiguration"]["PausedSolverBackendIDs"]
+    assert (
+        data["SchedulingStrategyConfiguration"]["CustomWeightPersistenceStatus"]
+        == "Available"
+    )
+    assert "Batching" in data["SchedulingStrategyConfiguration"]["DeferredBusinessRules"]
+    assert data["IntegrationContracts"]["Status"] == "ContractOnly"
+    assert data["IntegrationContracts"]["ContractCount"] == 4
     assert data["RawJsonDebug"]["DefaultVisible"] is False
     assert data["Solvers"][0]["SolverID"] == "ortools"
     assert data["Solvers"][0]["Status"] == "Available"
@@ -2798,6 +2852,127 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
     assert "Resources" not in str(data.get("LatestMasterDataPreview", {}))
 
 
+def test_be_data_010_ui_006_calendar_override_configuration_is_persisted(tmp_path):
+    # BE-DATA-010 / BE-UI-006
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    database_path = tmp_path / "workbench.db"
+    client = TestClient(create_app(state_store=SQLiteWorkbenchStateStore(database_path)))
+
+    response = client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-001",
+            "CalendarID": "CAL-DRUM",
+            "ResourceID": "WC-DRUM",
+            "OverrideType": "ExclusionOrMaintenance",
+            "EffectiveStartAt": "2026-06-20T10:00:00+00:00",
+            "EffectiveEndAt": "2026-06-20T11:30:00+00:00",
+            "CapacityDeltaMinutes": -90,
+            "Reason": "planned maintenance",
+            "CreatedAt": "2026-06-19T09:00:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    )
+
+    assert response.status_code == 200
+    override = response.json()["Data"]["Override"]
+    assert override["OverrideID"] == "CAL-OVR-001"
+    assert override["SolverDriverStatus"] == "NotApplied"
+
+    invalid = client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-BAD",
+            "CalendarID": "CAL-DRUM",
+            "OverrideType": "Overtime",
+            "EffectiveStartAt": "2026-06-20T11:30:00+00:00",
+            "EffectiveEndAt": "2026-06-20T11:30:00+00:00",
+            "CreatedAt": "2026-06-19T09:00:00+00:00",
+            "CreatedBy": "planner-1",
+        },
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["Data"]["Status"] == "CalendarOverrideInvalid"
+
+    recreated_client = TestClient(
+        create_app(state_store=SQLiteWorkbenchStateStore(database_path))
+    )
+    listed = recreated_client.get("/planner/workbench/admin/calendar-overrides")
+    assert listed.status_code == 200
+    assert listed.json()["Data"]["ActiveOverrideCount"] == 1
+    admin = recreated_client.get("/planner/workbench/administration/workbench").json()[
+        "Data"
+    ]
+    calendar_config = admin["CalendarConfiguration"]
+    assert calendar_config["OverrideCount"] == 1
+    assert calendar_config["OverrideTypeCounts"]["ExclusionOrMaintenance"] == 1
+    assert calendar_config["ConflictCheckStatus"] == "NotEnforced"
+    assert admin["StateStore"]["Status"] == "Healthy"
+
+
+def test_be_solver_014_ui_006_scheduling_strategy_configuration_is_persisted(tmp_path):
+    # BE-SOLVER-014 / BE-UI-006
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    database_path = tmp_path / "workbench.db"
+    client = TestClient(create_app(state_store=SQLiteWorkbenchStateStore(database_path)))
+
+    first = client.post(
+        "/planner/workbench/admin/scheduling-strategies",
+        json={
+            "StrategyID": "STRAT-DELIVERY-CUSTOM",
+            "DisplayName": "Delivery custom",
+            "CreatedAt": "2026-06-19T09:05:00+00:00",
+            "CreatedBy": "planner-1",
+            "TardinessWeight": 250,
+            "MakespanWeight": 1,
+            "AlternateResourcePenaltyWeight": 8,
+            "Status": "Active",
+        },
+    )
+    second = client.post(
+        "/planner/workbench/admin/scheduling-strategies",
+        json={
+            "StrategyID": "STRAT-FLOW-CUSTOM",
+            "DisplayName": "Flow custom",
+            "CreatedAt": "2026-06-19T09:10:00+00:00",
+            "CreatedBy": "planner-1",
+            "TardinessWeight": 50,
+            "MakespanWeight": 20,
+            "AlternateResourcePenaltyWeight": 3,
+            "Status": "Active",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    recreated_client = TestClient(
+        create_app(state_store=SQLiteWorkbenchStateStore(database_path))
+    )
+    listed = recreated_client.get("/planner/workbench/admin/scheduling-strategies")
+    assert listed.status_code == 200
+    data = listed.json()["Data"]
+    assert data["StrategyCount"] == 2
+    assert data["ActiveStrategyID"] == "STRAT-FLOW-CUSTOM"
+    assert next(
+        item
+        for item in data["Strategies"]
+        if item["StrategyID"] == "STRAT-DELIVERY-CUSTOM"
+    )["Status"] == "Retired"
+
+    admin = recreated_client.get("/planner/workbench/administration/workbench").json()[
+        "Data"
+    ]
+    strategy_config = admin["SchedulingStrategyConfiguration"]
+    assert strategy_config["PersistedStrategyCount"] == 2
+    assert strategy_config["ActiveStrategyID"] == "STRAT-FLOW-CUSTOM"
+    assert "balanced" in strategy_config["ObjectiveStrategies"]
+    assert "STRAT-FLOW-CUSTOM" in strategy_config["ObjectiveStrategies"]
+    assert strategy_config["StrategyStatusCounts"] == {"Retired": 1, "Active": 1}
+
+
 def test_ui_admin_001_002_workbench_exposes_bilingual_administration_workspace():
     # UI-ADMIN-001 / UI-ADMIN-002
     client = TestClient(create_app())
@@ -2810,11 +2985,24 @@ def test_ui_admin_001_002_workbench_exposes_bilingual_administration_workspace()
     assert 'id="admin-import-preview"' in html
     assert 'id="admin-routings-import"' in html
     assert 'id="admin-system-capabilities"' in html
+    assert 'id="admin-cp-sat-assumptions"' in html
     assert 'id="admin-policy-groups"' in html
+    assert 'id="admin-calendar-override-form"' in html
+    assert 'id="admin-calendar-overrides"' in html
     assert 'id="admin-debug-json-toggle"' in html
     assert "/planner/workbench/administration/workbench" in script
+    assert "/planner/workbench/admin/cp-sat/assumptions" in script
+    assert "/planner/workbench/admin/calendar-overrides" in script
     assert 'adminMasterDataTitle: "主数据后台"' in script
     assert 'adminMasterDataTitle: "Master Data Administration"' in script
+    assert 'calendarOverrideConfig: "日历临时覆盖配置"' in script
+    assert 'calendarOverrideConfig: "Calendar temporary override configuration"' in script
+    assert 'partialEditable: "部分可配置"' in script
+    assert 'partialEditable: "Partially configurable"' in script
+    assert 'cpSatAssumptions: "CP-SAT 建模假设"' in script
+    assert 'cpSatAssumptions: "CP-SAT Modeling Assumptions"' in script
+    assert 'problem: "计划场景"' in script
+    assert 'problem: "Planning scenario"' in script
     assert 'rawJsonHidden: "原始 JSON 默认隐藏，仅管理员调试模式可查看。"' in script
     assert 'rawJsonHidden: "Raw JSON is hidden by default and available only in administrator debug mode."' in script
     assert 'id="master-data-input"' not in html
@@ -3077,6 +3265,143 @@ def test_planner_workbench_calculate_endpoint_accepts_advanced_cp_sat_fields():
     assert "ORTOOLS_SETUP_TRANSITIONS_ENABLED" in codes
     assert "ORTOOLS_RESOURCE_EFFICIENCY_ENABLED" in codes
     assert "ORTOOLS_OPERATION_TIME_WINDOWS_ENABLED" in codes
+
+
+def test_be_solver_014_cp_sat_assumptions_endpoint_lists_tunable_parameters():
+    # BE-SOLVER-014 / BE-UI-006
+    client = TestClient(create_app())
+
+    response = client.get("/planner/workbench/admin/cp-sat/assumptions")
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["SolverBackendID"] == "ortools"
+    assert "gurobi" in data["PausedSolverBackendIDs"]
+    assert {item["AssumptionID"] for item in data["ModelingAssumptions"]} >= {
+        "TIME_INTEGER_MINUTES",
+        "NO_FULL_MRP_IN_SOLVER",
+        "SINGLE_UNIT_SETUP_ONLY",
+    }
+    assert {item["ParameterID"] for item in data["TunableParameters"]} >= {
+        "TimeLimitSeconds",
+        "ObjectiveStrategyID",
+        "ObjectiveWeights",
+        "ReleasePolicy",
+    }
+    assert "BomMrp" in data["DeferredRules"]
+
+
+def test_be_solver_014_calculate_applies_custom_objective_strategy():
+    # BE-SOLVER-014
+    client = TestClient(create_app())
+    assert client.post(
+        "/planner/workbench/admin/scheduling-strategies",
+        json={
+            "StrategyID": "STRAT-CUSTOM-FAST-FLOW",
+            "DisplayName": "Custom fast flow",
+            "CreatedAt": "2026-06-19T09:10:00+00:00",
+            "CreatedBy": "planner-1",
+            "TardinessWeight": 7,
+            "MakespanWeight": 13,
+            "AlternateResourcePenaltyWeight": 2,
+            "Status": "Active",
+        },
+    ).status_code == 200
+    request_payload = _calculate_payload()
+    request_payload["SolverBackendID"] = "ortools"
+    request_payload["ObjectiveStrategyID"] = "STRAT-CUSTOM-FAST-FLOW"
+
+    response = client.post("/planner/workbench/calculate", json=request_payload)
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["ObjectiveStrategyID"] == "STRAT-CUSTOM-FAST-FLOW"
+    assert data["ObjectiveWeights"] == {
+        "StrategyID": "STRAT-CUSTOM-FAST-FLOW",
+        "TardinessWeight": 7.0,
+        "MakespanWeight": 13.0,
+        "AlternateResourcePenaltyWeight": 2.0,
+    }
+    codes = {item["Code"] for item in data["SolverDiagnostics"]}
+    assert "ORTOOLS_CUSTOM_OBJECTIVE_WEIGHTS_ENABLED" in codes
+
+    missing = dict(request_payload)
+    missing["ObjectiveStrategyID"] = "STRAT-MISSING"
+    rejected = client.post("/planner/workbench/calculate", json=missing)
+    assert rejected.status_code == 404
+    assert rejected.json()["Data"]["Status"] == "SchedulingStrategyNotFound"
+
+
+def test_be_solver_014_planning_run_freezes_custom_objective_strategy():
+    # BE-SOLVER-014 / BE-RUN-001
+    client = TestClient(create_app())
+    _create_master_data_and_snapshot(
+        client, version_id="MDV-STRATEGY-FREEZE", snapshot_id="OPS-STRATEGY-FREEZE"
+    )
+    assert client.post(
+        "/planner/workbench/admin/scheduling-strategies",
+        json={
+            "StrategyID": "STRAT-FROZEN",
+            "DisplayName": "Frozen custom",
+            "CreatedAt": "2026-06-19T09:10:00+00:00",
+            "CreatedBy": "planner-1",
+            "TardinessWeight": 11,
+            "MakespanWeight": 3,
+            "AlternateResourcePenaltyWeight": 5,
+            "Status": "Active",
+        },
+    ).status_code == 200
+    create_response = client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            "RunID": "RUN-STRATEGY-FREEZE",
+            "ProblemID": "P-STRATEGY-FREEZE",
+            "MasterDataVersionID": "MDV-STRATEGY-FREEZE",
+            "OperationalStateSnapshotID": "OPS-STRATEGY-FREEZE",
+            "ScheduleStartAt": "2026-06-16T08:00:00+00:00",
+            "ObjectiveStrategyID": "STRAT-FROZEN",
+            "SolverBackendID": "ortools",
+            "RequestedBy": "planner-1",
+            "RequestedAt": "2026-06-16T07:50:00+00:00",
+        },
+    )
+    assert create_response.status_code == 200
+    pending = create_response.json()["Data"]["PlanningRun"]
+    assert pending["FrozenSchedulingStrategy"]["ObjectiveWeights"][
+        "TardinessWeight"
+    ] == 11
+
+    assert client.post(
+        "/planner/workbench/admin/scheduling-strategies",
+        json={
+            "StrategyID": "STRAT-FROZEN-REPLACEMENT",
+            "DisplayName": "Replacement custom",
+            "CreatedAt": "2026-06-19T09:20:00+00:00",
+            "CreatedBy": "planner-1",
+            "TardinessWeight": 99,
+            "MakespanWeight": 99,
+            "AlternateResourcePenaltyWeight": 99,
+            "Status": "Active",
+        },
+    ).status_code == 200
+    execute_response = client.post(
+        "/planner/workbench/planning-runs/RUN-STRATEGY-FREEZE/execute",
+        json={
+            "ExecutedBy": "planner-1",
+            "StartedAt": "2026-06-16T07:55:00+00:00",
+            "CompletedAt": "2026-06-16T07:56:00+00:00",
+        },
+    )
+
+    assert execute_response.status_code == 200
+    run = execute_response.json()["Data"]["PlanningRun"]
+    assert run["Status"] == "Completed"
+    assert run["Schedule"]["ObjectiveWeights"] == {
+        "StrategyID": "STRAT-FROZEN",
+        "TardinessWeight": 11.0,
+        "MakespanWeight": 3.0,
+        "AlternateResourcePenaltyWeight": 5.0,
+    }
 
 
 def test_planner_workbench_calculate_endpoint_exposes_gurobi_solver_diagnostics():

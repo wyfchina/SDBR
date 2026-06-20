@@ -40,6 +40,10 @@ class WorkbenchStateStore:
         default_factory=dict
     )
     dbr_release_policies: dict[str, dict[str, object]] = field(default_factory=dict)
+    calendar_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
+    scheduling_strategy_versions: dict[str, dict[str, object]] = field(default_factory=dict)
+    integration_messages: list[dict[str, object]] = field(default_factory=list)
+    test_case_acceptance_decisions: list[dict[str, object]] = field(default_factory=list)
     master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
     audit_events: list[dict[str, object]] = field(default_factory=list)
@@ -105,6 +109,10 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             ],
             "release_decision_packages": self.release_decision_packages,
             "dbr_release_policies": self.dbr_release_policies,
+            "calendar_overrides": self.calendar_overrides,
+            "scheduling_strategy_versions": self.scheduling_strategy_versions,
+            "integration_messages": self.integration_messages,
+            "test_case_acceptance_decisions": self.test_case_acceptance_decisions,
             "master_data_versions": self.master_data_versions,
             "planning_runs": self.planning_runs,
             "audit_events": self.audit_events,
@@ -271,6 +279,14 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             payloads.get("release_decision_packages", {})
         )
         self.dbr_release_policies.update(payloads.get("dbr_release_policies", {}))
+        self.calendar_overrides.update(payloads.get("calendar_overrides", {}))
+        self.scheduling_strategy_versions.update(
+            payloads.get("scheduling_strategy_versions", {})
+        )
+        self.integration_messages.extend(payloads.get("integration_messages", []))
+        self.test_case_acceptance_decisions.extend(
+            payloads.get("test_case_acceptance_decisions", [])
+        )
         self.master_data_versions.update(payloads.get("master_data_versions", {}))
         self.planning_runs.update(payloads.get("planning_runs", {}))
         self.audit_events.extend(payloads.get("audit_events", []))
@@ -293,6 +309,10 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.operational_state_snapshots.clear()
         self.release_decision_packages.clear()
         self.dbr_release_policies.clear()
+        self.calendar_overrides.clear()
+        self.scheduling_strategy_versions.clear()
+        self.integration_messages.clear()
+        self.test_case_acceptance_decisions.clear()
         self.master_data_versions.clear()
         self.planning_runs.clear()
         self.audit_events.clear()
@@ -317,6 +337,10 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "OperationalStateSnapshots": len(store.operational_state_snapshots),
         "ReleaseDecisionPackages": len(store.release_decision_packages),
         "DbrReleasePolicies": len(store.dbr_release_policies),
+        "CalendarOverrides": len(store.calendar_overrides),
+        "SchedulingStrategyVersions": len(store.scheduling_strategy_versions),
+        "IntegrationMessages": len(store.integration_messages),
+        "TestCaseAcceptanceDecisions": len(store.test_case_acceptance_decisions),
         "MasterDataVersions": len(store.master_data_versions),
         "PlanningRuns": len(store.planning_runs),
         "AuditEvents": len(store.audit_events),

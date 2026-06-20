@@ -1,6 +1,9 @@
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from sdbr.api import create_app
+from sdbr.operational_state import create_operational_state_snapshot
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import (
     BASELINE_MASTER_DATA_VERSION_ID,
@@ -79,6 +82,87 @@ def test_test_data_drives_planning_run_output_and_release_management():
     assert ready["BlockingReasons"] == []
 
 
+def test_test_data_drives_release_authorization_and_buffer_execution_with_fresh_snapshot():
+    # BE-DATA-014 / BE-REL-010 / BE-EXEC-004
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    run = _enqueue_claim_and_execute(client, "TST-RUN-BASELINE-001")
+    first_release = min(
+        run["Schedule"]["ReleaseRecommendations"],
+        key=lambda item: item["SuggestedReleaseDate"],
+    )
+    evaluated_at = datetime.fromisoformat(first_release["SuggestedReleaseDate"])
+    baseline_snapshot = store.operational_state_snapshots[BASELINE_OPERATIONAL_STATE_ID]
+    store.operational_state_snapshots[BASELINE_OPERATIONAL_STATE_ID] = (
+        create_operational_state_snapshot(
+            snapshot_id=baseline_snapshot.snapshot_id,
+            captured_at=evaluated_at,
+            inventory_buffers=baseline_snapshot.inventory_buffers,
+            material_availability=baseline_snapshot.material_availability,
+            wip_limits=baseline_snapshot.wip_limits,
+        )
+    )
+
+    release = client.get(
+        "/planner/workbench/release-management/runs/"
+        "TST-RUN-BASELINE-001/workbench",
+        params={"evaluated_at": evaluated_at.isoformat()},
+    )
+
+    assert release.status_code == 200
+    release_data = release.json()["Data"]
+    assert release_data["OperationalStateStatus"] == "Fresh"
+    ready = next(item for item in release_data["Candidates"] if item["CanAuthorize"])
+    assert ready["OrderID"] == first_release["OrderID"]
+    assert ready["SuggestedReleaseAt"] == first_release["SuggestedReleaseDate"]
+    assert ready["SuggestedReleaseAt"] < ready["ScheduledStart"]
+
+    authorization = client.post(
+        "/planner/workbench/release-management/runs/"
+        f"TST-RUN-BASELINE-001/orders/{ready['OrderID']}/authorize",
+        json={
+            "ReleasedBy": "planner-e2e",
+            "ReleasedAt": evaluated_at.isoformat(),
+            "OperationalStateMaxAgeMinutes": 60,
+        },
+    )
+    assert authorization.status_code == 200
+    authorization_id = authorization.json()["Data"]["Authorization"]["AuthorizationID"]
+
+    board_before = client.get(
+        "/planner/workbench/buffer-board/runs/TST-RUN-BASELINE-001/workbench",
+        params={"evaluated_at": evaluated_at.isoformat()},
+    ).json()["Data"]
+    assert _buffer_order_count(board_before, "YetToBeReceived") == 1
+    assert _buffer_order_count(board_before, "Received") == 0
+
+    arrived_at = evaluated_at + timedelta(minutes=10)
+    transaction = client.post(
+        "/planner/workbench/buffer-board/runs/"
+        f"TST-RUN-BASELINE-001/orders/{ready['OrderID']}/transactions",
+        json={
+            "EventType": "ArrivedBuffer",
+            "EventAt": arrived_at.isoformat(),
+            "ActorID": "operator-e2e",
+            "MeasureType": "Quantity",
+            "MeasureValue": 1,
+        },
+    )
+    assert transaction.status_code == 200
+    event = transaction.json()["Data"]["Event"]
+    assert event["AuthorizationID"] == authorization_id
+    assert event["Status"] == "Accepted"
+
+    board_after = client.get(
+        "/planner/workbench/buffer-board/runs/TST-RUN-BASELINE-001/workbench",
+        params={"evaluated_at": arrived_at.isoformat()},
+    ).json()["Data"]
+    assert _buffer_order_count(board_after, "YetToBeReceived") == 0
+    assert _buffer_order_count(board_after, "Received") == 1
+
+
 def test_release_management_blocks_material_shortage_and_wip_limit_from_schedules():
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
@@ -145,8 +229,17 @@ def test_test_case_acceptance_summarizes_completed_business_cases():
 
     assert response.status_code == 200
     data = response.json()["Data"]
+    assert data["AcceptancePackageID"] == "TST-ACP-BASELINE-20260619"
+    assert data["EnvironmentBoundary"] == "TestOnly"
+    assert data["ExecutionPlan"]["StepCount"] == 4
     assert data["Summary"]["PassedCount"] == 3
+    assert data["Summary"]["PendingHumanDecisionCount"] == 3
     cases = {case["CaseID"]: case for case in data["Cases"]}
+    assert cases["TST-CASE-BASELINE"]["Expected"]["ReleaseReadyMin"] == 1
+    assert all(
+        check["Passed"]
+        for check in cases["TST-CASE-BASELINE"]["ActualVsExpected"]
+    )
     assert cases["TST-CASE-BASELINE"]["Actual"]["Release"]["Summary"]["ReadyCount"] > 0
     assert "MATERIAL_SHORTAGE" in cases["TST-CASE-MATERIAL-SHORTAGE"]["Actual"]["Release"]["BlockingCodes"]
     assert "WIP_LIMIT_EXCEEDED" in cases["TST-CASE-WIP-LIMIT"]["Actual"]["Release"]["BlockingCodes"]
@@ -155,6 +248,73 @@ def test_test_case_acceptance_summarizes_completed_business_cases():
         cases["TST-CASE-MATERIAL-SHORTAGE"]["Actual"]["PublicationStatus"],
         cases["TST-CASE-WIP-LIMIT"]["Actual"]["PublicationStatus"],
     } == {"Draft"}
+
+
+def test_test_case_acceptance_records_human_confirmation_and_audit():
+    # BE-DATA-014 / BE-OPS-002
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+    for run_id in [
+        "TST-RUN-BASELINE-001",
+        "TST-RUN-MATERIAL-SHORTAGE-001",
+        "TST-RUN-WIP-LIMIT-001",
+    ]:
+        _enqueue_claim_and_execute(client, run_id)
+
+    response = client.post(
+        "/planner/workbench/test-data/acceptance/TST-CASE-BASELINE/decision",
+        json={
+            "Decision": "Confirm",
+            "ActorID": "planner-acceptance",
+            "DecidedAt": "2026-06-20T10:00:00+00:00",
+            "Comment": "基准案例符合业务预期。",
+        },
+    )
+
+    assert response.status_code == 200
+    decision = response.json()["Data"]["Decision"]
+    assert decision["DecisionID"] == "TST-ACD-000001"
+    assert decision["AcceptanceStatusAtDecision"] == "Passed"
+    assert decision["ActualSnapshot"]["PlanningRunStatus"] == "Completed"
+
+    decisions = client.get("/planner/workbench/test-data/acceptance/decisions")
+    assert decisions.status_code == 200
+    assert decisions.json()["Data"]["Count"] == 1
+
+    workbench = client.get("/planner/workbench/test-data/acceptance").json()["Data"]
+    cases = {case["CaseID"]: case for case in workbench["Cases"]}
+    assert workbench["Summary"]["ConfirmedCount"] == 1
+    assert workbench["Summary"]["PendingHumanDecisionCount"] == 2
+    assert cases["TST-CASE-BASELINE"]["LatestDecision"]["Decision"] == "Confirm"
+
+    audit = client.get(
+        "/planner/workbench/planning-runs/audit-events",
+        params={"run_id": "TST-CASE-BASELINE"},
+    )
+    assert audit.status_code == 200
+    assert audit.json()["Data"]["AuditEvents"][0]["Action"] == "TestCaseAcceptanceDecision"
+
+
+def test_test_case_acceptance_rejects_confirmation_before_case_passes():
+    # BE-DATA-014
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    response = client.post(
+        "/planner/workbench/test-data/acceptance/TST-CASE-BASELINE/decision",
+        json={
+            "Decision": "Confirm",
+            "ActorID": "planner-acceptance",
+            "DecidedAt": "2026-06-20T10:05:00+00:00",
+        },
+    )
+
+    assert response.status_code == 409
+    data = response.json()["Data"]
+    assert data["Status"] == "TestCaseNotPassed"
+    assert data["AcceptanceStatus"] == "NeedsExecution"
 
 
 def test_plan_publication_lifecycle_records_package_audit_and_rbac():
@@ -386,3 +546,8 @@ def _review_approve_publish(client: TestClient, run_id: str) -> dict[str, object
         assert response.status_code == 200
         data = response.json()["Data"]
     return data
+
+
+def _buffer_order_count(board: dict[str, object], stage: str) -> int:
+    row = next(item for item in board["Rows"] if item["Stage"] == stage)
+    return sum(cell["OrderCount"] for cell in row["Cells"])

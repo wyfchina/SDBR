@@ -281,7 +281,7 @@
               <table id="planning-run-table" class="data-table" data-quality-component="data-table">
                 <thead>
                   <tr>
-                    <th data-i18n="runId">Run ID</th><th data-i18n="problem">计划问题</th>
+                    <th data-i18n="runId">Run ID</th><th data-i18n="problem">计划场景</th>
                     <th data-i18n="status">状态</th><th data-i18n="masterDataVersionLabel">主数据版本</th>
                     <th data-i18n="snapshotLabel">运行快照</th><th data-i18n="solver">求解器</th>
                     <th data-i18n="requester">请求人</th><th data-i18n="startedAt">开始时间</th>
@@ -538,6 +538,8 @@
               <section class="admin-panel" aria-labelledby="admin-system-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="systemHealthLabel">系统健康</span><h2 id="admin-system-title" data-i18n="adminSystemTitle">集成与求解器设置</h2></div></div>
                 <div id="admin-system-capabilities" class="capability-grid"></div>
+                <h3 data-i18n="cpSatAssumptions">CP-SAT 建模假设</h3>
+                <div id="admin-cp-sat-assumptions" class="policy-group-list"></div>
                 <h3 data-i18n="policyConfiguration">排程策略配置</h3>
                 <div id="admin-policy-groups" class="policy-group-list"></div>
               </section>
@@ -545,6 +547,25 @@
               <section class="admin-panel full-width" aria-labelledby="admin-calendar-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="calendar">日历</span><h2 id="admin-calendar-title" data-i18n="calendarLayers">资源日历四层</h2></div></div>
                 <div id="admin-calendar-layers" class="calendar-layer-list"></div>
+                <div class="calendar-config">
+                  <div class="panel-heading compact-heading">
+                    <div><span class="panel-kicker" data-i18n="calendarOverrides">临时覆盖</span><h3 data-i18n="calendarOverrideConfig">日历临时覆盖配置</h3></div>
+                  </div>
+                  <form id="admin-calendar-override-form" class="form-grid compact">
+                    <label class="field"><span data-i18n="overrideId">覆盖编号</span><input id="calendar-override-id" required value="CAL-OVR-001"></label>
+                    <label class="field"><span data-i18n="calendarId">日历编号</span><input id="calendar-id" required value="CAL-DRUM"></label>
+                    <label class="field"><span data-i18n="resource">资源</span><input id="calendar-resource-id" placeholder="TST-WC-DRUM"></label>
+                    <label class="field"><span data-i18n="overrideType">覆盖类型</span><select id="calendar-override-type"><option value="TemporaryShiftOverride" data-i18n="TemporaryShiftOverride">临时班次覆盖</option><option value="ExclusionOrMaintenance" data-i18n="ExclusionOrMaintenance">排除/维护修改</option><option value="Overtime" data-i18n="Overtime">加班</option></select></label>
+                    <label class="field"><span data-i18n="effectiveStart">生效开始</span><input id="calendar-effective-start" type="datetime-local" required></label>
+                    <label class="field"><span data-i18n="effectiveEnd">生效结束</span><input id="calendar-effective-end" type="datetime-local" required></label>
+                    <label class="field"><span data-i18n="capacityDelta">产能增减分钟</span><input id="calendar-capacity-delta" type="number" value="0"></label>
+                    <label class="field"><span data-i18n="shiftName">班次名称</span><input id="calendar-shift-name" placeholder="加班班次"></label>
+                    <label class="field"><span data-i18n="reason">原因</span><input id="calendar-reason" placeholder="维护、加班或节假日调整"></label>
+                    <button id="create-calendar-override" class="button primary" type="submit" data-i18n="createOverride">创建覆盖</button>
+                  </form>
+                  <p class="inline-note" data-i18n="calendarOverrideBoundary">当前仅支持临时覆盖台账；基础日历、班次模板和覆盖直接驱动 CP-SAT 仍待后续规则确认。</p>
+                  <div id="admin-calendar-overrides" class="calendar-override-list"></div>
+                </div>
               </section>
             </div>
           </section>
@@ -582,7 +603,7 @@
         <section data-wizard-step="1">
           <div class="form-grid compact">
             <label><span data-i18n="runId">Run ID</span><input id="wizard-run-id" required></label>
-            <label><span data-i18n="problem">计划问题</span><input id="wizard-problem-id" required></label>
+            <label><span data-i18n="problem">计划场景</span><input id="wizard-problem-id" required></label>
             <label><span data-i18n="masterDataVersionLabel">主数据版本</span><input id="wizard-master-data-version" required readonly></label>
             <label><span data-i18n="snapshotLabel">运行快照</span><input id="wizard-operational-snapshot" required readonly></label>
             <label><span data-i18n="scheduleStart">计划起点</span><input id="wizard-schedule-start" type="datetime-local" required></label>
@@ -657,6 +678,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260620-ui-confirmation" defer></script>
 </body>
 </html>

@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 3.7 |
-| 日期 | 2026-06-19 |
+| 文档版本 | 4.1 |
+| 日期 | 2026-06-20 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
 | 后端基线 | `docs/backend-readiness-2026-06-19.md` |
@@ -182,7 +182,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-OVERVIEW-001 计划总览
 
-**状态：已验证待用户确认**
+**状态：用户已确认**
 
 页面区域：
 
@@ -225,7 +225,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 **状态：用户已确认**
 
-列：Run ID、计划问题、状态、主数据版本、运行快照、求解器、请求人、开始时间、耗时、尝试次数。
+列：Run ID、计划场景、状态、主数据版本、运行快照、求解器、请求人、开始时间、耗时、尝试次数。
 
 筛选：状态、时间、请求人、求解器、仅看异常。
 
@@ -344,7 +344,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-PLANPUB-001 计划发布治理
 
-**状态：已验证待用户确认**
+**状态：用户已确认**
 
 计划发布治理嵌入 `排程结果` 页面，不新建孤立发布页。计划员在同一上下文中完成结果检查、复核、批准、发布状态查看和发布包追溯。
 
@@ -385,6 +385,8 @@ UI 必须帮助计划员快速回答五个问题：
 
 **状态：用户已确认**
 
+**2026-06-20 补充验证：**已修正排程结果中的建议释放时间，使其优先按 CP-SAT 计划首工序开始时间倒推时间缓冲；新增 `tests/test_business_closure.py::test_test_data_drives_release_authorization_and_buffer_execution_with_fresh_snapshot`，在 UI 默认 60 分钟快照新鲜度规则下验证“释放授权 -> 待接收 -> 已接收”的端到端业务分支。
+
 顶部上下文：位置、约束资源、缓冲负责人、当日总负荷、最近排程时间。
 
 主体采用固定二维矩阵：
@@ -424,7 +426,9 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-ADMIN-001 主数据后台
 
-**状态：用户已确认**
+**状态：基础管理后台用户已确认；临时日历覆盖配置扩展已验证待用户确认**
+
+**当前实现边界：**用户确认的是管理后台基线。日历区域已展示日定义、周定义、临时班次覆盖、排除/修改四层模型，并新增临时日历覆盖创建/查询入口；基础日历、班次模板、节假日主表和维护规则编辑尚未开放，覆盖冲突规则和覆盖直接驱动 CP-SAT 仍属于 `BE-DATA-010 [PARTIAL]`。
 
 后台按对象分区：资源、日历、工艺路线、订单、库存缓冲、物料需求。
 
@@ -740,35 +744,36 @@ UI 不得直接构造或修改 SQLite 数据。
 ### 17.10 第十验收单元记录
 
 - 规格：`UI-RUN-002`、`UI-ADMIN-002`
-- 状态：已验证待用户确认
+- 状态：用户已确认
 - 变更原因：产品活动求解器由 Gurobi 切换为 OR-Tools CP-SAT
 - 验收范围：创建向导默认选择且仅允许 CP-SAT；Gurobi 同级显示但为“已暂停”；Simio 继续暂不可用；历史计划保持真实求解器名称
 - 自动化验证：2026-06-19执行 `pytest -q`，267 passed，2 warnings；前端脚本语法检查通过
 - 运行时验证：Planning Run和管理后台能力接口报告 OR-Tools CP-SAT可用且可选择、Gurobi为Paused且不可选择；历史结果保留真实求解器标识
-- 浏览器验证：待用户在最新服务中确认创建向导默认CP-SAT、Gurobi暂停及中英文状态
-- 用户确认：待确认
+- 2026-06-20 补强：管理后台读取 `GET /planner/workbench/admin/cp-sat/assumptions`，展示 CP-SAT 建模假设、可调参数、暂停求解器和延后规则，避免把未实现的 MRP/批次/Simio 反馈误导为已启用；前端脚本增加版本参数以避免旧浏览器缓存；自动化验证 `pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；全量验证 `pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
+- 浏览器验证：2026-06-20 使用测试库三组 `TST-RUN-*` 已完成计划验证；创建向导显示 CP-SAT 默认可用、Gurobi 禁用、Simio 禁用；管理后台中英文显示 CP-SAT 可用、Gurobi 暂停、Simio 暂不可用，并展示 CP-SAT 建模假设/可调参数/延后规则；390px 窄屏无横向溢出
+- 用户确认：已确认（2026-06-20）
 
 ### 17.11 第十一验收单元记录
 
 - 规格：`UI-PLANPUB-001`
 - 后台依赖：`BE-RUN-009`、`BE-OUT-010`、`BE-OPS-002`
-- 状态：已验证待用户确认
+- 状态：用户已确认
 - 范围：在排程结果页面内嵌计划发布治理区，显示发布状态、允许动作、发布包摘要、发布历史和替代关系
 - 边界：只调用内部发布生命周期 API；真实 ERP/MES 回写仍由 `BE-INT-*` 跟踪
-- 自动化验证：2026-06-19执行 `pytest -q`，268 passed，2 warnings；前端脚本语法检查通过；`UI-PLANPUB-001 / BE-RUN-009 / BE-OUT-010` 暴露测试通过
-- 浏览器验证：待用户在最新服务中结合案例确认排程结果内嵌治理区、中文/英文状态和生命周期动作
-- 用户确认：待确认
+- 自动化验证：2026-06-20 执行 `python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
+- 浏览器验证：2026-06-20 在 `#schedule-results` 验证排程结果内嵌治理区存在；中文显示“计划发布治理”“草案”“提交复核”，英文显示 “Plan publication governance”“Draft”“Submit for review”；发布包与发布历史区域存在；桌面和 390px 窄屏无横向溢出
+- 用户确认：已确认（2026-06-20）
 
 ### 17.12 第十二验收单元记录
 
 - 规格：`UI-OVERVIEW-001`
 - 后台依赖：`BE-DATA-014`、`BE-SOLVER-009`、`BE-REL-004`、`BE-RUN-009`
-- 状态：已验证待用户确认
+- 状态：用户已确认
 - 范围：计划总览显示测试案例验收摘要，作为后续按案例判断产品行为是否符合预期的入口
 - 边界：当前只显示测试系统案例验收，不替代生产 BI 总览；生产级总览仍等待 `BE-BI-*`
-- 自动化验证：2026-06-19执行 `pytest -q`，274 passed，2 warnings；前端脚本语法检查通过；`UI-OVERVIEW-001 / BE-DATA-014` 暴露测试通过
-- 浏览器验证：待用户在最新服务中结合案例确认总览摘要、案例卡片和排程结果跳转
-- 用户确认：待确认
+- 自动化验证：2026-06-20 执行 `python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
+- 浏览器验证：2026-06-20 重建测试库并执行三组 `TST-RUN-*` 后，计划总览显示案例总数 3、已通过 3、待执行 0、未通过 0；案例卡显示 Planning Run、状态、求解器、发布状态、可释放数和阻塞代码；中英文切换正常；390px 窄屏无横向溢出
+- 用户确认：已确认（2026-06-20）
 
 ## 18. 变更记录
 
@@ -800,5 +805,11 @@ UI 不得直接构造或修改 SQLite 数据。
 | 3.5 | 2026-06-19 | 完成第十一验收单元自动化验证：计划发布治理区嵌入排程结果，调用内部发布生命周期 API 并提供双语业务状态 |
 | 3.6 | 2026-06-19 | 启动第十二验收单元：测试案例验收总览，用于按案例检查 CP-SAT、释放门控和计划发布治理 |
 | 3.7 | 2026-06-19 | 完成第十二验收单元自动化验证：计划总览显示测试案例验收摘要、案例卡片和排程结果跳转入口 |
+| 3.8 | 2026-06-20 | 将 Planning Run 列表和创建向导中的“计划问题 / Planning problem”统一调整为“计划场景 / Planning scenario” |
+| 3.9 | 2026-06-20 | 第十验收单元补强：管理后台展示 CP-SAT 建模假设、可调参数和延后规则 |
+| 4.0 | 2026-06-20 | 处理 UI 第十、十一、十二待确认项：完成测试数据执行、浏览器中英文/窄屏验证、脚本缓存破坏和最终 305 项测试基线 |
+| 4.1 | 2026-06-20 | 记录 UI-BUFFER-001 测试分支不可达和 UI-ADMIN-001 日历仅只读展示的已知缺口，避免将已完成页面误报为完整业务配置能力 |
+| 4.2 | 2026-06-20 | 补齐 UI-BUFFER-001 释放授权到缓冲执行端到端证据；UI-ADMIN-001 新增临时日历覆盖配置入口，基础日历编辑仍保持未完成边界 |
+| 4.3 | 2026-06-20 | 用户确认第十、十一、十二验收单元：活动求解器切换、排程结果内嵌计划发布治理、测试案例验收总览 |
 | 3.0 | 2026-06-19 | 完成并验证第九验收单元：统一状态标签、表格、详情、确认、通知、加载/空/错和数据新鲜度质量护栏 |
 | 3.1 | 2026-06-19 | 用户确认第九验收单元，完成 UI 验收单元基线；将计划总览列入后续产品总览阶段 |

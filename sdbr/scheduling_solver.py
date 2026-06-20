@@ -11,6 +11,9 @@ from sdbr.planner_workbench import Resource, Routing, SchedulingOrder
 
 ACTIVE_SOLVER_BACKEND_ID = "ortools"
 PAUSED_SOLVER_BACKEND_IDS = frozenset({"gurobi"})
+BUILT_IN_OBJECTIVE_STRATEGY_IDS = frozenset(
+    {"balanced", "delivery_first", "flow_first", "bottleneck_protect"}
+)
 
 
 @dataclass(frozen=True, slots=True)

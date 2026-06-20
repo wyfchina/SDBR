@@ -60,6 +60,11 @@ class TestCaseSpec:
     expected_solver_statuses: list[str]
     expected_release_ready_min: int
     expected_blocking_codes: list[str]
+    expected_publication_status: str
+    input_summary_zh: str
+    expected_schedule_zh: str
+    expected_release_zh: str
+    expected_publication_zh: str
     covered_spec_ids: list[str]
 
     def to_dict(self) -> dict[str, object]:
@@ -76,6 +81,11 @@ class TestCaseSpec:
             "ExpectedSolverStatuses": self.expected_solver_statuses,
             "ExpectedReleaseReadyMin": self.expected_release_ready_min,
             "ExpectedBlockingCodes": self.expected_blocking_codes,
+            "ExpectedPublicationStatus": self.expected_publication_status,
+            "InputSummaryZh": self.input_summary_zh,
+            "ExpectedScheduleZh": self.expected_schedule_zh,
+            "ExpectedReleaseZh": self.expected_release_zh,
+            "ExpectedPublicationZh": self.expected_publication_zh,
             "CoveredSpecIDs": self.covered_spec_ids,
         }
 
@@ -95,6 +105,11 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_solver_statuses=["Optimal", "Feasible"],
             expected_release_ready_min=1,
             expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            input_summary_zh="使用基准主数据、基准库存/在途/WIP 快照和 12 张测试工单。",
+            expected_schedule_zh="CP-SAT 应生成 Completed 计划，约束资源工序不重叠，12 张工单均有计划开始和完工时间。",
+            expected_release_zh="至少存在一个可释放候选；可释放工单无结构化阻塞原因。",
+            expected_publication_zh="排程完成后默认形成草案计划，尚未复核、批准或发布。",
             covered_spec_ids=[
                 "BE-DATA-014",
                 "BE-SOLVER-009",
@@ -116,6 +131,11 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_solver_statuses=["Optimal", "Feasible"],
             expected_release_ready_min=0,
             expected_blocking_codes=["MATERIAL_SHORTAGE"],
+            expected_publication_status="Draft",
+            input_summary_zh="使用相同排程主数据，但运行状态快照将关键物料可用量推迟到未来到达。",
+            expected_schedule_zh="有限产能排程仍应完成，物料短缺不作为当前 CP-SAT 硬约束。",
+            expected_release_zh="所有候选被物料短缺或在途未到阻塞，并返回 MATERIAL_SHORTAGE。",
+            expected_publication_zh="排程完成后仍是草案；释放阻塞不自动撤销排程结果。",
             covered_spec_ids=[
                 "BE-DATA-014",
                 "BE-SOLVER-009",
@@ -137,6 +157,11 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_solver_statuses=["Optimal", "Feasible"],
             expected_release_ready_min=0,
             expected_blocking_codes=["WIP_LIMIT_EXCEEDED"],
+            expected_publication_status="Draft",
+            input_summary_zh="使用相同排程主数据，但运行状态快照将 WIP 设置到上限。",
+            expected_schedule_zh="有限产能排程仍应完成，WIP 限制由释放门控判断。",
+            expected_release_zh="所有候选因 WIP 达到上限被阻塞，并返回 WIP_LIMIT_EXCEEDED。",
+            expected_publication_zh="排程完成后仍是草案；WIP 阻塞进入释放管理而不是改变求解器状态。",
             covered_spec_ids=[
                 "BE-DATA-014",
                 "BE-SOLVER-009",
@@ -527,6 +552,11 @@ def _clear_store(store: WorkbenchStateStore) -> None:
     store.release_authorizations.clear()
     store.operational_state_snapshots.clear()
     store.release_decision_packages.clear()
+    store.dbr_release_policies.clear()
+    store.calendar_overrides.clear()
+    store.scheduling_strategy_versions.clear()
+    store.integration_messages.clear()
+    store.test_case_acceptance_decisions.clear()
     store.master_data_versions.clear()
     store.planning_runs.clear()
     store.audit_events.clear()

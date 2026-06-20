@@ -7,6 +7,7 @@ from sdbr.scheduling_solver import (
     SchedulingProblem,
     SchedulingResult,
     SolverDiagnostic,
+    BUILT_IN_OBJECTIVE_STRATEGY_IDS,
     _capacity_bucket_offsets,
     _effective_duration_minutes,
     _finite_resource_ids,
@@ -425,18 +426,6 @@ def _validate_problem(problem: SchedulingProblem) -> SchedulingResult | None:
                 )
             ],
         )
-    if problem.objective.strategy_id not in {
-        "balanced",
-        "delivery_first",
-        "flow_first",
-        "bottleneck_protect",
-    }:
-        return _validation_error(
-            problem,
-            code="INVALID_OBJECTIVE_STRATEGY",
-            message="Unsupported objective strategy_id for OR-Tools scheduling.",
-            entity_id=problem.objective.strategy_id,
-        )
     return None
 
 
@@ -641,13 +630,30 @@ def _objective_weights(problem: SchedulingProblem) -> dict[str, float]:
 
 
 def _advanced_capability_diagnostics(problem: SchedulingProblem) -> list[SolverDiagnostic]:
+    objective_source = (
+        "BuiltIn"
+        if problem.objective.strategy_id in BUILT_IN_OBJECTIVE_STRATEGY_IDS
+        else "Custom"
+    )
     diagnostics = [
         SolverDiagnostic(
             severity="Info",
             code="ORTOOLS_OBJECTIVE_STRATEGY",
-            message=f"OR-Tools CP-SAT objective strategy: {problem.objective.strategy_id}.",
+            message=(
+                "OR-Tools CP-SAT objective strategy: "
+                f"{problem.objective.strategy_id} ({objective_source})."
+            ),
         )
     ]
+    if objective_source == "Custom":
+        diagnostics.append(
+            SolverDiagnostic(
+                severity="Info",
+                code="ORTOOLS_CUSTOM_OBJECTIVE_WEIGHTS_ENABLED",
+                message="Custom objective weights are applied to CP-SAT.",
+                entity_id=problem.objective.strategy_id,
+            )
+        )
     if problem.setup_transitions:
         diagnostics.append(
             SolverDiagnostic(

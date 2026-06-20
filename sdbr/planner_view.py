@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, tzinfo as TzInfo
+from datetime import date, datetime, time, timedelta, tzinfo as TzInfo
 
 from sdbr.gantt_view import GanttRow, build_gantt_rows
 from sdbr.planner_workbench import (
@@ -135,6 +135,7 @@ def build_planner_workbench_view(
     fixed_assignments: list[FixedOperationAssignment] | None = None,
     setup_transitions: list[SetupTransition] | None = None,
     objective: SchedulingObjective | None = None,
+    align_release_to_schedule: bool = False,
 ) -> PlannerWorkbenchView:
     workbench = build_planner_workbench(
         orders=orders,
@@ -166,9 +167,16 @@ def build_planner_workbench_view(
         )
     else:
         schedule = create_solver_engine(solver_backend_id).solve(problem)
+    release_recommendations = workbench.release_recommendations
+    if align_release_to_schedule:
+        release_recommendations = release_recommendations_aligned_to_schedule(
+            fallback_recommendations=workbench.release_recommendations,
+            schedule_assignments=schedule.assignments,
+            time_buffer_minutes=time_buffer_minutes,
+        )
     buffer_board = build_buffer_board(
         orders=orders,
-        release_recommendations=workbench.release_recommendations,
+        release_recommendations=release_recommendations,
         generated_at=generated_at or schedule_start_at,
     )
     return PlannerWorkbenchView(
@@ -181,7 +189,7 @@ def build_planner_workbench_view(
         constraint_overload_count=len(workbench.overloaded_constraints),
         load_graph_rows=workbench.load_graph_rows,
         gantt_rows=build_gantt_rows(schedule) if schedule.assignments else [],
-        release_recommendations=workbench.release_recommendations,
+        release_recommendations=release_recommendations,
         buffer_board=buffer_board,
         buffer_summary=build_buffer_summary(buffer_board),
         execution_priority_queue=build_execution_priority_queue(buffer_board),
@@ -190,6 +198,39 @@ def build_planner_workbench_view(
         capacity_buffer_board=build_capacity_buffer_board(workbench.load_graph_rows),
         inventory_buffer_board=build_inventory_buffer_board(inventory_buffers or []),
     )
+
+
+def release_recommendations_aligned_to_schedule(
+    *,
+    fallback_recommendations: list[ReleaseRecommendation],
+    schedule_assignments: list[object],
+    time_buffer_minutes: int,
+) -> list[ReleaseRecommendation]:
+    first_start_by_order: dict[str, datetime] = {}
+    for assignment in schedule_assignments:
+        order_id = str(getattr(assignment, "order_id", ""))
+        start = getattr(assignment, "start", None)
+        if not order_id or not isinstance(start, datetime):
+            continue
+        current = first_start_by_order.get(order_id)
+        if current is None or start < current:
+            first_start_by_order[order_id] = start
+    if not first_start_by_order:
+        return fallback_recommendations
+    aligned = []
+    for recommendation in fallback_recommendations:
+        scheduled_start = first_start_by_order.get(recommendation.order_id)
+        if scheduled_start is None:
+            aligned.append(recommendation)
+            continue
+        aligned.append(
+            ReleaseRecommendation(
+                order_id=recommendation.order_id,
+                suggested_release_date=scheduled_start
+                - timedelta(minutes=time_buffer_minutes),
+            )
+        )
+    return aligned
 
 
 def build_buffer_board(

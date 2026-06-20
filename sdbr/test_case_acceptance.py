@@ -19,8 +19,10 @@ def build_test_case_acceptance_workbench(
     master_data_versions: dict[str, dict[str, object]],
     operational_state_snapshots: dict[str, OperationalStateSnapshot],
     release_authorizations: list[ReleaseAuthorization],
+    acceptance_decisions: list[dict[str, object]] | None = None,
     evaluated_at: datetime = DEFAULT_CASE_EVALUATED_AT,
 ) -> dict[str, object]:
+    decisions = acceptance_decisions or []
     cases = [
         _case_row(
             case=case.to_dict(),
@@ -28,13 +30,26 @@ def build_test_case_acceptance_workbench(
             master_data_versions=master_data_versions,
             operational_state_snapshots=operational_state_snapshots,
             release_authorizations=release_authorizations,
+            acceptance_decisions=decisions,
             evaluated_at=evaluated_at,
         )
         for case in test_case_catalog()
     ]
+    latest_decisions = _latest_decisions_by_case(decisions)
     return {
+        "AcceptancePackageID": "TST-ACP-BASELINE-20260619",
         "DatasetID": "TST-DATASET-BASELINE-20260619",
         "EvaluatedAt": evaluated_at.isoformat(),
+        "EnvironmentBoundary": "TestOnly",
+        "ExecutionPlan": {
+            "StepCount": 4,
+            "Steps": [
+                "Reset or seed the isolated test database.",
+                "Execute each TST-RUN-* Planning Run with OR-Tools CP-SAT.",
+                "Evaluate schedule output, release gate and publication state.",
+                "Record human confirmation or rejection for passed cases.",
+            ],
+        },
         "Summary": {
             "CaseCount": len(cases),
             "PassedCount": sum(1 for case in cases if case["AcceptanceStatus"] == "Passed"),
@@ -42,7 +57,28 @@ def build_test_case_acceptance_workbench(
                 1 for case in cases if case["AcceptanceStatus"] == "NeedsExecution"
             ),
             "FailedCount": sum(1 for case in cases if case["AcceptanceStatus"] == "Failed"),
+            "ConfirmedCount": sum(
+                1
+                for decision in latest_decisions.values()
+                if decision.get("Decision") == "Confirm"
+            ),
+            "RejectedCount": sum(
+                1
+                for decision in latest_decisions.values()
+                if decision.get("Decision") == "Reject"
+            ),
+            "PendingHumanDecisionCount": sum(
+                1
+                for case in cases
+                if case["AcceptanceStatus"] == "Passed"
+                and case["CaseID"] not in latest_decisions
+            ),
         },
+        "DecisionRecords": sorted(
+            decisions,
+            key=lambda item: str(item.get("DecidedAt", "")),
+            reverse=True,
+        ),
         "Cases": cases,
     }
 
@@ -54,6 +90,7 @@ def _case_row(
     master_data_versions: dict[str, dict[str, object]],
     operational_state_snapshots: dict[str, OperationalStateSnapshot],
     release_authorizations: list[ReleaseAuthorization],
+    acceptance_decisions: list[dict[str, object]],
     evaluated_at: datetime,
 ) -> dict[str, object]:
     run_id = str(case["PlanningRunID"])
@@ -63,6 +100,9 @@ def _case_row(
             **case,
             "AcceptanceStatus": "Failed",
             "FailureReasons": ["PLANNING_RUN_NOT_FOUND"],
+            "Expected": _expected_summary(case),
+            "ActualVsExpected": _actual_vs_expected(case=case, actual={}, release={}),
+            "LatestDecision": _latest_decision(case["CaseID"], acceptance_decisions),
             "Actual": {},
         }
 
@@ -81,6 +121,9 @@ def _case_row(
             **case,
             "AcceptanceStatus": "NeedsExecution",
             "FailureReasons": ["PLANNING_RUN_NOT_COMPLETED"],
+            "Expected": _expected_summary(case),
+            "ActualVsExpected": _actual_vs_expected(case=case, actual=actual, release={}),
+            "LatestDecision": _latest_decision(case["CaseID"], acceptance_decisions),
             "Actual": actual,
         }
 
@@ -102,6 +145,9 @@ def _case_row(
         **case,
         "AcceptanceStatus": "Passed" if not failures else "Failed",
         "FailureReasons": failures,
+        "Expected": _expected_summary(case),
+        "ActualVsExpected": _actual_vs_expected(case=case, actual=actual, release=release),
+        "LatestDecision": _latest_decision(case["CaseID"], acceptance_decisions),
         "Actual": actual,
     }
 
@@ -189,4 +235,121 @@ def _case_failures(
     for code in case.get("ExpectedBlockingCodes", []):
         if code not in blocking_codes:
             failures.append(f"EXPECTED_BLOCKING_CODE_MISSING:{code}")
+    if actual.get("PublicationStatus") != case.get("ExpectedPublicationStatus"):
+        failures.append("PUBLICATION_STATUS_MISMATCH")
     return failures
+
+
+def _expected_summary(case: dict[str, object]) -> dict[str, object]:
+    return {
+        "SolverBackendID": case.get("ExpectedSolverBackendID"),
+        "PlanningRunStatus": case.get("ExpectedPlanningRunStatus"),
+        "SolverStatuses": case.get("ExpectedSolverStatuses", []),
+        "ReleaseReadyMin": case.get("ExpectedReleaseReadyMin"),
+        "BlockingCodes": case.get("ExpectedBlockingCodes", []),
+        "PublicationStatus": case.get("ExpectedPublicationStatus"),
+        "InputSummaryZh": case.get("InputSummaryZh"),
+        "ScheduleZh": case.get("ExpectedScheduleZh"),
+        "ReleaseZh": case.get("ExpectedReleaseZh"),
+        "PublicationZh": case.get("ExpectedPublicationZh"),
+    }
+
+
+def _actual_vs_expected(
+    *,
+    case: dict[str, object],
+    actual: dict[str, object],
+    release: dict[str, object],
+) -> list[dict[str, object]]:
+    summary = release.get("Summary", {}) if isinstance(release, dict) else {}
+    blocking_codes = release.get("BlockingCodes", []) if isinstance(release, dict) else []
+    comparisons = [
+        (
+            "SolverBackendID",
+            case.get("ExpectedSolverBackendID"),
+            actual.get("SolverBackendID"),
+            actual.get("SolverBackendID") == case.get("ExpectedSolverBackendID"),
+        ),
+        (
+            "PlanningRunStatus",
+            case.get("ExpectedPlanningRunStatus"),
+            actual.get("PlanningRunStatus"),
+            actual.get("PlanningRunStatus") == case.get("ExpectedPlanningRunStatus"),
+        ),
+        (
+            "SolverStatus",
+            case.get("ExpectedSolverStatuses"),
+            actual.get("SolverStatus"),
+            actual.get("SolverStatus") in case.get("ExpectedSolverStatuses", []),
+        ),
+        (
+            "ReleaseReadyMin",
+            case.get("ExpectedReleaseReadyMin"),
+            summary.get("ReadyCount") if isinstance(summary, dict) else None,
+            isinstance(summary, dict)
+            and int(summary.get("ReadyCount") or 0)
+            >= int(case.get("ExpectedReleaseReadyMin") or 0),
+        ),
+        (
+            "BlockingCodes",
+            case.get("ExpectedBlockingCodes"),
+            blocking_codes,
+            set(case.get("ExpectedBlockingCodes", [])) <= set(blocking_codes or []),
+        ),
+        (
+            "PublicationStatus",
+            case.get("ExpectedPublicationStatus"),
+            actual.get("PublicationStatus"),
+            actual.get("PublicationStatus") == case.get("ExpectedPublicationStatus"),
+        ),
+    ]
+    return [
+        {
+            "CheckID": check_id,
+            "Expected": expected,
+            "Actual": actual_value,
+            "Passed": passed,
+        }
+        for check_id, expected, actual_value, passed in comparisons
+    ]
+
+
+def _latest_decision(
+    case_id: object,
+    decisions: list[dict[str, object]],
+) -> dict[str, object] | None:
+    latest = _latest_decisions_by_case(decisions).get(str(case_id))
+    return dict(latest) if latest else None
+
+
+def _latest_decisions_by_case(
+    decisions: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for decision in sorted(decisions, key=lambda item: str(item.get("DecidedAt", ""))):
+        result[str(decision.get("CaseID"))] = decision
+    return result
+
+
+def create_test_case_acceptance_decision(
+    *,
+    case: dict[str, object],
+    decision: str,
+    actor_id: str,
+    decided_at: datetime,
+    comment: str | None,
+    existing_decisions: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "DecisionID": f"TST-ACD-{len(existing_decisions) + 1:06d}",
+        "AcceptancePackageID": "TST-ACP-BASELINE-20260619",
+        "DatasetID": "TST-DATASET-BASELINE-20260619",
+        "CaseID": case["CaseID"],
+        "Decision": decision,
+        "AcceptanceStatusAtDecision": case["AcceptanceStatus"],
+        "ActorID": actor_id,
+        "DecidedAt": decided_at.isoformat(),
+        "Comment": comment,
+        "FailureReasonsAtDecision": case.get("FailureReasons", []),
+        "ActualSnapshot": case.get("Actual", {}),
+    }

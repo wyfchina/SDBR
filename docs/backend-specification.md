@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.7 |
-| 日期 | 2026-06-19 |
+| 文档版本 | 2.8 |
+| 日期 | 2026-06-20 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
 | UI 规格 | `docs/ui-specification.md` |
@@ -90,11 +90,11 @@ ERP / 主数据源
 | `BE-DATA-007` | 校验资源、约束、路线、工序、缓冲和物料需求 | `[VERIFIED]` | `C` `sdbr/master_data_validation.py`; `A` `/master-data/validate`; `T` `tests/test_master_data_validation.py` | 后续增加面向 UI 的问题分类与修复建议 |
 | `BE-DATA-008` | 创建不可变、可追溯的 Master Data Version | `[VERIFIED]` | `A` `/master-data/versions`; `T` `tests/test_api.py`, `tests/test_backend_readiness.py` | 已满足当前审计需求 |
 | `BE-DATA-009` | 创建运行状态快照并判断新鲜度 | `[VERIFIED]` | `C` `sdbr/operational_state.py`; `A` `/operational-state/snapshots`; `T` `tests/test_operational_state.py` | 后续增加资源实时状态字段 |
-| `BE-DATA-010` | 柔性日历、班次、节假日和维护扣减 | `[PARTIAL]` | `C` `sdbr/calendar_import.py`, `sdbr/scheduling_solver.py`; `A` 主数据版本比较/发布/回滚；`T` `tests/test_calendar_import.py`, `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已支持版本化日历输入、维护扣减和受控主数据发布；临时加班、停工对象独立 API 仍需补充 |
+| `BE-DATA-010` | 柔性日历、班次、节假日和维护扣减 | `[PARTIAL]` | `C` `sdbr/calendar_import.py`, `sdbr/scheduling_solver.py`; `A` 主数据版本比较/发布/回滚、`/planner/workbench/admin/calendar-overrides`; `UI` 管理后台临时覆盖配置入口；`T` `tests/test_calendar_import.py`, `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已支持版本化日历输入、维护扣减、受控主数据发布、临时日历覆盖台账和最小配置 UI；基础日历/班次模板编辑、覆盖冲突规则和覆盖直接驱动 CP-SAT 仍需业务规则确认 |
 | `BE-DATA-011` | 丰富资源属性 | `[PARTIAL]` | `C` `Resource` 已有约束标识、能力、日历、资源数量、效率、类型、缓冲标识、负责人和分类；`T` `tests/test_api.py` | 班组人数、固定偏移和更细换型属性仍需独立业务规则 |
 | `BE-DATA-012` | BOM、多级物料需求和替代料模型 | `[NOT-STARTED]` | `D` 当前只有工单物料需求及可用量 | 明确 ERP 提供净需求还是本系统执行轻量 MRP，并完成批次化可用量计算 |
 | `BE-DATA-013` | 主数据版本差异、发布和回滚 | `[VERIFIED]` | `C/A` `/master-data/version-comparison`、`/master-data/versions/{id}/publish|retire|rollback`; `T` `tests/test_api.py` | 已满足后台治理闭环；真实 ERP 主数据发布回写由 `BE-INT-*` 跟踪 |
-| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`; `A` `/planner/workbench/test-data/cases`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限场景、案例台账和测试库重建；当前场景可驱动 Planning Run 执行、计划输出、释放门控与发布治理验收 |
+| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`, `sdbr/test_case_acceptance.py`; `A` `/planner/workbench/test-data/cases`, `/planner/workbench/test-data/acceptance`, `/planner/workbench/test-data/acceptance/{case_id}/decision`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限场景、案例台账、测试库重建、自动验收包、预期/实际差异和人工确认/驳回记录；当前场景可驱动 Planning Run 执行、计划输出、释放门控与发布治理验收 |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -127,7 +127,7 @@ ERP / 主数据源
 | `BE-SOLVER-011` | 资源数量、效率、班组人数和固定偏移约束 | `[PARTIAL]` | `C` `capacity_units`、`efficiency_percent`、工序时间窗；`T` `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已实现资源并行数量、效率修正和工序 earliest/latest 时间窗；班组人数和固定偏移仍需独立业务规则 |
 | `BE-SOLVER-012` | 工单锁定、冻结区和人工固定安排 | `[PARTIAL]` | `C` `FixedOperationAssignment`、CP-SAT 固定开始/固定资源硬约束、显式 `SourceRunID`、重排来源追踪和工序差异摘要；`T` `tests/test_scheduling_solver.py`、`tests/test_api.py` | 已完成工序级固定开始/资源、锁定工单、冻结窗口、Planning Run 显式源计划选择和重排差异输出；锁定范围细分到工序/资源/订单的交互策略仍需 UI/业务规则确认 |
 | `BE-SOLVER-013` | 批次、合批、拆批和订单分组 | `[NOT-STARTED]` | `D` `administration_view.py` 已暴露批次字段和策略分组占位 | 暂不硬编码；需先定义合批粒度、拆批条件、批量容量和订单混批限制 |
-| `BE-SOLVER-014` | 多目标策略和配置化权重 | `[PARTIAL]` | `C` `strategy_id`、`ObjectiveStrategyID`、内置策略权重；`T` `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已实现 `balanced`、`delivery_first`、`flow_first`、`bottleneck_protect` 内置策略；版本化策略中心、人工配置持久化和方案解释仍未实现 |
+| `BE-SOLVER-014` | 多目标策略和配置化权重 | `[PARTIAL]` | `C` `strategy_id`、`ObjectiveStrategyID`、内置策略权重、版本化策略台账、自定义权重驱动 CP-SAT；`A` `/planner/workbench/admin/scheduling-strategies`, `/planner/workbench/admin/cp-sat/assumptions`; `T` `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已实现内置策略、自定义策略权重持久化、自定义策略驱动 CP-SAT 和算法假设/可调参数说明接口；策略仿真解释、UI 调参和业务案例验收仍需后续完成 |
 | `BE-SOLVER-015` | 大规模性能基线与许可证容量治理 | `[NOT-STARTED]` | `D` 已记录 `CORES=256` 议题 | 与 OR-Tools/Simio 阶段共同建立规模矩阵、硬件/许可检查和降级策略 |
 
 ### 6.1 当前 CP-SAT 建模假设
@@ -145,6 +145,22 @@ ERP / 主数据源
 9. 单机有限资源支持顺序相关换型；多并行资源的机台级换型等待具体业务规则。
 10. BOM/MRP、批次、合批、拆批、班组人数及 Simio 反馈不属于当前通用模型。
 
+### 6.2 当前可调参数边界
+
+当前阶段允许配置并可追溯的 CP-SAT 参数如下。未列入的参数不得在 UI 或 API 中暗示为已支持。
+
+| 参数类别 | API 字段/对象 | 当前作用 | 边界 |
+| --- | --- | --- | --- |
+| 求解器选择 | `SolverBackendID` | 新任务只允许 `ortools` | Gurobi 暂停，Simio 不参与求解 |
+| 求解时间限制 | `TimeLimitSeconds` / `solver_time_limit_seconds` | 传入 CP-SAT `max_time_in_seconds` | 不保证最优，只保证状态结构化 |
+| 目标策略 | `ObjectiveStrategyID` | 选择内置策略或后台自定义策略 | 自定义策略需先在策略台账创建 |
+| 目标权重 | `/admin/scheduling-strategies` 的 `TardinessWeight`、`MakespanWeight`、`AlternateResourcePenaltyWeight` | 直接形成 CP-SAT 加权目标 | 权重解释需通过业务案例校准 |
+| 时间缓冲 | `TimeBufferMinutes`、释放策略时间缓冲比例 | 当前用于保护交期/释放门控语义 | 不作为完整 DBR 数学硬约束 |
+| 资源效率/并行数 | `EfficiencyPercent`、`CapacityUnits` | 修正工时和并行容量 | 多机台顺序换型仍未支持 |
+| 工序时间窗 | `EarliestStartAt`、`LatestEndAt` | CP-SAT 硬约束 | 业务含义由上游或人工配置给出 |
+| 换型矩阵 | `SetupTransitions` | 单机有限资源顺序换型硬约束 | 多并行资源换型后续建模 |
+| 释放策略 | `/dbr/release-policies` | 冻结并供释放门控追溯 | 尚未全部反向驱动排程模型 |
+
 ## 7. DBR 缓冲、释放与稳定性
 
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
@@ -160,7 +176,7 @@ ERP / 主数据源
 | `BE-REL-009` | 时间缓冲红黄绿计算 | `[VERIFIED]` | `C` `planner_view.py`; `T` `tests/test_planner_view.py` | 当前阈值未配置化 |
 | `BE-REL-010` | 两阶段五区域 Buffer Board 聚合 | `[VERIFIED]` | `C` `sdbr/buffer_execution_view.py`; `A` Buffer Board workbench/detail endpoints; `T` `tests/test_api.py` | 已按 Planning Run 聚合授权、冻结计划和执行事件；更复杂的优先级由 BE-REL-011 承担 |
 | `BE-REL-011` | 配置化执行优先级矩阵 | `[PARTIAL]` | `C` 当前按 Red/Yellow/Green 固定排序 | 增加 MTS、Min-Max、MTO 独立策略及 Stockout/Critical/OTOG 等权重 |
-| `BE-REL-012` | 版本化 DBR 与释放策略中心 | `[PARTIAL]` | `C/A` `/dbr/release-policies`、Planning Run 冻结 `ReleasePolicyVersionID`、释放评估返回策略快照；`T` `tests/test_api.py` | 已建立版本化策略台账和冻结追溯；绳长、缓冲比例、WIP 与稳定性阈值尚未全部驱动算法 |
+| `BE-REL-012` | 版本化 DBR 与释放策略中心 | `[PARTIAL]` | `C/A` `/dbr/release-policies` 列表/创建/查询、Planning Run 冻结 `ReleasePolicyVersionID`、释放评估返回策略快照、管理后台配置摘要和策略状态计数；`T` `tests/test_api.py` | 已建立版本化策略台账、列表接口、活动策略摘要、冻结追溯和管理后台可视配置摘要；绳长、缓冲比例、WIP 与稳定性阈值尚未全部驱动算法 |
 
 ## 8. 计划输出、负载与方案比较
 
@@ -192,13 +208,13 @@ ERP / 主数据源
 
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
 | --- | --- | --- | --- | --- |
-| `BE-INT-001` | ERP 入站连接器 | `[NOT-STARTED]` | 当前只有手工/API 导入端点 | 定义订单、BOM、路线、资源、库存、采购在途的增量同步、映射、重试和对账 |
-| `BE-INT-002` | ERP 出站计划与释放回写 | `[NOT-STARTED]` | 无 | 回写确认计划、建议释放、实际释放和异常状态 |
+| `BE-INT-001` | ERP 入站连接器 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 已定义 ERP 入站契约、字段校验、幂等键、确认、死信和重放测试桩；真实 ERP 增量同步、映射适配、重试调度和对账仍未实现 |
+| `BE-INT-002` | ERP 出站计划与释放回写 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 已定义确认计划、建议释放、实际释放和异常状态的出站契约及确认/重放边界；真实 ERP 回写连接器、投递队列和回执对账仍未实现 |
 | `BE-INT-003` | ERP 业务所有权 | `[EXTERNAL]` | ERP 是权威来源 | 本系统不替代 ERP 主数据、采购和库存账务 |
-| `BE-INT-004` | MES 入站执行事件连接器 | `[PARTIAL]` | `A` 已有通用执行事件接口 | 增加幂等键、来源系统、事件版本、重放、死信和对账 |
-| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` 已有 dispatch package | 增加版本化消息契约、确认回执、撤销和重发 |
+| `BE-INT-004` | MES 入站执行事件连接器 | `[PARTIAL]` | `C/A` 通用执行事件接口、`sdbr/integration_contracts.py` MES 入站契约和消息测试桩；`T` `tests/test_integration_contracts.py`, `tests/test_shop_floor_execution.py` | 已补幂等键、来源系统、字段校验、死信和重放契约；事件版本、真实 MES 适配、重放执行和对账仍未实现 |
+| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` 已有 dispatch package、`sdbr/integration_contracts.py` MES 出站契约；`T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py` | 已定义版本化派工/释放消息、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
 | `BE-INT-006` | MES/SCADA 业务所有权 | `[EXTERNAL]` | MES/SCADA 负责现场采集和控制 | 本系统消费状态，不直接控制设备 |
-| `BE-INT-007` | 通用集成监控 | `[NOT-STARTED]` | 无 | 增加连接状态、延迟、最后成功时间、错误队列和人工重放 |
+| `BE-INT-007` | 通用集成监控 | `[PARTIAL]` | `C/A` 集成消息台账、死信查询和重放请求接口；`T` `tests/test_integration_contracts.py` | 已提供契约层错误队列和人工重放占位；连接状态、延迟、最后成功时间、自动重试和外部系统健康检查仍未实现 |
 
 ## 11. Simio 验证
 
@@ -244,7 +260,7 @@ ERP / 主数据源
 | `BE-UI-003` | 排程结果聚合接口 | `[VERIFIED]` | `C` `sdbr/schedule_result_view.py`; `A` `/schedule-results/runs/{run_id}/workbench`, `/compare`, `/select`; `T` `tests/test_api.py` | 已按 Planning Run 返回安全 KPI、诊断、甘特、系统/单资源负荷、风险和筛选元数据，并支持方案比较与审计选择 |
 | `BE-UI-004` | 释放管理聚合接口 | `[VERIFIED]` | `C` `sdbr/work_order_release_view.py`; `A` Planning Run release-management workbench/authorize；`T` `tests/test_api.py`, `tests/test_business_closure.py` | 已桥接冻结计划、主数据和运行快照，输出优先级、动态缓冲渗透、结构化阻塞原因、允许动作及调度包引用 |
 | `BE-UI-005` | 异常中心聚合接口 | `[VERIFIED]` | `C` `sdbr/exception_center_view.py`; `A` exception center workbench/detail endpoints; `T` `tests/test_api.py` | 已统一 Planning Run 失败/DeadLetter、约束缓冲风险、执行预警和重排建议；后续可继续丰富释放阻塞处置动作和关闭工作流 |
-| `BE-UI-006` | 管理配置 API | `[PARTIAL]` | `D` 启动管理后台聚合接口开发 | 先提供安全只读管理工作台、导入对象定义、求解器/集成/Worker/SQLite 能力状态；敏感连接参数编辑和配置持久化后续实现 |
+| `BE-UI-006` | 管理配置 API | `[PARTIAL]` | `C/A` `/planner/workbench/administration/workbench` 输出主数据对象、日历配置摘要、释放策略配置、求解器策略、集成契约、Worker/SQLite 状态，并聚合日历覆盖和自定义排程策略；`T` `tests/test_api.py` | 已提供安全管理工作台、半配置化入口摘要、日历覆盖 API 和策略权重 API；敏感连接参数编辑、配置审批、配置编辑 UI 和真实外部系统健康配置后续实现 |
 | `BE-UI-007` | 保存视图、筛选和用户偏好 | `[NOT-STARTED]` | 无 | 保存列、排序、分组、筛选、语言和页面偏好 |
 | `BE-UI-008` | 双语消息码和字段词典 | `[NOT-STARTED]` | API 多为英文文本 | 返回稳定 message code，由 UI 负责中英文展示，保留技术详情 |
 
@@ -419,18 +435,60 @@ ERP / 主数据源
 - 已知限制：DBR 策略参数当前完成版本化与追溯，尚未全部驱动释放算法；锁定范围细分、临时加班/停工对象 API、班组人数、固定偏移仍需业务规则或 UI 交互边界明确
 - 用户确认：待确认
 
+### BE-INT-001 / BE-INT-002 / BE-INT-004 / BE-INT-005 / BE-INT-007 / BE-DATA-014 / BE-REL-012 / BE-UI-006 验收记录
+
+- 状态变更：`BE-INT-001`、`BE-INT-002`、`BE-INT-007` 从 `[NOT-STARTED]` 推进到 `[PARTIAL]`；`BE-INT-004`、`BE-INT-005`、`BE-DATA-014`、`BE-REL-012`、`BE-UI-006` 保持原状态并补充契约、案例与配置证据
+- 日期：2026-06-20
+- 实现证据：`sdbr/integration_contracts.py` 定义 ERP 入站、ERP 出站、MES 入站、MES 出站契约；`sdbr/api.py` 新增集成契约列表、消息测试桩、死信和重放接口；`sdbr/state_store.py` 持久化集成消息台账；`sdbr/administration_view.py` 输出日历、释放策略、求解策略和集成契约配置摘要；`sdbr/test_data.py` 扩展案例卡输入与预期说明
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_integration_contracts.py tests/test_state_store.py -q --basetemp .tmp/pytest-contracts-2 -p no:cacheprovider`，13 passed；`pytest tests/test_test_data.py tests/test_business_closure.py -q --basetemp .tmp/pytest-cases`，13 passed；`pytest tests/test_api.py -q -k "administration_workbench or release_policy_list or be_solver_012" --basetemp .tmp/pytest-config-2 -p no:cacheprovider`，4 passed；`pytest -q --basetemp .tmp/pytest-full-20260620-2 -p no:cacheprovider`，297 passed，1 warning
+- 业务验收：当前完成的是接口契约、字段校验、幂等、确认、死信、重放和人工案例验收支撑，不连接真实 ERP/MES；配置后台显示可追溯配置入口，但敏感连接编辑、临时加班/停工独立 API 和真实配置审批仍未实现
+- 已知限制：BOM/MRP、批次、合批、拆批、多机台换型、ERP/MES 真实连接、自动重试调度、对账和外部系统健康检查仍需后续业务规则或集成边界明确
+- 用户确认：待确认
+
+### BE-DATA-014 案例验收体系验收记录
+
+- 状态变更：保持 `[VERIFIED]`，补充案例验收包、预期/实际差异、人工确认/驳回和持久化证据
+- 日期：2026-06-20
+- 实现证据：`sdbr/test_case_acceptance.py` 输出 `AcceptancePackageID`、执行计划、案例预期、实际对照、失败原因、最新人工决策和决策记录；`sdbr/api.py` 新增 `/planner/workbench/test-data/acceptance/{case_id}/decision` 与 `/planner/workbench/test-data/acceptance/decisions`；`sdbr/state_store.py` 持久化 `test_case_acceptance_decisions`
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_business_closure.py -q --basetemp .tmp/pytest-acceptance-business -p no:cacheprovider`，7 passed；`pytest tests/test_test_data.py -q --basetemp .tmp/pytest-acceptance-data -p no:cacheprovider`，9 passed；`pytest -q --basetemp .tmp/pytest-full-acceptance-20260620 -p no:cacheprovider`，300 passed，1 warning
+- 业务验收：案例体系可展示测试数据输入、排程预期、释放预期、发布预期、自动判定结果和逐项差异；通过案例可由人工确认，未执行或未通过案例不能被确认；确认/驳回记录可审计并可跨 SQLite 重载保留
+- 已知限制：当前案例仍限于基准、物料短缺和 WIP 超限三组 `TST-*` 场景；真实业务案例、行业模板和 UI 确认动作仍需后续扩展
+- 用户确认：待确认
+
+### BE-DATA-010 / BE-SOLVER-014 / BE-REL-012 / BE-UI-006 配置后台验收记录
+
+- 状态变更：保持 `[PARTIAL]`，补充日历与策略配置后台证据
+- 日期：2026-06-20
+- 实现证据：`sdbr/api.py` 新增 `/planner/workbench/admin/calendar-overrides` 和 `/planner/workbench/admin/scheduling-strategies` 创建/列表/查询接口；`sdbr/state_store.py` 持久化日历覆盖与自定义排程策略；`sdbr/administration_view.py` 在管理后台聚合日历覆盖、释放策略和策略权重状态；`sdbr/web/planner-workbench.js` 与 `sdbr/web/planner-workbench.html` 将“计划问题 / Planning problem”修正为“计划场景 / Planning scenario”
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "calendar_override or scheduling_strategy or administration_workbench or admin_001_002" --basetemp .tmp/pytest-calendar-strategy-target -p no:cacheprovider`，4 passed；`pytest -q --basetemp .tmp/pytest-full-calendar-strategy-20260620 -p no:cacheprovider`，302 passed，1 warning
+- 业务验收：计划员/管理员可把临时班次、停机/维护、加班作为版本化配置台账保存和查询；可把多目标权重作为自定义排程策略保存并设置单一活动策略；管理后台可查看配置数量、活动项、状态计数和边界说明
+- 已知限制：日历覆盖尚未直接驱动 CP-SAT 能力桶；覆盖冲突、配置审批、UI 编辑和敏感外部连接参数编辑仍需后续业务规则；自定义策略权重驱动 CP-SAT 的业务效果需通过案例验收校准
+- 用户确认：待确认
+
+### BE-SOLVER-014 CP-SAT 假设与可调参数验收记录
+
+- 状态变更：保持 `[PARTIAL]`，补充自定义策略权重驱动 CP-SAT 与假设说明接口证据
+- 日期：2026-06-20
+- 实现证据：`sdbr/api.py` 新增 `GET /planner/workbench/admin/cp-sat/assumptions`；`/planner/workbench/admin/scheduling-strategies` 创建的自定义权重可被 calculate、方案比较、重排和 Planning Run 执行路径消费；Planning Run 创建时冻结 `FrozenSchedulingStrategy`；排程输出返回 `ObjectiveWeights`；`sdbr/cp_sat_solver.py` 对自定义策略输出 `ORTOOLS_CUSTOM_OBJECTIVE_WEIGHTS_ENABLED` 诊断
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "cp_sat_assumptions or custom_objective_strategy or freezes_custom_objective_strategy or advanced_cp_sat_fields or scheduling_strategy" --basetemp .tmp/pytest-cp-sat-params-target -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-cp-sat-params-20260620 -p no:cacheprovider`，305 passed，1 warning
+- 业务验收：后台可查询 CP-SAT 当前建模假设、可调参数、暂停求解器、延后规则和活动策略；自定义策略权重会实际进入 CP-SAT 加权目标；找不到策略 ID 时返回结构化 `SchedulingStrategyNotFound`；Planning Run 冻结策略后，后续策略变更不会改变该 Run 的求解权重
+- 已知限制：权重数值的业务含义仍需通过真实案例校准；策略仿真解释、UI 调参、批次/MRP/多机台换型/Simio 反馈仍不在当前实现范围
+- 用户确认：待确认
+
 ## 17. 当前验证基线
 
 截至 2026-06-20：
 
 - 已验证核心：主数据导入与校验、冻结版本与快照、Planning Run 生命周期、既有 Gurobi 基础有限排程、释放门控、授权与稳定性、执行偏差、重排、SQLite 持久化、RBAC、审计和并发冲突控制。
 - 主要部分实现：资源与日历配置、时间缓冲进入优化模型、Buffer Board、执行优先级、负载/甘特、UI 聚合 API、MES 事件集成、生产运维、CP-SAT 换型/并行资源/效率/时间窗/策略。
-- 主要未开始：合批拆批、ERP 连接器、生产数据库、企业身份、完整可观测性和流程拓扑挖掘。
+- 主要未开始：合批拆批、ERP/MES 真实连接器、生产数据库、企业身份、完整可观测性和流程拓扑挖掘。
 - 当前开发：OR-Tools CP-SAT 已成为唯一活动求解器；高级排程 P1 闭环已部分完成，剩余为多机台换型、班组人数、固定偏移、版本化策略中心和批次规则。
 - 已暂停：Gurobi 新计划执行、Simio 实际仿真验证。
 - 外部边界：ERP 账务与主数据所有权、MES/SCADA 现场操作与设备控制、BI 报表设计器。
-- 完整自动化测试：2026-06-20 最近执行 `pytest -q`，结果为 `291 passed, 2 warnings`。警告分别来自 Starlette TestClient 弃用提示和沙箱内 `.pytest_cache` 写入权限，不影响测试通过。
+- 完整自动化测试：2026-06-20 最近执行 `pytest -q --basetemp .tmp/pytest-full-cp-sat-params-20260620 -p no:cacheprovider`，结果为 `305 passed, 1 warning`。警告来自 Starlette TestClient/httpx 弃用提示，不影响测试通过。
 - 测试/生产隔离基线：新增 `BE-OPS-011` 环境元数据与独立 SQLite 路径，新增 `BE-DATA-014` 基准工厂、场景包和测试库重建。
+- 释放/缓冲测试证据（`BE-DATA-014` / `BE-REL-010` / `BE-EXEC-004`）：已新增时间一致且快照新鲜的端到端案例；默认 60 分钟运行快照新鲜度下可完成释放授权、进入 Buffer Board，并通过执行事务从“待接收”移动到“已接收”。
+- 已知日历缺口（`BE-DATA-010` / `BE-UI-006`）：管理 read model 已展示日历四层结构并提供临时覆盖配置入口；基础日历编辑、班次模板、冲突规则和覆盖直接驱动 CP-SAT 尚未完成。
 - 性能与恢复基线记录于 `docs/backend-readiness-2026-06-19.md`；任何状态更新应重新运行相关测试。
 
 ## 18. 变更记录
@@ -448,6 +506,10 @@ ERP / 主数据源
 | 1.8 | 2026-06-19 | 完成 BE-UI-005 异常中心聚合与详情接口，记录 246 项测试基线 |
 | 1.9 | 2026-06-19 | 明确 BE-UI-006 先提供只读管理后台聚合能力，启动 UI-ADMIN-001/UI-ADMIN-002 后台支撑开发 |
 | 2.0 | 2026-06-19 | 完成 BE-UI-006 只读管理后台聚合接口并记录 248 项测试基线，完整配置管理仍保持部分实现 |
+| 2.17 | 2026-06-20 | 补充日历覆盖与排程策略后台配置 API，管理后台聚合配置状态，并统一“计划场景”术语 |
+| 2.18 | 2026-06-20 | 补充 CP-SAT 建模假设与可调参数接口，自定义目标权重实际驱动 CP-SAT，并记录 305 项测试基线 |
+| 2.19 | 2026-06-20 | 记录缓冲执行端到端测试分支不可达及日历只读/部分实现缺口；BE-DATA-014、BE-REL-010、BE-EXEC-004 和 BE-DATA-010 状态不变 |
+| 2.20 | 2026-06-20 | 修正建议释放时间优先对齐排程首工序开始时间，补齐释放授权到 Buffer Board 执行事务端到端测试；管理后台新增临时日历覆盖配置入口，BE-DATA-010 仍保持部分完成 |
 | 2.1 | 2026-06-19 | 新增 BE-DATA-014 与 BE-OPS-011，用于测试/生产隔离、基准测试数据集、场景包和测试库重建能力 |
 | 2.2 | 2026-06-19 | 完成 BE-OPS-011 测试/生产环境隔离与 BE-DATA-014 测试数据重建工具，记录 257 项测试基线 |
 | 2.3 | 2026-06-19 | 明确后台业务闭环 1-4 验收边界：测试数据驱动 Planning Run、计划输出、释放门控对齐及计划确认/发布生命周期 |
@@ -462,3 +524,5 @@ ERP / 主数据源
 | 2.12 | 2026-06-20 | 明确 BE-SOLVER-013 批次/合批/拆批不硬编码，仅在管理 read model 暴露未来字段和策略分组，占位仍保持 NOT-STARTED |
 | 2.13 | 2026-06-20 | 推进后续 1-4：显式源计划与重排差异、版本化 DBR 策略、主数据比较/发布/回滚、工单详情治理聚合；批次/BOM/集成继续等待规则明确 |
 | 2.14 | 2026-06-20 | 记录用户认可的当前 CP-SAT 通用建模假设及未来按具体业务定制边界；同步修正 AGENTS.md 中活动求解器状态冲突 |
+| 2.15 | 2026-06-20 | 定义 ERP/MES 入站/出站契约与消息测试桩，扩展案例验收卡和管理后台日历/释放策略/集成契约配置摘要；真实连接器仍保持未实现 |
+| 2.16 | 2026-06-20 | 完成案例验收体系：新增验收包、预期/实际差异、人工确认/驳回记录、审计和 SQLite 持久化，记录 300 项测试基线 |

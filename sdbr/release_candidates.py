@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sdbr.master_data_validation import MaterialRequirement
 from sdbr.planner_view import InventoryBufferPolicy
+from sdbr.release_policy import ReleasePolicySettings, release_policy_settings
 from sdbr.schedule_output import scheduled_order_rows_from_schedule
 
 
@@ -33,9 +34,11 @@ def release_candidate_rows_from_schedule(
     material_requirements: list[MaterialRequirement],
     wip_limits: list[WipLimit] | None = None,
     material_availability: list[MaterialAvailability] | None = None,
+    release_policy: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     active_wip_limits = wip_limits or []
     active_material_availability = material_availability or []
+    policy_settings = release_policy_settings(release_policy)
     release_recommendations = _release_recommendations_by_order(schedule)
     candidates = []
     for scheduled_order in scheduled_order_rows_from_schedule(schedule):
@@ -54,12 +57,16 @@ def release_candidate_rows_from_schedule(
             inventory_buffers=inventory_buffers,
             material_requirements=material_requirements,
             material_availability=active_material_availability,
+            policy_settings=policy_settings,
         )
         material_status = _material_status_from_risks(inventory_risks)
-        wip_risks = _wip_release_risks(order_id=order_id, wip_limits=active_wip_limits)
+        wip_risks = _wip_release_risks(
+            order_id=order_id,
+            wip_limits=active_wip_limits,
+            policy_settings=policy_settings,
+        )
         wip_status = "Blocked" if wip_risks else "Clear"
-        candidates.append(
-            {
+        candidate = {
                 "OrderID": order_id,
                 "ScheduledStart": scheduled_order["ScheduledStart"],
                 "ScheduledEnd": scheduled_order["ScheduledEnd"],
@@ -77,7 +84,9 @@ def release_candidate_rows_from_schedule(
                     wip_status=wip_status,
                 ),
             }
-        )
+        if release_policy is not None:
+            candidate["PolicyEvidence"] = _policy_evidence(policy_settings)
+        candidates.append(candidate)
     return sorted(
         candidates,
         key=lambda item: (
@@ -110,6 +119,7 @@ def _inventory_release_risks(
     inventory_buffers: list[InventoryBufferPolicy],
     material_requirements: list[MaterialRequirement],
     material_availability: list[MaterialAvailability],
+    policy_settings: ReleasePolicySettings,
 ) -> list[dict[str, object]]:
     buffers_by_key = {
         (buffer.item_id, buffer.location_id): buffer
@@ -138,7 +148,10 @@ def _inventory_release_risks(
                 and scheduled_start_at is not None
                 and projected_available + availability.inbound_qty >= buffer.red_zone_qty
             ):
-                if availability.inbound_available_at > scheduled_start_at:
+                latest_acceptable_inbound = scheduled_start_at + timedelta(
+                    minutes=policy_settings.material_lookahead_minutes
+                )
+                if availability.inbound_available_at > latest_acceptable_inbound:
                     risks.append(
                         {
                             "OrderID": requirement.order_id,
@@ -152,6 +165,8 @@ def _inventory_release_risks(
                             "InboundQty": availability.inbound_qty,
                             "InboundAvailableAt": availability.inbound_available_at.isoformat(),
                             "ScheduledStart": scheduled_start_at.isoformat(),
+                            "MaterialLookaheadMinutes": policy_settings.material_lookahead_minutes,
+                            "LatestAcceptableInboundAt": latest_acceptable_inbound.isoformat(),
                             "ProjectedAvailableQty": projected_available,
                             "ProjectedWithInboundQty": projected_available + availability.inbound_qty,
                             "RedZoneQty": buffer.red_zone_qty,
@@ -162,6 +177,11 @@ def _inventory_release_risks(
                             ),
                         }
                     )
+                    continue
+                if (
+                    policy_settings.material_lookahead_minutes > 0
+                    and availability.inbound_available_at > scheduled_start_at
+                ):
                     continue
                 risks.append(
                     {
@@ -217,25 +237,53 @@ def _wip_release_risks(
     *,
     order_id: str,
     wip_limits: list[WipLimit],
+    policy_settings: ReleasePolicySettings,
 ) -> list[dict[str, object]]:
     risks: list[dict[str, object]] = []
     for limit in wip_limits:
         projected_wip = limit.current_wip_count + limit.order_wip_increment
-        if projected_wip > limit.max_wip_count:
-            risks.append(
-                {
-                    "ScopeID": limit.scope_id,
-                    "CurrentWipCount": limit.current_wip_count,
-                    "MaxWipCount": limit.max_wip_count,
-                    "ProjectedWipCount": projected_wip,
-                    "OrderWipIncrement": limit.order_wip_increment,
-                    "Message": (
-                        f"Releasing order {order_id} would project WIP in "
-                        f"{limit.scope_id} above the configured limit."
-                    ),
-                }
-            )
+        policy_max = policy_settings.max_wip_count
+        effective_max = min(
+            limit.max_wip_count,
+            policy_max if policy_max is not None else limit.max_wip_count,
+        )
+        if projected_wip > effective_max:
+            risk = {
+                "ScopeID": limit.scope_id,
+                "CurrentWipCount": limit.current_wip_count,
+                "MaxWipCount": effective_max,
+                "ProjectedWipCount": projected_wip,
+                "OrderWipIncrement": limit.order_wip_increment,
+                "Message": (
+                    f"Releasing order {order_id} would project WIP in "
+                    f"{limit.scope_id} above the configured limit."
+                ),
+            }
+            if policy_max is not None:
+                risk.update(
+                    {
+                        "SnapshotMaxWipCount": limit.max_wip_count,
+                        "PolicyMaxWipCount": policy_max,
+                        "EffectiveMaxWipCount": effective_max,
+                    }
+                )
+            risks.append(risk)
     return risks
+
+
+def _policy_evidence(settings: ReleasePolicySettings) -> dict[str, object]:
+    return {
+        "ReleasePolicyVersionID": settings.version_id,
+        "RopeBufferMinutes": settings.rope_buffer_minutes,
+        "MaterialLookaheadMinutes": settings.material_lookahead_minutes,
+        "MaxWipCount": settings.max_wip_count,
+        "StabilityPolicy": {
+            "ToleranceMinutes": settings.stability_policy.tolerance_minutes,
+            "ReplanThresholdMinutes": settings.stability_policy.replan_threshold_minutes,
+            "ConsecutiveBlockedThreshold": settings.stability_policy.consecutive_blocked_threshold,
+            "ReplanCooldownMinutes": settings.stability_policy.replan_cooldown_minutes,
+        },
+    }
 
 
 def _recommended_action(*, rope_status: str, material_status: str, wip_status: str) -> str:

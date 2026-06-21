@@ -47,6 +47,8 @@ const I18N = {
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "最新运行状态快照已经过期。", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "最新运行状态快照时间晚于当前时间。",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "运行状态快照未提供来源系统。", issue_RESOURCE_STATUS_NOT_CAPTURED: "当前快照尚未包含资源运行状态。",
     caseAcceptanceSummary: "测试案例验收摘要", testSystemCases: "测试系统案例", caseAcceptanceTitle: "案例验收总览",
+    caseGroup: "案例分组", caseType: "案例类型", expectedAssertions: "期望断言", passedAssertions: "通过断言", failureReasons: "差异原因",
+    CPSATBusinessCases: "CP-SAT业务案例", BusinessClosure: "业务闭环案例",
     caseAcceptanceLoadFailed: "无法读取案例验收摘要", caseAcceptanceRetryAdvice: "请确认测试服务和测试库可用后重试。",
     totalCases: "案例总数", passedCases: "已通过", needsExecutionCases: "待执行", failedCases: "未通过",
     acceptancePassed: "通过", acceptanceNeedsExecution: "待执行", acceptanceFailed: "未通过",
@@ -98,6 +100,11 @@ const I18N = {
     publicationRetryAdvice: "请刷新排程结果后重试。", publicationStatus: "发布状态", scheduleFingerprint: "计划指纹",
     allowedPublicationActions: "允许动作", publicationPackage: "发布包", packageId: "发布包编号", targetSystems: "目标系统",
     publishedBy: "发布人", publishedAt: "发布时间", solverStatus: "求解状态", publicationHistory: "发布历史",
+    outputGovernance: "输出治理", outputAvailability: "输出可用性", outputPackage: "输出包", outputPackageId: "输出包编号",
+    completenessStatus: "完整性状态", passedChecks: "通过检查", failedChecks: "未通过检查", releaseGovernance: "释放上下文",
+    recommendationCount: "释放建议数", unauthorizedCount: "未授权数", auditGovernance: "审计上下文", auditEventCount: "审计事件数",
+    scenarioSelectionCount: "方案选择数", workOrderCommandCount: "工单命令数", publicationActionCount: "发布动作数",
+    externalDelivery: "外部投递", notSent: "未发送", packageReady: "输出包可用", packageUnavailable: "输出包不可用",
     noPublicationHistory: "尚无发布历史。", supersedesRun: "替代计划", supersededByRun: "被替代方",
     reviewPlan: "提交复核", approvePlan: "批准计划", publishPlan: "发布计划", revokePublication: "撤销发布",
     publicationCommentPrompt: "请输入计划治理备注。", publicationActionCompleted: "计划发布状态已更新。",
@@ -121,6 +128,13 @@ const I18N = {
     authorizeRelease: "授权释放", viewDispatch: "查看调度包", viewReason: "查看原因", noBlockReason: "当前没有阻塞原因。",
     snapshotStatus: "快照状态", freshSnapshot: "运行状态快照新鲜", staleSnapshot: "运行状态快照已过期，禁止授权释放",
     futureSnapshot: "运行状态快照时间异常，禁止授权释放", clear: "通过", early: "未到时间", notReleased: "未释放",
+    releasePolicyVersion: "释放策略版本", policyEvidence: "策略证据", reasonDetails: "触发参数", stabilityDecision: "稳定性判断",
+    ropeBufferMinutes: "策略绳长分钟", materialCheckWindowMinutes: "物料检查窗口分钟", materialLookaheadMinutes: "物料检查窗口分钟",
+    maxWipCount: "策略 WIP 上限", policyMaxWipCount: "策略 WIP 上限", snapshotMaxWipCount: "快照 WIP 上限",
+    effectiveMaxWipCount: "实际采用 WIP 上限", actualWipCount: "当前 WIP", projectedWipCount: "释放后 WIP",
+    minutesUntilRelease: "距离可释放分钟", toleranceMinutes: "稳定性容忍分钟", replanThresholdMinutes: "重排阈值分钟",
+    consecutiveBlockedThreshold: "连续阻塞阈值", replanCooldownMinutes: "重排冷却分钟", action: "动作",
+    deviationMinutes: "偏差分钟", absoluteDeviationMinutes: "绝对偏差分钟", reasonCodeLabel: "原因码", riskCount: "风险数",
     reason_ROPE_TIME_NOT_REACHED: "尚未到达绳长释放时间。", reason_MATERIAL_SHORTAGE: "可用物料不足。",
     reason_MATERIAL_INBOUND_PENDING: "物料仍在途中。", reason_WIP_LIMIT_EXCEEDED: "释放后将超过 WIP 上限。",
     reason_OPERATIONAL_SNAPSHOT_STALE: "运行状态快照已过期。", reason_OPERATIONAL_SNAPSHOT_FUTURE: "运行状态快照时间晚于评估时间。",
@@ -158,7 +172,7 @@ const I18N = {
     overrideId: "覆盖编号", calendarId: "日历编号", overrideType: "覆盖类型", effectiveStart: "生效开始", effectiveEnd: "生效结束",
     capacityDelta: "产能增减分钟", shiftName: "班次名称", reason: "原因", createOverride: "创建覆盖", calendarOverride: "日历覆盖",
     noCalendarOverrides: "尚无临时日历覆盖。", calendarOverrideCreated: "日历覆盖已创建。", calendarOverrideFailed: "日历覆盖创建失败。",
-    calendarOverrideBoundary: "当前仅支持临时覆盖台账；基础日历、班次模板和覆盖直接驱动 CP-SAT 仍待后续规则确认。",
+    calendarOverrideBoundary: "Active 临时覆盖会驱动新建 Planning Run；基础日历、班次模板、冲突规则和审批流仍待后续规则确认。",
     RateInterpretation: "速率解释方式", Units: "单位", SchedulingWindow: "排程窗口",
     BufferBoundaries: "缓冲区边界比例", PiecesPerHour: "件/小时", HoursPerPiece: "小时/件", MinutesPerPiece: "分钟/件",
     BufferMinutes: "缓冲分钟", SetupMinutes: "换型分钟", DurationMinutes: "持续分钟", FixedOffsetMinutes: "固定偏移分钟",
@@ -212,6 +226,8 @@ const I18N = {
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "The latest operational snapshot is stale.", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "The latest operational snapshot is dated after the evaluation time.",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "The operational snapshot has no source system.", issue_RESOURCE_STATUS_NOT_CAPTURED: "The current snapshot does not include resource runtime status.",
     caseAcceptanceSummary: "Test case acceptance summary", testSystemCases: "Test system cases", caseAcceptanceTitle: "Case Acceptance Overview",
+    caseGroup: "Case group", caseType: "Case type", expectedAssertions: "Expected assertions", passedAssertions: "Passed assertions", failureReasons: "Difference reasons",
+    CPSATBusinessCases: "CP-SAT business cases", BusinessClosure: "Business closure cases",
     caseAcceptanceLoadFailed: "Case acceptance summary could not be loaded", caseAcceptanceRetryAdvice: "Check that the test service and test database are available.",
     totalCases: "Total cases", passedCases: "Passed", needsExecutionCases: "Needs execution", failedCases: "Failed",
     acceptancePassed: "Passed", acceptanceNeedsExecution: "Needs execution", acceptanceFailed: "Failed",
@@ -263,6 +279,11 @@ const I18N = {
     publicationRetryAdvice: "Refresh the schedule result and retry.", publicationStatus: "Publication status", scheduleFingerprint: "Schedule fingerprint",
     allowedPublicationActions: "Allowed actions", publicationPackage: "Publication package", packageId: "Package ID", targetSystems: "Target systems",
     publishedBy: "Published by", publishedAt: "Published at", solverStatus: "Solver status", publicationHistory: "Publication history",
+    outputGovernance: "Output governance", outputAvailability: "Output availability", outputPackage: "Output package", outputPackageId: "Output package ID",
+    completenessStatus: "Completeness status", passedChecks: "Passed checks", failedChecks: "Failed checks", releaseGovernance: "Release context",
+    recommendationCount: "Release recommendations", unauthorizedCount: "Unauthorized", auditGovernance: "Audit context", auditEventCount: "Audit events",
+    scenarioSelectionCount: "Scenario selections", workOrderCommandCount: "Work-order commands", publicationActionCount: "Publication actions",
+    externalDelivery: "External delivery", notSent: "Not sent", packageReady: "Output package available", packageUnavailable: "Output package unavailable",
     noPublicationHistory: "No publication history yet.", supersedesRun: "Supersedes run", supersededByRun: "Superseded by",
     reviewPlan: "Submit for review", approvePlan: "Approve plan", publishPlan: "Publish plan", revokePublication: "Revoke publication",
     publicationCommentPrompt: "Enter a plan-governance comment.", publicationActionCompleted: "Plan publication status updated.",
@@ -286,6 +307,13 @@ const I18N = {
     authorizeRelease: "Authorize release", viewDispatch: "View dispatch", viewReason: "View reason", noBlockReason: "No blocking reasons.",
     snapshotStatus: "Snapshot status", freshSnapshot: "Operational snapshot is fresh", staleSnapshot: "Operational snapshot is stale; authorization is blocked",
     futureSnapshot: "Operational snapshot is from the future; authorization is blocked", clear: "Clear", early: "Early", notReleased: "Not released",
+    releasePolicyVersion: "Release policy version", policyEvidence: "Policy evidence", reasonDetails: "Trigger parameters", stabilityDecision: "Stability decision",
+    ropeBufferMinutes: "Policy rope minutes", materialCheckWindowMinutes: "Material check window minutes", materialLookaheadMinutes: "Material check window minutes",
+    maxWipCount: "Policy WIP limit", policyMaxWipCount: "Policy WIP limit", snapshotMaxWipCount: "Snapshot WIP limit",
+    effectiveMaxWipCount: "Effective WIP limit", actualWipCount: "Current WIP", projectedWipCount: "Projected WIP",
+    minutesUntilRelease: "Minutes until release", toleranceMinutes: "Stability tolerance minutes", replanThresholdMinutes: "Replan threshold minutes",
+    consecutiveBlockedThreshold: "Consecutive block threshold", replanCooldownMinutes: "Replan cooldown minutes", action: "Action",
+    deviationMinutes: "Deviation minutes", absoluteDeviationMinutes: "Absolute deviation minutes", reasonCodeLabel: "Reason code", riskCount: "Risk count",
     reason_ROPE_TIME_NOT_REACHED: "Rope release time has not been reached.", reason_MATERIAL_SHORTAGE: "Available material is insufficient.",
     reason_MATERIAL_INBOUND_PENDING: "Required material is still inbound.", reason_WIP_LIMIT_EXCEEDED: "Release would exceed the WIP limit.",
     reason_OPERATIONAL_SNAPSHOT_STALE: "The operational snapshot is stale.", reason_OPERATIONAL_SNAPSHOT_FUTURE: "The operational snapshot is later than the evaluation time.",
@@ -323,7 +351,7 @@ const I18N = {
     overrideId: "Override ID", calendarId: "Calendar ID", overrideType: "Override type", effectiveStart: "Effective start", effectiveEnd: "Effective end",
     capacityDelta: "Capacity delta minutes", shiftName: "Shift name", reason: "Reason", createOverride: "Create override", calendarOverride: "Calendar override",
     noCalendarOverrides: "No temporary calendar overrides.", calendarOverrideCreated: "Calendar override created.", calendarOverrideFailed: "Calendar override creation failed.",
-    calendarOverrideBoundary: "Only the temporary override ledger is configurable now; base calendars, shift templates, and direct CP-SAT driving remain pending business rules.",
+    calendarOverrideBoundary: "Active temporary overrides drive new Planning Runs; base calendars, shift templates, conflict rules, and approval flow remain pending business rules.",
     RateInterpretation: "Rate interpretation", Units: "Units", SchedulingWindow: "Scheduling window",
     BufferBoundaries: "Buffer boundary ratios", PiecesPerHour: "Pieces/hour", HoursPerPiece: "Hours/piece", MinutesPerPiece: "Minutes/piece",
     BufferMinutes: "Buffer minutes", SetupMinutes: "Setup minutes", DurationMinutes: "Duration minutes", FixedOffsetMinutes: "Fixed offset minutes",
@@ -354,6 +382,8 @@ let scheduleResultData = null;
 let scheduleResultRuns = [];
 let selectedScheduleRunID = null;
 let planPublicationData = null;
+let scheduleOutputGovernanceData = null;
+let scheduleOutputPackageData = null;
 let activeScheduleTab = "gantt";
 let scheduledOrdersData = null;
 let scheduledOrdersPage = 1;
@@ -362,6 +392,7 @@ let selectedScheduledOrderIDs = new Set();
 let visibleScheduledOrderColumns = new Set(["OrderID", "ProductID", "PlannedReleaseAt", "PromiseDate", "OnTimeStatus", "ReleaseStatus", "ExecutionPriority", "RoutingID", "ResourceIDs"]);
 let releaseManagementData = null;
 let selectedReleaseRunID = null;
+let releaseManagementUsesLatestOperationalState = false;
 let bufferBoardData = null;
 let selectedBufferRunID = null;
 let selectedBufferOrder = null;
@@ -577,13 +608,21 @@ function renderCaseAcceptance() {
     const releaseSummary = release.Summary || {};
     const meta = document.createElement("div");
     meta.className = "case-card-meta";
+    const passedAssertions = (actual.ScheduleAssertions || [])
+      .filter((item) => item.Passed)
+      .map((item) => item.AssertionID);
     [
+      ["caseGroup", translate(caseItem.CaseGroup) || displayValue(caseItem.CaseGroup)],
+      ["caseType", caseItem.CaseType],
       ["planningRun", caseItem.PlanningRunID],
       ["status", statusLabel(actual.PlanningRunStatus)],
       ["solver", `${displayValue(actual.SolverBackendID)} / ${displayValue(actual.SolverStatus)}`],
       ["publicationStatus", publicationStatusLabel(actual.PublicationStatus)],
       ["releaseReadyCount", releaseSummary.ReadyCount ?? "-"],
-      ["blockingCodes", (release.BlockingCodes || []).join(", ") || translate("clear")]
+      ["blockingCodes", (release.BlockingCodes || []).join(", ") || translate("clear")],
+      ["expectedAssertions", (caseItem.ExpectedScheduleAssertions || []).join(", ") || translate("notAvailable")],
+      ["passedAssertions", passedAssertions.join(", ") || translate("notAvailable")],
+      ["failureReasons", (caseItem.FailureReasons || []).join(", ") || translate("clear")]
     ].forEach(([labelKey, value]) => {
       const item = document.createElement("div");
       const label = document.createElement("span");
@@ -1006,6 +1045,27 @@ function detailSection(titleKey, rows) {
   return section;
 }
 
+function detailRowsFromObject(source) {
+  return Object.entries(source || {})
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => [lowerFirst(key), detailDisplayValue(value)]);
+}
+
+function detailDisplayValue(value) {
+  if (Array.isArray(value)) return `${value.length} · ${translate("riskCount")}`;
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value)
+      .filter(([, nested]) => nested !== undefined && nested !== null && nested !== "")
+      .map(([key, nested]) => `${translate(lowerFirst(key))}: ${detailDisplayValue(nested)}`)
+      .join(" · ");
+  }
+  return value;
+}
+
+function lowerFirst(value) {
+  return String(value).replace(/^[A-Z]/, (letter) => letter.toLowerCase());
+}
+
 function listSection(titleKey, items, formatter) {
   const section = document.createElement("section");
   section.className = "detail-section";
@@ -1142,6 +1202,7 @@ async function loadScheduleResult(runId) {
     renderScheduleResult();
     await loadScheduledOrders(runId);
     await loadPlanPublication(runId);
+    await loadScheduleOutputGovernance(runId);
     document.getElementById("schedule-result-error").hidden = true;
     document.getElementById("schedule-result-content").hidden = false;
   } catch (_error) {
@@ -1407,6 +1468,24 @@ async function loadPlanPublication(runId) {
   }
 }
 
+async function loadScheduleOutputGovernance(runId) {
+  scheduleOutputGovernanceData = null;
+  scheduleOutputPackageData = null;
+  try {
+    const governanceResponse = await fetch(`/planner/workbench/schedule-results/runs/${encodeURIComponent(runId)}/governance`, { headers: { Accept: "application/json" } });
+    if (!governanceResponse.ok) throw new Error(String(governanceResponse.status));
+    scheduleOutputGovernanceData = (await governanceResponse.json()).Data;
+    const packageResponse = await fetch(`/planner/workbench/schedule-results/runs/${encodeURIComponent(runId)}/output-package`, { headers: { Accept: "application/json" } });
+    if (packageResponse.ok) {
+      scheduleOutputPackageData = (await packageResponse.json()).Data;
+    }
+  } catch (_error) {
+    scheduleOutputGovernanceData = null;
+    scheduleOutputPackageData = null;
+  }
+  renderScheduleOutputGovernance();
+}
+
 function publicationStatusLabel(status) {
   return translate({
     Draft: "statusDraft", Reviewed: "statusReviewed", Approved: "statusApproved",
@@ -1444,6 +1523,7 @@ function renderPlanPublication() {
   actions.replaceChildren();
   packageElement.replaceChildren();
   historyElement.replaceChildren();
+  renderScheduleOutputGovernance();
   if (!planPublicationData) {
     setStatusChip(statusChip, publicationStatusLabel("Unavailable"), "is-unavailable");
     return;
@@ -1499,6 +1579,50 @@ function renderPlanPublication() {
     historyElement.append(listSection("publicationHistory", history, (item) => `${publicationActionLabel(item.Action)} · ${publicationStatusLabel(item.FromStatus)} → ${publicationStatusLabel(item.ToStatus)} · ${displayValue(item.ActorID)} · ${formatDate(item.OccurredAt)}${item.Comment ? ` · ${item.Comment}` : ""}`));
   } else {
     historyElement.append(detailSection("publicationHistory", [["publicationHistory", translate("noPublicationHistory")]]));
+  }
+}
+
+function renderScheduleOutputGovernance() {
+  const container = document.getElementById("output-governance-summary");
+  if (!container) return;
+  container.replaceChildren();
+  if (!scheduleOutputGovernanceData) return;
+  const completeness = scheduleOutputGovernanceData.Completeness || {};
+  const checks = completeness.Checks || [];
+  const passedCount = checks.filter((item) => item.Passed).length;
+  const failedCodes = completeness.FailureCodes || [];
+  const release = scheduleOutputGovernanceData.Release || {};
+  const audit = scheduleOutputGovernanceData.Audit || {};
+  const frozen = scheduleOutputGovernanceData.FrozenInputs || {};
+  const packageId = scheduleOutputPackageData?.PackageID || scheduleOutputGovernanceData.OutputPackageID;
+  container.append(detailSection("outputGovernance", [
+    ["outputAvailability", translate(scheduleOutputGovernanceData.OutputAvailability === "Available" ? "packageReady" : "packageUnavailable")],
+    ["outputPackageId", displayValue(packageId)],
+    ["scheduleFingerprint", scheduleOutputGovernanceData.ScheduleFingerprint ? `${scheduleOutputGovernanceData.ScheduleFingerprint.slice(0, 16)}...` : "-"],
+    ["masterDataVersionLabel", displayValue(frozen.MasterDataVersionID)],
+    ["snapshotLabel", displayValue(frozen.OperationalStateSnapshotID)],
+    ["releasePolicyVersion", displayValue(frozen.ReleasePolicyVersionID)]
+  ]));
+  container.append(detailSection("completenessStatus", [
+    ["passedChecks", `${passedCount} / ${checks.length}`],
+    ["failedChecks", failedCodes.length ? failedCodes.join(", ") : translate("noIssues")]
+  ]));
+  container.append(detailSection("releaseGovernance", [
+    ["recommendationCount", displayValue(release.RecommendationCount)],
+    ["authorized", displayValue(release.AuthorizedCount)],
+    ["unauthorizedCount", displayValue(release.UnauthorizedCount)]
+  ]));
+  container.append(detailSection("auditGovernance", [
+    ["auditEventCount", displayValue(audit.AuditEventCount)],
+    ["scenarioSelectionCount", displayValue(audit.ScenarioSelectionCount)],
+    ["workOrderCommandCount", displayValue(audit.WorkOrderCommandCount)],
+    ["publicationActionCount", displayValue(audit.PublicationActionCount)]
+  ]));
+  if (scheduleOutputPackageData) {
+    container.append(detailSection("externalDelivery", [
+      ["externalDelivery", translate("notSent")],
+      ["reason", displayValue(scheduleOutputPackageData.ExternalDelivery?.Reason)]
+    ]));
   }
 }
 
@@ -1867,7 +1991,11 @@ async function loadReleaseManagement() {
   if (!runId || !evaluatedValue) return;
   selectedReleaseRunID = runId;
   try {
-    const query = new URLSearchParams({ evaluated_at: new Date(evaluatedValue).toISOString(), operational_state_max_age_minutes: "60" });
+    const query = new URLSearchParams({
+      evaluated_at: new Date(evaluatedValue).toISOString(),
+      operational_state_max_age_minutes: "60"
+    });
+    if (releaseManagementUsesLatestOperationalState) query.set("use_latest_operational_state", "true");
     const response = await fetch(`/planner/workbench/release-management/runs/${encodeURIComponent(runId)}/workbench?${query}`);
     if (!response.ok) throw new Error(String(response.status));
     releaseManagementData = (await response.json()).Data;
@@ -1880,6 +2008,11 @@ async function loadReleaseManagement() {
   }
 }
 
+function reevaluateReleaseManagementWithLatestState() {
+  releaseManagementUsesLatestOperationalState = true;
+  return loadReleaseManagement();
+}
+
 function gateStatusLabel(value) {
   return translate({ Clear: "clear", Ready: "clear", Early: "early", Blocked: "blocked", PendingInbound: "inbound" }[value] || value);
 }
@@ -1887,7 +2020,8 @@ function gateStatusLabel(value) {
 function renderReleaseManagement() {
   document.querySelectorAll("[data-release-summary]").forEach((element) => { element.textContent = releaseManagementData.Summary[element.dataset.releaseSummary] ?? 0; });
   const snapshot = document.getElementById("release-snapshot-status");
-  snapshot.textContent = `${translate("snapshotStatus")}: ${translate({ Fresh: "freshSnapshot", Stale: "staleSnapshot", Future: "futureSnapshot" }[releaseManagementData.OperationalStateStatus])} · ${releaseManagementData.OperationalStateSnapshotID} · ${formatDate(releaseManagementData.OperationalStateCapturedAt)}`;
+  const policyVersion = releaseManagementData.ReleasePolicyVersionID || releaseManagementData.PolicyEvidence?.VersionID || "-";
+  snapshot.textContent = `${translate("snapshotStatus")}: ${translate({ Fresh: "freshSnapshot", Stale: "staleSnapshot", Future: "futureSnapshot" }[releaseManagementData.OperationalStateStatus])} · ${releaseManagementData.OperationalStateSnapshotID} · ${formatDate(releaseManagementData.OperationalStateCapturedAt)} · ${translate("releasePolicyVersion")}: ${policyVersion}`;
   const body = document.getElementById("release-candidate-table-body");
   body.replaceChildren();
   releaseManagementData.Candidates.forEach((candidate) => {
@@ -1938,6 +2072,25 @@ function renderReleaseManagement() {
 function openReleaseReasons(candidate) {
   const content = document.getElementById("release-reason-content");
   content.replaceChildren();
+  const evidence = candidate.PolicyEvidence || releaseManagementData.PolicyEvidence || {};
+  content.append(detailSection("policyEvidence", detailRowsFromObject({
+    releasePolicyVersion: evidence.VersionID,
+    ropeBufferMinutes: evidence.RopeBufferMinutes,
+    materialCheckWindowMinutes: evidence.MaterialCheckWindowMinutes ?? evidence.MaterialLookaheadMinutes,
+    maxWipCount: evidence.MaxWipCount,
+    toleranceMinutes: evidence.StabilityPolicy?.ToleranceMinutes,
+    replanThresholdMinutes: evidence.StabilityPolicy?.ReplanThresholdMinutes,
+    consecutiveBlockedThreshold: evidence.StabilityPolicy?.ConsecutiveBlockedThreshold,
+    replanCooldownMinutes: evidence.StabilityPolicy?.ReplanCooldownMinutes
+  })));
+  if (candidate.Stability) {
+    content.append(detailSection("stabilityDecision", detailRowsFromObject({
+      action: candidate.Stability.Action,
+      deviationMinutes: candidate.Stability.DeviationMinutes,
+      absoluteDeviationMinutes: candidate.Stability.AbsoluteDeviationMinutes,
+      reasonCodeLabel: candidate.Stability.ReasonCode
+    })));
+  }
   if (!candidate.BlockingReasons.length) {
     const empty = document.createElement("div");
     empty.className = "table-empty";
@@ -1953,6 +2106,8 @@ function openReleaseReasons(candidate) {
       code.className = "issue-meta";
       code.textContent = reason.Code;
       item.append(title, code);
+      const details = detailSection("reasonDetails", detailRowsFromObject(reason.Details || {}));
+      item.append(details);
       content.append(item);
     });
   }
@@ -1963,7 +2118,13 @@ async function authorizeReleaseCandidate(candidate) {
   if (!candidate.CanAuthorize || !(await confirmAction({ message: translate("authorizeImpact"), context: `${translate("workOrder")}: ${candidate.OrderID}` }))) return;
   const response = await fetch(`/planner/workbench/release-management/runs/${encodeURIComponent(selectedReleaseRunID)}/orders/${encodeURIComponent(candidate.OrderID)}/authorize`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ReleasedBy: "planner", ReleasedAt: new Date(document.getElementById("release-evaluated-at").value).toISOString(), OperationalStateMaxAgeMinutes: 60 })
+    body: JSON.stringify({
+      ReleasedBy: "planner",
+      ReleasedAt: new Date(document.getElementById("release-evaluated-at").value).toISOString(),
+      OperationalStateMaxAgeMinutes: 60,
+      UseLatestOperationalState: releaseManagementUsesLatestOperationalState,
+      OperationalStateSnapshotID: releaseManagementData?.OperationalStateSnapshotID
+    })
   });
   if (response.ok) {
     setText("route-status", translate("releaseAuthorized"));
@@ -1985,7 +2146,7 @@ async function openDispatchPackage(authorizationId) {
   content.append(detailSection("dispatchPackage", [
     ["workOrder", packageData.OrderID], ["releaseStatus", packageData.DispatchStatus],
     ["plannedStart", formatDate(packageData.ScheduledStart)], ["plannedCompletion", formatDate(packageData.ScheduledEnd)],
-    ["snapshotLabel", packageData.OperationalStateSnapshotID]
+    ["snapshotLabel", packageData.OperationalStateSnapshotID], ["releasePolicyVersion", packageData.ReleasePolicyVersionID]
   ]));
   openSideDrawer("dispatch-package-detail");
 }
@@ -2625,8 +2786,11 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("close-scheduled-order-detail").addEventListener("click", () => closeSideDrawer("scheduled-order-detail"));
   document.getElementById("close-release-reason-detail").addEventListener("click", () => closeSideDrawer("release-reason-detail"));
   document.getElementById("close-dispatch-package-detail").addEventListener("click", () => closeSideDrawer("dispatch-package-detail"));
-  document.getElementById("release-run-select").addEventListener("change", loadReleaseManagement);
-  document.getElementById("refresh-release-management").addEventListener("click", loadReleaseManagement);
+  document.getElementById("release-run-select").addEventListener("change", () => {
+    releaseManagementUsesLatestOperationalState = false;
+    loadReleaseManagement();
+  });
+  document.getElementById("refresh-release-management").addEventListener("click", reevaluateReleaseManagementWithLatestState);
   document.getElementById("buffer-run-select").addEventListener("change", loadBufferBoard);
   document.getElementById("refresh-buffer-board").addEventListener("click", loadBufferBoard);
   document.getElementById("close-buffer-order-detail").addEventListener("click", () => closeSideDrawer("buffer-order-detail"));

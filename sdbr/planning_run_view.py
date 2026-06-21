@@ -97,6 +97,15 @@ def build_planning_run_detail(
         "SourceRunID": planning_run.get("SourceRunID"),
         "ReleasePolicyVersionID": planning_run.get("ReleasePolicyVersionID"),
         "FrozenReleasePolicy": planning_run.get("FrozenReleasePolicy"),
+        "FrozenCalendarOverrides": list(
+            planning_run.get("FrozenCalendarOverrides", [])
+        ),
+        "FrozenCalendarOverrideSummary": {
+            "FrozenOverrideCount": len(
+                planning_run.get("FrozenCalendarOverrides", [])
+            ),
+            "AppliedOverrideCount": _applied_calendar_override_count(planning_run),
+        },
         "TimeBufferMinutes": planning_run.get("TimeBufferMinutes"),
         "FreezeWindowMinutes": planning_run.get("FreezeWindowMinutes", 0),
         "ObjectiveStrategyID": planning_run.get("ObjectiveStrategyID", "balanced"),
@@ -174,6 +183,18 @@ def _diagnostics(planning_run: dict[str, object]) -> list[dict[str, object]]:
             "EntityID": planning_run.get("RunID"),
         }
     ]
+
+
+def _applied_calendar_override_count(planning_run: dict[str, object]) -> int:
+    summary = planning_run.get("CalendarOverrideSummary")
+    if isinstance(summary, dict):
+        return int(summary.get("AppliedOverrideCount", 0))
+    schedule = planning_run.get("Schedule")
+    if isinstance(schedule, dict):
+        schedule_summary = schedule.get("CalendarOverrideSummary")
+        if isinstance(schedule_summary, dict):
+            return int(schedule_summary.get("AppliedOverrideCount", 0))
+    return 0
 
 
 def _parse_datetime(value: object) -> datetime | None:

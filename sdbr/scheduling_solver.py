@@ -824,6 +824,7 @@ def build_capacity_buckets_from_resources(
             if tzinfo is None:
                 raise ValueError("tzinfo is required when resource calendars are used")
             buckets.extend(_calendar_capacity_buckets_for_resource(resource, tzinfo))
+            buckets.extend(_extra_capacity_buckets_for_resource(resource))
             continue
         for bucket_date, capacity_minutes in sorted(resource.daily_capacity_minutes.items()):
             bucket_start = datetime.combine(bucket_date, time.min, tzinfo=tzinfo)
@@ -836,6 +837,7 @@ def build_capacity_buckets_from_resources(
                     capacity_minutes=capacity_minutes,
                 )
             )
+        buckets.extend(_extra_capacity_buckets_for_resource(resource))
     return buckets
 
 
@@ -871,6 +873,22 @@ def _calendar_capacity_buckets_for_resource(
                     )
                 )
     return sorted(buckets, key=lambda item: (item.bucket_start, item.bucket_end, item.resource_id))
+
+
+def _extra_capacity_buckets_for_resource(resource: Resource) -> list[CapacityBucket]:
+    return [
+        CapacityBucket(
+            resource_id=resource.resource_id,
+            bucket_start=window.start,
+            bucket_end=window.end,
+            capacity_minutes=window.capacity_minutes,
+        )
+        for window in sorted(
+            resource.extra_capacity_windows,
+            key=lambda item: (item.start, item.end, item.source_id or ""),
+        )
+        if window.capacity_minutes > 0 and window.start < window.end
+    ]
 
 
 def _subtract_maintenance_windows(

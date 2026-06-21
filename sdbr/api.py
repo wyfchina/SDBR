@@ -22,6 +22,10 @@ from sdbr.calendar_import import (
     attach_work_calendars_to_resources,
     import_work_calendars_from_rows,
 )
+from sdbr.calendar_overrides import (
+    apply_calendar_overrides,
+    calendar_override_driver_status,
+)
 from sdbr.data_readiness import build_data_readiness
 from sdbr.buffer_execution_view import (
     build_buffer_execution_workbench,
@@ -76,6 +80,13 @@ from sdbr.schedule_result_view import (
     build_schedule_result_workbench,
     compare_schedule_results,
 )
+from sdbr.schedule_output_governance import (
+    audit_context_for_order,
+    build_schedule_output_governance,
+    build_schedule_output_package,
+    output_context_for_order,
+    release_context_for_order,
+)
 from sdbr.work_order_release_view import (
     build_release_management_workbench,
     build_scheduled_work_order_detail,
@@ -105,6 +116,7 @@ from sdbr.release_candidates import (
     WipLimit,
     release_candidate_rows_from_schedule,
 )
+from sdbr.release_policy import release_policy_evidence
 from sdbr.release_authorization import (
     ReleaseAuthorization,
     build_dispatch_package,
@@ -133,6 +145,7 @@ from sdbr.scheduling_solver import (
     FixedOperationAssignment,
     PAUSED_SOLVER_BACKEND_IDS,
     SchedulingObjective,
+    SolverDiagnostic,
     SetupTransition,
     SimioValidationAdapter,
     build_scheduling_problem,
@@ -396,7 +409,9 @@ class DbrReleasePolicyPayload(BaseModel):
     RedZoneRatio: float = Field(default=0.33, ge=0)
     MaxWipCount: int | None = Field(default=None, ge=0)
     MaterialLookaheadMinutes: int = Field(default=0, ge=0)
+    MaterialCheckWindowMinutes: int | None = Field(default=None, ge=0)
     StabilityToleranceMinutes: int = Field(default=30, ge=0)
+    StabilityReplanThresholdMinutes: int = Field(default=120, ge=0)
     ConsecutiveBlockedThreshold: int = Field(default=3, ge=1)
     ReplanCooldownMinutes: int = Field(default=60, ge=0)
     Status: Literal["Draft", "Active", "Retired"] = "Draft"
@@ -522,6 +537,8 @@ class PlanningRunReleaseAuthorizationPayload(BaseModel):
     ReleasedBy: str
     ReleasedAt: datetime
     OperationalStateMaxAgeMinutes: int = Field(default=60, gt=0)
+    UseLatestOperationalState: bool = False
+    OperationalStateSnapshotID: str | None = None
 
 
 class PlannerWorkbenchImportCalculatePayload(MasterDataImportPayload):
@@ -1272,7 +1289,11 @@ def create_app(
                 master_data_versions=master_data_versions.values(),
                 planning_runs=planning_runs.values(),
                 dbr_release_policies=dbr_release_policies.values(),
-                calendar_overrides=calendar_overrides.values(),
+                calendar_overrides=_calendar_overrides_with_driver_status(
+                    overrides=calendar_overrides.values(),
+                    master_data_versions=master_data_versions.values(),
+                    planning_runs=planning_runs.values(),
+                ),
                 scheduling_strategies=scheduling_strategy_versions.values(),
                 integration_contracts=integration_contracts_payload()["Contracts"],
                 integration_messages=integration_messages,
@@ -1336,7 +1357,11 @@ def create_app(
     @app.get("/planner/workbench/admin/calendar-overrides")
     def planner_workbench_calendar_override_list() -> dict[str, object]:
         overrides = sorted(
-            calendar_overrides.values(),
+            _calendar_overrides_with_driver_status(
+                overrides=calendar_overrides.values(),
+                master_data_versions=master_data_versions.values(),
+                planning_runs=planning_runs.values(),
+            ),
             key=lambda item: str(item.get("EffectiveStartAt", "")),
             reverse=True,
         )
@@ -1370,7 +1395,12 @@ def create_app(
                     },
                 },
             )
-        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Override": override}}
+        enriched = _calendar_overrides_with_driver_status(
+            overrides=[override],
+            master_data_versions=master_data_versions.values(),
+            planning_runs=planning_runs.values(),
+        )[0]
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Override": enriched}}
 
     @app.post("/planner/workbench/admin/scheduling-strategies")
     def planner_workbench_scheduling_strategy_create(
@@ -2074,6 +2104,9 @@ def create_app(
             operational_snapshot=operational_snapshot,
             release_policy=release_policy,
             scheduling_strategy=scheduling_strategy,
+            frozen_calendar_overrides=_active_calendar_overrides(
+                calendar_overrides.values()
+            ),
         )
         planning_runs[payload.RunID] = planning_run
         _append_planning_run_audit_event(
@@ -2337,6 +2370,16 @@ def create_app(
                 solver_time_limit_seconds=payload.TimeLimitSeconds,
                 scheduling_strategy_versions=scheduling_strategy_versions,
                 frozen_scheduling_strategy=planning_run.get("FrozenSchedulingStrategy"),
+                frozen_calendar_overrides=(
+                    planning_run.get("FrozenCalendarOverrides")
+                    if isinstance(planning_run.get("FrozenCalendarOverrides"), list)
+                    else []
+                ),
+                release_policy=(
+                    planning_run.get("FrozenReleasePolicy")
+                    if isinstance(planning_run.get("FrozenReleasePolicy"), dict)
+                    else None
+                ),
             )
             completed_run = {**planning_run, **completed_run}
         except Exception as error:
@@ -2789,6 +2832,83 @@ def create_app(
             ),
         }
 
+    @app.get(
+        "/planner/workbench/schedule-results/runs/{run_id}/governance"
+    )
+    def planner_workbench_schedule_output_governance(run_id: str):
+        endpoint = (
+            f"/planner/workbench/schedule-results/runs/{run_id}/governance"
+        )
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_schedule_output_governance(
+                planning_run=planning_run,
+                master_data_version=master_data_versions.get(
+                    str(planning_run.get("MasterDataVersionID"))
+                ),
+                operational_state_snapshot=operational_state_snapshots.get(
+                    str(planning_run.get("OperationalStateSnapshotID"))
+                ),
+                release_authorizations=release_authorizations,
+                audit_events=[
+                    event for event in audit_events if event["RunID"] == run_id
+                ],
+                superseded_by_run_id=_superseded_by_run_id(
+                    run_id=run_id,
+                    planning_runs=planning_runs,
+                ),
+            ),
+        }
+
+    @app.get(
+        "/planner/workbench/schedule-results/runs/{run_id}/output-package"
+    )
+    def planner_workbench_schedule_output_package(run_id: str):
+        endpoint = (
+            f"/planner/workbench/schedule-results/runs/{run_id}/output-package"
+        )
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        package = build_schedule_output_package(
+            planning_run=planning_run,
+            master_data_version=master_data_versions.get(
+                str(planning_run.get("MasterDataVersionID"))
+            ),
+            operational_state_snapshot=operational_state_snapshots.get(
+                str(planning_run.get("OperationalStateSnapshotID"))
+            ),
+            release_authorizations=release_authorizations,
+            audit_events=[
+                event for event in audit_events if event["RunID"] == run_id
+            ],
+            superseded_by_run_id=_superseded_by_run_id(
+                run_id=run_id,
+                planning_runs=planning_runs,
+            ),
+        )
+        if package.get("Status") == "OutputPackageUnavailable":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        **package,
+                        "Message": "Output package requires a completed, internally consistent schedule.",
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": package,
+        }
+
     @app.get("/planner/workbench/schedule-results/compare")
     def planner_workbench_schedule_result_compare(
         baseline_run_id: str,
@@ -2996,6 +3116,30 @@ def create_app(
                     },
                 },
             )
+        detail["OutputContext"] = output_context_for_order(
+            planning_run=planning_run,
+            superseded_by_run_id=_superseded_by_run_id(
+                run_id=run_id,
+                planning_runs=planning_runs,
+            ),
+        )
+        existing_release_context = detail.get("ReleaseContext")
+        detail["ReleaseContext"] = {
+            **(
+                existing_release_context
+                if isinstance(existing_release_context, dict)
+                else {}
+            ),
+            **release_context_for_order(
+                order_id=order_id,
+                planning_run=planning_run,
+                authorizations=release_authorizations,
+            ),
+        }
+        detail["AuditContext"] = audit_context_for_order(
+            order_id=order_id,
+            audit_events=run_audit,
+        )
         return {"Endpoint": endpoint, "StatusCode": 200, "Data": detail}
 
     @app.post(
@@ -3075,6 +3219,8 @@ def create_app(
         run_id: str,
         evaluated_at: datetime,
         operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = Query(default=False),
+        operational_state_snapshot_id: str | None = Query(default=None),
     ):
         endpoint = (
             f"/planner/workbench/release-management/runs/{run_id}/workbench"
@@ -3096,8 +3242,12 @@ def create_app(
                     },
                 },
             )
-        snapshot = operational_state_snapshots.get(
-            str(planning_run.get("OperationalStateSnapshotID"))
+        snapshot = _operational_state_snapshot_for_release_evaluation(
+            planning_run=planning_run,
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=evaluated_at,
+            use_latest_operational_state=use_latest_operational_state,
+            requested_snapshot_id=operational_state_snapshot_id,
         )
         if snapshot is None:
             return JSONResponse(
@@ -3141,6 +3291,7 @@ def create_app(
                 operational_state_status=freshness.status,
                 operational_state_captured_at=snapshot.captured_at,
                 authorizations=release_authorizations,
+                operational_state_snapshot_id=snapshot.snapshot_id,
                 release_policy=_release_policy_for_evaluation(
                     planning_run=planning_run,
                     requested_policy_id=None,
@@ -3166,8 +3317,12 @@ def create_app(
         planning_run = planning_runs.get(run_id)
         if planning_run is None:
             return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
-        snapshot = operational_state_snapshots.get(
-            str(planning_run.get("OperationalStateSnapshotID"))
+        snapshot = _operational_state_snapshot_for_release_evaluation(
+            planning_run=planning_run,
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=payload.ReleasedAt,
+            use_latest_operational_state=payload.UseLatestOperationalState,
+            requested_snapshot_id=payload.OperationalStateSnapshotID,
         )
         if snapshot is None:
             return JSONResponse(
@@ -3186,6 +3341,11 @@ def create_app(
         master_data = master_data_versions.get(
             str(planning_run.get("MasterDataVersionID")), {}
         )
+        release_policy = _release_policy_for_evaluation(
+            planning_run=planning_run,
+            requested_policy_id=None,
+            dbr_release_policies=dbr_release_policies,
+        )
         workbench = build_release_management_workbench(
             planning_run=planning_run,
             evaluated_at=payload.ReleasedAt,
@@ -3202,11 +3362,8 @@ def create_app(
             operational_state_status=freshness.status,
             operational_state_captured_at=snapshot.captured_at,
             authorizations=release_authorizations,
-            release_policy=_release_policy_for_evaluation(
-                planning_run=planning_run,
-                requested_policy_id=None,
-                dbr_release_policies=dbr_release_policies,
-            ),
+            operational_state_snapshot_id=snapshot.snapshot_id,
+            release_policy=release_policy,
         )
         candidate = next(
             (
@@ -3246,6 +3403,10 @@ def create_app(
             released_at=payload.ReleasedAt,
             operational_state_snapshot_id=snapshot.snapshot_id,
             operational_state_captured_at=snapshot.captured_at,
+            release_policy_version_id=(
+                str(release_policy.get("VersionID")) if release_policy else None
+            ),
+            release_policy_evidence=release_policy_evidence(release_policy),
         )
         release_authorizations.append(authorization)
         _append_planning_run_audit_event(
@@ -3258,6 +3419,9 @@ def create_app(
                 "OrderIDs": [order_id],
                 "AuthorizationID": authorization.authorization_id,
                 "OperationalStateSnapshotID": snapshot.snapshot_id,
+                "ReleasePolicyVersionID": (
+                    str(release_policy.get("VersionID")) if release_policy else None
+                ),
             },
         )
         return {
@@ -4363,6 +4527,11 @@ def create_app(
                     ),
                     wip_limits=wip_limits,
                     material_availability=material_availability,
+                    release_policy=(
+                        dbr_release_policies.get(payload.ReleasePolicyVersionID)
+                        if payload.ReleasePolicyVersionID is not None
+                        else None
+                    ),
                 ),
             },
         }
@@ -4474,6 +4643,11 @@ def create_app(
                 ),
                 wip_limits=wip_limits,
                 material_availability=material_availability,
+                release_policy=(
+                    dbr_release_policies.get(payload.ReleasePolicyVersionID)
+                    if payload.ReleasePolicyVersionID is not None
+                    else None
+                ),
             )
             freshness_evaluated_at = payload.EvaluatedAt
         if operational_state_snapshot is not None:
@@ -4520,6 +4694,11 @@ def create_app(
                     },
                 },
             )
+        release_policy = (
+            dbr_release_policies.get(payload.ReleasePolicyVersionID)
+            if payload.ReleasePolicyVersionID is not None
+            else None
+        )
         try:
             authorization = create_release_authorization(
                 request_id=request_id,
@@ -4537,6 +4716,10 @@ def create_app(
                     else None
                 ),
                 decision_package_id=payload.DecisionPackageID,
+                release_policy_version_id=(
+                    str(release_policy.get("VersionID")) if release_policy else None
+                ),
+                release_policy_evidence=release_policy_evidence(release_policy),
             )
         except ValueError as error:
             return JSONResponse(
@@ -5940,12 +6123,31 @@ def _release_authorization_to_dict(
         )
     if authorization.decision_package_id is not None:
         result["DecisionPackageID"] = authorization.decision_package_id
+    if authorization.release_policy_version_id is not None:
+        result["ReleasePolicyVersionID"] = authorization.release_policy_version_id
+    if authorization.release_policy_evidence is not None:
+        result["ReleasePolicyEvidence"] = authorization.release_policy_evidence
     return result
 
 
 def _dict_schedule(planning_run: dict[str, object]) -> dict[str, object]:
     schedule = planning_run.get("Schedule")
     return schedule if isinstance(schedule, dict) else {}
+
+
+def _superseded_by_run_id(
+    *,
+    run_id: str,
+    planning_runs: dict[str, dict[str, object]],
+) -> str | None:
+    return next(
+        (
+            str(other.get("RunID"))
+            for other in planning_runs.values()
+            if other.get("SupersedesRunID") == run_id
+        ),
+        None,
+    )
 
 
 def _release_authorization_evidence_to_dict(
@@ -5955,6 +6157,8 @@ def _release_authorization_evidence_to_dict(
         "DecisionPackageID": authorization.decision_package_id,
         "OperationalStateSnapshotID": authorization.operational_state_snapshot_id,
         "OperationalStateCapturedAt": authorization.operational_state_captured_at,
+        "ReleasePolicyVersionID": authorization.release_policy_version_id,
+        "ReleasePolicyEvidence": authorization.release_policy_evidence,
     }
 
 
@@ -6399,6 +6603,7 @@ def _pending_planning_run(
     operational_snapshot: OperationalStateSnapshot,
     release_policy: dict[str, object] | None = None,
     scheduling_strategy: dict[str, object] | None = None,
+    frozen_calendar_overrides: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "RunID": payload.RunID,
@@ -6411,6 +6616,9 @@ def _pending_planning_run(
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
         "FrozenReleasePolicy": dict(release_policy) if release_policy else None,
+        "FrozenCalendarOverrides": [
+            dict(item) for item in (frozen_calendar_overrides or [])
+        ],
         "ScheduleStartAt": payload.ScheduleStartAt.isoformat(),
         "TimeBufferMinutes": payload.TimeBufferMinutes,
         "FreezeWindowMinutes": payload.FreezeWindowMinutes,
@@ -6478,6 +6686,8 @@ def _execute_planning_run(
     solver_time_limit_seconds: float | None = None,
     scheduling_strategy_versions: dict[str, dict[str, object]] | None = None,
     frozen_scheduling_strategy: object | None = None,
+    frozen_calendar_overrides: list[dict[str, object]] | None = None,
+    release_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     objective = _objective_for_strategy_id(
         strategy_id=payload.ObjectiveStrategyID,
@@ -6495,6 +6705,11 @@ def _execute_planning_run(
     resources = _resources_from_payload(
         [ResourcePayload(**item) for item in master_data_version["Resources"]]
     )
+    calendar_application = apply_calendar_overrides(
+        resources=resources,
+        overrides=frozen_calendar_overrides or [],
+    )
+    resources = calendar_application.resources
     routings = _routings_from_payload(
         [RoutingPayload(**item) for item in master_data_version["Routings"]]
     )
@@ -6540,7 +6755,16 @@ def _execute_planning_run(
         setup_transitions=_setup_transitions_from_payload(payload.SetupTransitions),
         objective=objective,
         align_release_to_schedule=True,
+        release_policy=release_policy,
     )
+    schedule.setdefault("SolverDiagnostics", []).extend(
+        _solver_diagnostics_to_payload_dict(calendar_application.diagnostics)
+    )
+    schedule["CalendarOverrideSummary"] = {
+        "FrozenOverrideCount": len(frozen_calendar_overrides or []),
+        "AppliedOverrideCount": len(calendar_application.applied_overrides),
+        "AppliedOverrides": calendar_application.applied_overrides,
+    }
     schedule["ProblemID"] = payload.ProblemID
     solver_status = str(schedule["SolverStatus"])
     return {
@@ -6557,6 +6781,10 @@ def _execute_planning_run(
         "OperationalStateCapturedAt": operational_snapshot.captured_at.isoformat(),
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
+        "FrozenCalendarOverrides": [
+            dict(item) for item in (frozen_calendar_overrides or [])
+        ],
+        "CalendarOverrideSummary": schedule["CalendarOverrideSummary"],
         "ScheduleStartAt": payload.ScheduleStartAt.isoformat(),
         "TimeBufferMinutes": payload.TimeBufferMinutes,
         "FreezeWindowMinutes": payload.FreezeWindowMinutes,
@@ -6865,6 +7093,32 @@ def _release_policy_for_evaluation(
     return None
 
 
+def _operational_state_snapshot_for_release_evaluation(
+    *,
+    planning_run: dict[str, object],
+    operational_state_snapshots: dict[str, OperationalStateSnapshot],
+    evaluated_at: datetime,
+    use_latest_operational_state: bool,
+    requested_snapshot_id: str | None,
+) -> OperationalStateSnapshot | None:
+    if requested_snapshot_id is not None:
+        return operational_state_snapshots.get(requested_snapshot_id)
+    if use_latest_operational_state:
+        eligible_snapshots = [
+            snapshot
+            for snapshot in operational_state_snapshots.values()
+            if snapshot.captured_at <= evaluated_at
+        ]
+        if eligible_snapshots:
+            return max(
+                eligible_snapshots,
+                key=lambda snapshot: snapshot.captured_at,
+            )
+    return operational_state_snapshots.get(
+        str(planning_run.get("OperationalStateSnapshotID"))
+    )
+
+
 def _dbr_release_policy_from_payload(
     payload: DbrReleasePolicyPayload,
 ) -> dict[str, object]:
@@ -6880,9 +7134,19 @@ def _dbr_release_policy_from_payload(
             "Red": payload.RedZoneRatio,
         },
         "MaxWipCount": payload.MaxWipCount,
-        "MaterialLookaheadMinutes": payload.MaterialLookaheadMinutes,
+        "MaterialLookaheadMinutes": (
+            payload.MaterialCheckWindowMinutes
+            if payload.MaterialCheckWindowMinutes is not None
+            else payload.MaterialLookaheadMinutes
+        ),
+        "MaterialCheckWindowMinutes": (
+            payload.MaterialCheckWindowMinutes
+            if payload.MaterialCheckWindowMinutes is not None
+            else payload.MaterialLookaheadMinutes
+        ),
         "StabilityPolicy": {
             "ToleranceMinutes": payload.StabilityToleranceMinutes,
+            "ReplanThresholdMinutes": payload.StabilityReplanThresholdMinutes,
             "ConsecutiveBlockedThreshold": payload.ConsecutiveBlockedThreshold,
             "ReplanCooldownMinutes": payload.ReplanCooldownMinutes,
         },
@@ -6899,6 +7163,90 @@ def _retire_other_active_policies(
         if version_id != active_version_id and policy.get("Status") == "Active":
             policy["Status"] = "Retired"
             policy["RetiredByPolicyVersionID"] = active_version_id
+
+
+def _active_calendar_overrides(
+    overrides: object,
+) -> list[dict[str, object]]:
+    return [
+        dict(item)
+        for item in overrides
+        if isinstance(item, dict) and item.get("Status") == "Active"
+    ]
+
+
+def _calendar_overrides_with_driver_status(
+    *,
+    overrides: object,
+    master_data_versions: object,
+    planning_runs: object,
+) -> list[dict[str, object]]:
+    resources = _latest_master_data_resources(master_data_versions)
+    applied_ids = _applied_calendar_override_ids(planning_runs)
+    enriched: list[dict[str, object]] = []
+    for override in overrides:
+        if not isinstance(override, dict):
+            continue
+        item = dict(override)
+        item["SolverDriverStatus"] = calendar_override_driver_status(
+            override=item,
+            resources=resources,
+            applied_override_ids=applied_ids,
+        )
+        enriched.append(item)
+    return enriched
+
+
+def _latest_master_data_resources(master_data_versions: object) -> list[Resource]:
+    versions = [
+        version
+        for version in master_data_versions
+        if isinstance(version, dict) and isinstance(version.get("Resources"), list)
+    ]
+    if not versions:
+        return []
+    latest = max(versions, key=lambda item: str(item.get("CapturedAt", "")))
+    try:
+        return _resources_from_payload(
+            [
+                ResourcePayload(**item)
+                for item in latest.get("Resources", [])
+                if isinstance(item, dict)
+            ]
+        )
+    except Exception:
+        return []
+
+
+def _applied_calendar_override_ids(planning_runs: object) -> set[str]:
+    result: set[str] = set()
+    for run in planning_runs:
+        if not isinstance(run, dict):
+            continue
+        summary = run.get("CalendarOverrideSummary")
+        if not isinstance(summary, dict):
+            schedule = run.get("Schedule")
+            summary = schedule.get("CalendarOverrideSummary") if isinstance(schedule, dict) else None
+        if not isinstance(summary, dict):
+            continue
+        for item in summary.get("AppliedOverrides", []):
+            if isinstance(item, dict) and item.get("OverrideID") is not None:
+                result.add(str(item["OverrideID"]))
+    return result
+
+
+def _solver_diagnostics_to_payload_dict(
+    diagnostics: list[SolverDiagnostic],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "Severity": diagnostic.severity,
+            "Code": diagnostic.code,
+            "Message": diagnostic.message,
+            "EntityID": diagnostic.entity_id,
+        }
+        for diagnostic in diagnostics
+    ]
 
 
 def _calendar_override_from_payload(
@@ -7233,6 +7581,7 @@ def _calculate_workbench_data_from_entities(
     setup_transitions: list[SetupTransition] | None = None,
     objective: SchedulingObjective | None = None,
     align_release_to_schedule: bool = False,
+    release_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     view = build_planner_workbench_view(
         problem_id=problem_id,
@@ -7250,6 +7599,7 @@ def _calculate_workbench_data_from_entities(
         setup_transitions=setup_transitions,
         objective=objective,
         align_release_to_schedule=align_release_to_schedule,
+        release_policy=release_policy,
     )
     data = planner_workbench_view_to_dict(view)
     data["Validation"] = _master_data_validation_to_dict(validation)

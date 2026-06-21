@@ -2241,8 +2241,11 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'id="system-load-view"' in html
     assert 'id="resource-load-view"' in html
     assert 'id="scenario-comparison"' in html
+    assert 'id="output-governance-summary"' in html
     assert "/planner/workbench/schedule-results/runs/" in script
     assert "/planner/workbench/schedule-results/compare" in script
+    assert "/governance`" in script
+    assert "/output-package`" in script
 
 
 def test_planner_workbench_page_exposes_case_acceptance_overview():
@@ -2257,6 +2260,10 @@ def test_planner_workbench_page_exposes_case_acceptance_overview():
     assert 'data-case-summary="PassedCount"' in html
     assert "/planner/workbench/test-data/acceptance" in script
     assert "caseAcceptanceTitle" in script
+    assert "CPSATBusinessCases" in script
+    assert "expectedAssertions" in script
+    assert "passedAssertions" in script
+    assert "failureReasons" in script
 
 
 def test_planner_workbench_page_exposes_plan_publication_governance():
@@ -2309,6 +2316,108 @@ def _add_release_snapshot(client: TestClient, *, current_wip: int = 0) -> None:
     assert response.status_code == 200
 
 
+def test_be_out_010_schedule_output_governance_and_package_are_available_for_completed_run():
+    # BE-OUT-002 / BE-OUT-003 / BE-OUT-008 / BE-OUT-010
+    store = _schedule_result_test_store()
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client)
+    store.release_authorizations.append(
+        create_release_authorization(
+            request_id="RUN-RESULT",
+            candidate={
+                "OrderID": "WO-1",
+                "ScheduledStart": "2026-06-19T08:00:00+00:00",
+                "ScheduledEnd": "2026-06-19T10:00:00+00:00",
+                "SuggestedReleaseAt": "2026-06-19T06:00:00+00:00",
+                "RecommendedAction": "ReadyForRelease",
+            },
+            released_by="planner-1",
+            released_at=datetime(2026, 6, 19, 7, 30, tzinfo=timezone.utc),
+            operational_state_snapshot_id="OPS-RESULT",
+            release_policy_version_id="DBR-POLICY-BASE",
+        )
+    )
+    store.audit_events.extend(
+        [
+            {
+                "RunID": "RUN-RESULT",
+                "Action": "ScheduleScenarioSelected",
+                "ActorID": "planner-1",
+                "OccurredAt": "2026-06-19T07:20:00+00:00",
+                "Details": {"SelectedRunID": "RUN-RESULT"},
+            },
+            {
+                "RunID": "RUN-RESULT",
+                "Action": "ScheduledWorkOrdersLocked",
+                "ActorID": "planner-1",
+                "OccurredAt": "2026-06-19T07:45:00+00:00",
+                "Details": {"OrderIDs": ["WO-1"]},
+            },
+            {
+                "RunID": "RUN-RESULT",
+                "Action": "PlanPublicationReview",
+                "ActorID": "planner-1",
+                "OccurredAt": "2026-06-19T07:50:00+00:00",
+                "Details": {},
+            },
+        ]
+    )
+
+    governance = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/governance"
+    )
+
+    assert governance.status_code == 200
+    data = governance.json()["Data"]
+    assert data["OutputAvailability"] == "Available"
+    assert data["OutputPackageID"].startswith("OUT-RUN-RESULT-")
+    assert data["Completeness"]["FailureCodes"] == []
+    assert data["Release"]["AuthorizedCount"] == 1
+    assert data["Release"]["UnauthorizedCount"] == 0
+    assert data["Audit"]["ScenarioSelectionCount"] == 1
+    assert data["Audit"]["WorkOrderCommandCount"] == 1
+    assert data["Audit"]["PublicationActionCount"] == 1
+    assert data["FrozenInputs"]["MasterDataVersionID"] == "MDV-RESULT"
+    assert data["FrozenInputs"]["OperationalStateSnapshotID"] == "OPS-RESULT"
+
+    package = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/output-package"
+    )
+
+    assert package.status_code == 200
+    output = package.json()["Data"]
+    assert output["PackageID"] == data["OutputPackageID"]
+    assert output["ScheduleFingerprint"] == data["ScheduleFingerprint"]
+    assert output["WorkOrders"][0]["OrderID"] == "WO-1"
+    assert output["WorkOrders"][0]["SuggestedReleaseAt"] == "2026-06-19T06:00:00+00:00"
+    assert output["Operations"][0]["ResourceID"] == "WC-DRUM"
+    assert output["ResourceLoadSummary"][0]["OverloadMinutes"] == 120
+    assert output["GanttSummary"]["OperationBarCount"] == 1
+    assert output["ExternalDelivery"]["Status"] == "NotSent"
+
+
+def test_be_out_010_output_package_rejects_incomplete_or_unscoped_runs():
+    # BE-OUT-010
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["Status"] = "Running"
+    client = TestClient(create_app(state_store=store))
+
+    governance = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/governance"
+    )
+    package = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/output-package"
+    )
+
+    assert governance.status_code == 200
+    data = governance.json()["Data"]
+    assert data["OutputAvailability"] == "Unavailable"
+    assert "PLANNING_RUN_COMPLETED" in data["Completeness"]["FailureCodes"]
+    assert "OPERATIONAL_STATE_SNAPSHOT_PRESENT" in data["Completeness"]["FailureCodes"]
+    assert package.status_code == 409
+    assert package.json()["Data"]["Status"] == "OutputPackageUnavailable"
+
+
 def test_be_out_008_009_work_order_read_model_and_audited_commands():
     store = _schedule_result_test_store()
     client = TestClient(create_app(state_store=store))
@@ -2354,6 +2463,12 @@ def test_be_out_008_009_work_order_read_model_and_audited_commands():
     assert detail_data["CommercialContext"]["CustomerID"] is None
     assert detail_data["ProductionContext"]["ResourceIDs"] == ["WC-DRUM"]
     assert detail_data["ReleaseContext"]["DispatchStatus"] == "NotReleased"
+    assert detail_data["ReleaseContext"]["SuggestedReleaseAt"] == "2026-06-19T06:00:00+00:00"
+    assert detail_data["OutputContext"]["OutputPackageID"].startswith("OUT-RUN-RESULT-")
+    assert detail_data["OutputContext"]["ScheduleFingerprint"]
+    assert detail_data["OutputContext"]["PublicationStatus"] == "Draft"
+    assert detail_data["AuditContext"]["OrderAuditEventCount"] == 1
+    assert detail_data["AuditContext"]["Actions"] == ["ScheduledWorkOrdersLocked"]
     assert detail_data["Notes"] == []
     assert detail_data["UserDefinedFields"] == {}
     assert detail_data["AuditEvents"][0]["Action"] == "ScheduledWorkOrdersLocked"
@@ -2361,6 +2476,19 @@ def test_be_out_008_009_work_order_read_model_and_audited_commands():
 
 def test_be_ui_004_planning_run_release_workbench_authorizes_only_ready_order():
     store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["ReleasePolicyVersionID"] = "DBR-POLICY-AUTH"
+    store.planning_runs["RUN-RESULT"]["FrozenReleasePolicy"] = {
+        "VersionID": "DBR-POLICY-AUTH",
+        "RopeBufferMinutes": 120,
+        "TimeBufferRatios": {"Green": 0.33, "Yellow": 0.34, "Red": 0.33},
+        "MaterialLookaheadMinutes": 0,
+        "StabilityPolicy": {
+            "ToleranceMinutes": 30,
+            "ReplanThresholdMinutes": 120,
+            "ConsecutiveBlockedThreshold": 3,
+            "ReplanCooldownMinutes": 60,
+        },
+    }
     client = TestClient(create_app(state_store=store))
     _add_release_snapshot(client)
 
@@ -2392,11 +2520,109 @@ def test_be_ui_004_planning_run_release_workbench_authorizes_only_ready_order():
     assert authorization.status_code == 200
     record = authorization.json()["Data"]["Authorization"]
     assert record["Status"] == "Authorized"
+    assert record["ReleasePolicyVersionID"] == "DBR-POLICY-AUTH"
+    assert record["ReleasePolicyEvidence"]["RopeBufferMinutes"] == 120
     dispatch = client.get(
         f"/planner/workbench/release-authorizations/{record['AuthorizationID']}/dispatch-package"
     )
     assert dispatch.status_code == 200
-    assert dispatch.json()["Data"]["DispatchPackage"]["OrderID"] == "WO-1"
+    package = dispatch.json()["Data"]["DispatchPackage"]
+    assert package["OrderID"] == "WO-1"
+    assert package["ReleasePolicyVersionID"] == "DBR-POLICY-AUTH"
+
+
+def test_be_ui_004_release_management_can_reevaluate_same_run_with_latest_snapshot():
+    # BE-UI-004 / UI-RELEASE-001
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["OperationalStateSnapshotID"] = "OPS-OLD"
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-OLD",
+            "CapturedAt": "2026-06-19T06:30:00+00:00",
+            "InventoryBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "OnHandQty": 80,
+                    "RedZoneQty": 50,
+                    "YellowZoneQty": 120,
+                    "GreenZoneQty": 200,
+                }
+            ],
+            "WipLimits": [
+                {
+                    "ScopeID": "DRUM-FEED",
+                    "CurrentWipCount": 0,
+                    "MaxWipCount": 5,
+                }
+            ],
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-LATEST",
+            "CapturedAt": "2026-06-19T07:45:00+00:00",
+            "InventoryBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "OnHandQty": 80,
+                    "RedZoneQty": 50,
+                    "YellowZoneQty": 120,
+                    "GreenZoneQty": 200,
+                }
+            ],
+            "WipLimits": [
+                {
+                    "ScopeID": "DRUM-FEED",
+                    "CurrentWipCount": 0,
+                    "MaxWipCount": 5,
+                }
+            ],
+        },
+    ).status_code == 200
+
+    frozen_snapshot_response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    )
+    latest_snapshot_response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={
+            "evaluated_at": "2026-06-19T07:50:00+00:00",
+            "use_latest_operational_state": "true",
+        },
+    )
+
+    assert frozen_snapshot_response.status_code == 200
+    frozen = frozen_snapshot_response.json()["Data"]
+    assert frozen["OperationalStateSnapshotID"] == "OPS-OLD"
+    assert frozen["Summary"]["ReadyCount"] == 0
+    assert frozen["Candidates"][0]["BlockingReasons"][0]["Code"] == (
+        "OPERATIONAL_SNAPSHOT_STALE"
+    )
+    assert latest_snapshot_response.status_code == 200
+    latest = latest_snapshot_response.json()["Data"]
+    assert latest["OperationalStateSnapshotID"] == "OPS-LATEST"
+    assert latest["Summary"]["ReadyCount"] == 1
+    assert latest["Candidates"][0]["CanAuthorize"] is True
+
+    authorization = client.post(
+        "/planner/workbench/release-management/runs/RUN-RESULT/orders/WO-1/authorize",
+        json={
+            "ReleasedBy": "planner-1",
+            "ReleasedAt": "2026-06-19T07:50:00+00:00",
+            "OperationalStateMaxAgeMinutes": 60,
+            "UseLatestOperationalState": True,
+        },
+    )
+
+    assert authorization.status_code == 200
+    record = authorization.json()["Data"]["Authorization"]
+    assert record["OperationalStateSnapshotID"] == "OPS-LATEST"
 
 
 def test_be_rel_012_release_management_returns_frozen_policy_snapshot():
@@ -2436,6 +2662,188 @@ def test_be_rel_012_release_management_returns_frozen_policy_snapshot():
     assert data["ReleasePolicySnapshot"]["StabilityPolicy"][
         "ConsecutiveBlockedThreshold"
     ] == 4
+
+
+def test_be_rel_012_policy_rope_drives_planning_run_release_recommendations():
+    # BE-REL-012 / BE-SOLVER-007
+    client = TestClient(create_app())
+    _create_master_data_and_snapshot(
+        client, version_id="MDV-REL-ROPE", snapshot_id="OPS-REL-ROPE"
+    )
+    assert client.post(
+        "/planner/workbench/dbr/release-policies",
+        json={
+            "VersionID": "DBR-POLICY-ROPE-75",
+            "CreatedAt": "2026-06-16T07:20:00+00:00",
+            "CreatedBy": "planner-1",
+            "RopeBufferMinutes": 75,
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    run = _create_and_execute_planning_run(
+        client,
+        run_id="RUN-REL-ROPE",
+        master_data_version_id="MDV-REL-ROPE",
+        snapshot_id="OPS-REL-ROPE",
+        release_policy_version_id="DBR-POLICY-ROPE-75",
+    )
+
+    recommendation = run["Schedule"]["ReleaseRecommendations"][0]
+    assert recommendation["SuggestedReleaseDate"] == "2026-06-16T06:45:00+00:00"
+    assert run["FrozenReleasePolicy"]["RopeBufferMinutes"] == 75
+
+
+def test_be_rel_012_policy_buffer_ratios_drive_release_zone():
+    # BE-REL-012 / BE-UI-006
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["ReleasePolicyVersionID"] = "DBR-POLICY-ZONE"
+    store.planning_runs["RUN-RESULT"]["FrozenReleasePolicy"] = {
+        "VersionID": "DBR-POLICY-ZONE",
+        "RopeBufferMinutes": 120,
+        "TimeBufferRatios": {"Green": 0.1, "Yellow": 0.1, "Red": 0.8},
+        "MaterialLookaheadMinutes": 0,
+        "StabilityPolicy": {
+            "ToleranceMinutes": 30,
+            "ReplanThresholdMinutes": 120,
+            "ConsecutiveBlockedThreshold": 3,
+            "ReplanCooldownMinutes": 60,
+        },
+    }
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client)
+
+    response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T06:20:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["Data"]["Candidates"][0]
+    assert candidate["BufferZone"] == "Yellow"
+    assert candidate["PolicyEvidence"]["TimeBufferRatios"]["Green"] == 0.1
+
+
+def test_be_rel_012_policy_wip_limit_drives_release_gate():
+    # BE-REL-012
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["ReleasePolicyVersionID"] = "DBR-POLICY-WIP-0"
+    store.planning_runs["RUN-RESULT"]["FrozenReleasePolicy"] = {
+        "VersionID": "DBR-POLICY-WIP-0",
+        "RopeBufferMinutes": 120,
+        "TimeBufferRatios": {"Green": 0.33, "Yellow": 0.34, "Red": 0.33},
+        "MaxWipCount": 0,
+        "MaterialLookaheadMinutes": 0,
+        "StabilityPolicy": {
+            "ToleranceMinutes": 30,
+            "ReplanThresholdMinutes": 120,
+            "ConsecutiveBlockedThreshold": 3,
+            "ReplanCooldownMinutes": 60,
+        },
+    }
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client, current_wip=0)
+
+    response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["Data"]["Candidates"][0]
+    assert candidate["CanAuthorize"] is False
+    reason = candidate["BlockingReasons"][0]
+    assert reason["Code"] == "WIP_LIMIT_EXCEEDED"
+    assert reason["Details"]["Risks"][0]["PolicyMaxWipCount"] == 0
+    assert reason["Details"]["Risks"][0]["EffectiveMaxWipCount"] == 0
+
+
+def test_be_rel_012_policy_material_window_accepts_inbound_within_window():
+    # BE-REL-012
+    client = TestClient(create_app())
+    assert client.post(
+        "/planner/workbench/dbr/release-policies",
+        json={
+            "VersionID": "DBR-POLICY-MATERIAL-WINDOW",
+            "CreatedAt": "2026-06-20T05:00:00+00:00",
+            "CreatedBy": "planner-1",
+            "RopeBufferMinutes": 120,
+            "MaterialCheckWindowMinutes": 120,
+            "Status": "Active",
+        },
+    ).status_code == 200
+    request_id = _completed_replan_request_id(client)
+
+    response = client.post(
+        f"/planner/workbench/replan-requests/{request_id}/release-candidates",
+        json={
+            "EvaluatedAt": "2026-06-20T06:00:00+00:00",
+            "ReleasePolicyVersionID": "DBR-POLICY-MATERIAL-WINDOW",
+            "InventoryBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "OnHandQty": 55,
+                    "RedZoneQty": 50,
+                    "YellowZoneQty": 120,
+                    "GreenZoneQty": 200,
+                }
+            ],
+            "MaterialRequirements": [
+                {
+                    "OrderID": "WO-1",
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "RequiredQty": 10,
+                }
+            ],
+            "MaterialAvailability": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "AllocatedQty": 5,
+                    "InboundQty": 15,
+                    "InboundAvailableAt": "2026-06-16T09:30:00+00:00",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["Data"]["Candidates"][0]
+    assert candidate["MaterialStatus"] == "Clear"
+    assert candidate["InventoryRisks"] == []
+    assert candidate["PolicyEvidence"]["MaterialLookaheadMinutes"] == 120
+
+
+def test_be_rel_012_policy_stability_threshold_drives_replan_action():
+    # BE-REL-012
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["ReleasePolicyVersionID"] = "DBR-POLICY-STABILITY"
+    store.planning_runs["RUN-RESULT"]["FrozenReleasePolicy"] = {
+        "VersionID": "DBR-POLICY-STABILITY",
+        "RopeBufferMinutes": 120,
+        "TimeBufferRatios": {"Green": 0.33, "Yellow": 0.34, "Red": 0.33},
+        "MaterialLookaheadMinutes": 0,
+        "StabilityPolicy": {
+            "ToleranceMinutes": 5,
+            "ReplanThresholdMinutes": 10,
+            "ConsecutiveBlockedThreshold": 3,
+            "ReplanCooldownMinutes": 60,
+        },
+    }
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client)
+
+    response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["Data"]["Candidates"][0]
+    assert candidate["Stability"]["Action"] == "Replan"
+    assert candidate["Stability"]["Policy"]["ReplanThresholdMinutes"] == 10
 
 
 def test_be_ui_004_release_workbench_returns_structured_wip_block_reason():
@@ -2910,6 +3318,138 @@ def test_be_data_010_ui_006_calendar_override_configuration_is_persisted(tmp_pat
     assert calendar_config["OverrideTypeCounts"]["ExclusionOrMaintenance"] == 1
     assert calendar_config["ConflictCheckStatus"] == "NotEnforced"
     assert admin["StateStore"]["Status"] == "Healthy"
+
+
+def test_be_data_010_calendar_overrides_freeze_and_drive_planning_run():
+    # BE-DATA-010 / BE-SOLVER-011 / BE-UI-006
+    client = TestClient(create_app())
+    master_data_payload = _master_data_import_calculate_payload()
+    master_data_payload.pop("ProblemID")
+    master_data_payload.pop("ScheduleStartAt")
+    master_data_payload["VersionID"] = "MDV-CAL-OVR"
+    master_data_payload["CapturedAt"] = "2026-06-16T05:30:00+00:00"
+    master_data_payload["SourceSystem"] = "ERP"
+    master_data_payload["CreatedBy"] = "planner-1"
+    master_data_payload["CalendarTimezone"] = "UTC"
+    master_data_payload["CalendarRows"] = [
+        {
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-DRUM",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "ShiftName": "Day",
+            "ShiftStart": "08:00:00",
+            "ShiftEnd": "12:00:00",
+        }
+    ]
+    assert client.post(
+        "/planner/workbench/master-data/versions",
+        json=master_data_payload,
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-CAL-OVR",
+            "CapturedAt": "2026-06-16T05:45:00+00:00",
+            "InventoryBuffers": master_data_payload["InventoryBufferRows"],
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-MAINT-DRIVE",
+            "CalendarID": "CAL-DRUM",
+            "OverrideType": "ExclusionOrMaintenance",
+            "EffectiveStartAt": "2026-06-16T08:00:00+00:00",
+            "EffectiveEndAt": "2026-06-16T10:00:00+00:00",
+            "CreatedAt": "2026-06-16T05:50:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    run_one = _create_and_execute_planning_run(
+        client,
+        run_id="RUN-CAL-OVR-1",
+        master_data_version_id="MDV-CAL-OVR",
+        snapshot_id="OPS-CAL-OVR",
+        problem_id="P-CAL-OVR-1",
+    )
+
+    first_bar = run_one["Schedule"]["GanttRows"][0]["Bars"][0]
+    assert first_bar["Start"] == "2026-06-16T10:00:00+00:00"
+    assert run_one["FrozenCalendarOverrides"][0]["OverrideID"] == (
+        "CAL-OVR-MAINT-DRIVE"
+    )
+    assert run_one["CalendarOverrideSummary"]["AppliedOverrideCount"] == 1
+    assert {
+        diagnostic["Code"] for diagnostic in run_one["Schedule"]["SolverDiagnostics"]
+    } >= {"CALENDAR_OVERRIDES_APPLIED"}
+    schedule_result = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-CAL-OVR-1/workbench"
+    )
+    assert schedule_result.status_code == 200
+    bars = schedule_result.json()["Data"]["Gantt"]["Rows"][0]["Bars"]
+    assert any(
+        bar["OperationID"] == "CAL-OVR-MAINT-DRIVE"
+        and bar["BarType"] == "Maintenance"
+        for bar in bars
+    )
+
+    assert client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-OT-DRIVE",
+            "CalendarID": "CAL-DRUM",
+            "ResourceID": "WC-DRUM",
+            "OverrideType": "Overtime",
+            "EffectiveStartAt": "2026-06-16T06:00:00+00:00",
+            "EffectiveEndAt": "2026-06-16T08:00:00+00:00",
+            "CapacityDeltaMinutes": 120,
+            "CreatedAt": "2026-06-16T05:55:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    detail = client.get("/planner/workbench/planning-runs/RUN-CAL-OVR-1/workbench")
+    assert detail.status_code == 200
+    assert detail.json()["Data"]["FrozenCalendarOverrideSummary"] == {
+        "FrozenOverrideCount": 1,
+        "AppliedOverrideCount": 1,
+    }
+
+    run_two_create_payload = {
+        "RunID": "RUN-CAL-OVR-2",
+        "ProblemID": "P-CAL-OVR-2",
+        "MasterDataVersionID": "MDV-CAL-OVR",
+        "OperationalStateSnapshotID": "OPS-CAL-OVR",
+        "ScheduleStartAt": "2026-06-16T06:00:00+00:00",
+        "SolverBackendID": "ortools",
+        "RequestedBy": "planner-1",
+        "RequestedAt": "2026-06-16T05:56:00+00:00",
+    }
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=run_two_create_payload,
+    ).status_code == 200
+    run_two = client.post(
+        "/planner/workbench/planning-runs/RUN-CAL-OVR-2/execute",
+        json={
+            "ExecutedBy": "planner-1",
+            "StartedAt": "2026-06-16T05:57:00+00:00",
+            "CompletedAt": "2026-06-16T05:58:00+00:00",
+        },
+    ).json()["Data"]["PlanningRun"]
+
+    second_bar = run_two["Schedule"]["GanttRows"][0]["Bars"][0]
+    assert second_bar["Start"] == "2026-06-16T06:00:00+00:00"
+    assert run_two["CalendarOverrideSummary"]["FrozenOverrideCount"] == 2
+    listed = client.get("/planner/workbench/admin/calendar-overrides")
+    statuses = {
+        item["OverrideID"]: item["SolverDriverStatus"]
+        for item in listed.json()["Data"]["Overrides"]
+    }
+    assert statuses["CAL-OVR-MAINT-DRIVE"] == "AppliedInRun"
+    assert statuses["CAL-OVR-OT-DRIVE"] == "AppliedInRun"
 
 
 def test_be_solver_014_ui_006_scheduling_strategy_configuration_is_persisted(tmp_path):

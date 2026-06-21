@@ -290,9 +290,10 @@ def _release_policy_configuration(
             "TimeBufferRatios",
             "MaxWipCount",
             "MaterialLookaheadMinutes",
+            "MaterialCheckWindowMinutes",
             "StabilityPolicy",
         ],
-        "AlgorithmDriverStatus": "PartiallyApplied",
+        "AlgorithmDriverStatus": "AppliedToReleaseRecommendationsAndGates",
     }
 
 

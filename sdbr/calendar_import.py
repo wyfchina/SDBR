@@ -71,6 +71,13 @@ def attach_work_calendars_to_resources(
             is_constraint=resource.is_constraint,
             daily_capacity_minutes=resource.daily_capacity_minutes,
             calendar=calendars_by_resource.get(resource.resource_id, resource.calendar),
+            capacity_units=resource.capacity_units,
+            efficiency_percent=resource.efficiency_percent,
+            resource_type=resource.resource_type,
+            is_buffered=resource.is_buffered,
+            owner_id=resource.owner_id,
+            category=resource.category,
+            extra_capacity_windows=resource.extra_capacity_windows,
         )
         for resource in resources
     ]

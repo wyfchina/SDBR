@@ -250,6 +250,62 @@ def test_test_case_acceptance_summarizes_completed_business_cases():
     } == {"Draft"}
 
 
+def test_cp_sat_business_cases_execute_and_explain_solver_behavior():
+    # BE-DATA-014 / BE-SOLVER-009 / BE-SOLVER-010 / BE-SOLVER-011 / BE-SOLVER-014
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    for run_id in [
+        "TST-CP-RUN-FINITE-001",
+        "TST-CP-RUN-ALTERNATE-001",
+        "TST-CP-RUN-CALENDAR-001",
+        "TST-CP-RUN-EFFICIENCY-001",
+        "TST-CP-RUN-SETUP-001",
+        "TST-CP-RUN-INFEASIBLE-001",
+    ]:
+        _enqueue_claim_and_execute(client, run_id, max_attempts=1)
+
+    response = client.get("/planner/workbench/test-data/acceptance")
+
+    assert response.status_code == 200
+    cases = {case["CaseID"]: case for case in response.json()["Data"]["Cases"]}
+    cp_cases = {
+        case_id: case
+        for case_id, case in cases.items()
+        if case_id.startswith("TST-CP-")
+    }
+    assert len(cp_cases) == 6
+    assert {case["CaseGroup"] for case in cp_cases.values()} == {
+        "CPSATBusinessCases"
+    }
+    assert {case["AcceptanceStatus"] for case in cp_cases.values()} == {"Passed"}
+    assert {
+        "FINITE_RESOURCE_NO_OVERLAP",
+        "ALL_ORDERS_SCHEDULED",
+    } <= _passed_assertions(cp_cases["TST-CP-FINITE-RESOURCE"])
+    assert "ALTERNATE_RESOURCE_USED" in _passed_assertions(
+        cp_cases["TST-CP-ALTERNATE-RESOURCE"]
+    )
+    assert {
+        "CALENDAR_OVERRIDE_APPLIED",
+        "MAINTENANCE_WINDOW_AVOIDED",
+        "OVERTIME_WINDOW_USED",
+    } <= _passed_assertions(cp_cases["TST-CP-CALENDAR-OVERTIME"])
+    assert "EFFICIENCY_DURATION_APPLIED" in _passed_assertions(
+        cp_cases["TST-CP-RESOURCE-EFFICIENCY"]
+    )
+    assert "SETUP_LAG_APPLIED" in _passed_assertions(
+        cp_cases["TST-CP-SETUP-SEQUENCE"]
+    )
+    assert cp_cases["TST-CP-INFEASIBLE-WINDOW"]["Actual"]["PlanningRunStatus"] == (
+        "DeadLetter"
+    )
+    assert "INFEASIBLE_DIAGNOSTIC_REPORTED" in _passed_assertions(
+        cp_cases["TST-CP-INFEASIBLE-WINDOW"]
+    )
+
+
 def test_test_case_acceptance_records_human_confirmation_and_audit():
     # BE-DATA-014 / BE-OPS-002
     store = WorkbenchStateStore()
@@ -460,12 +516,18 @@ def test_publishing_new_plan_supersedes_prior_published_plan_for_same_problem():
     assert first.json()["Data"]["SupersededByRunID"] == "TST-RUN-BASELINE-002"
 
 
-def _enqueue_claim_and_execute(client: TestClient, run_id: str) -> dict[str, object]:
+def _enqueue_claim_and_execute(
+    client: TestClient,
+    run_id: str,
+    *,
+    max_attempts: int = 3,
+) -> dict[str, object]:
     assert client.post(
         f"/planner/workbench/planning-runs/{run_id}/enqueue",
         json={
             "EnqueuedBy": "planner-e2e",
             "EnqueuedAt": "2026-06-19T08:01:00+00:00",
+            "MaxAttempts": max_attempts,
         },
     ).status_code == 200
     claim = client.post(
@@ -491,6 +553,14 @@ def _enqueue_claim_and_execute(client: TestClient, run_id: str) -> dict[str, obj
     )
     assert execute.status_code == 200
     return execute.json()["Data"]["PlanningRun"]
+
+
+def _passed_assertions(case: dict[str, object]) -> set[str]:
+    return {
+        str(item.get("AssertionID"))
+        for item in case["Actual"].get("ScheduleAssertions", [])
+        if item.get("Passed") is True
+    }
 
 
 def _enqueue_claim_and_execute_with_auth(

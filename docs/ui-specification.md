@@ -355,6 +355,7 @@ UI 必须帮助计划员快速回答五个问题：
 - 发布包摘要：发布包编号、计划指纹、目标系统、发布人、发布时间、订单数量、求解器状态。
 - 发布历史：动作、前后状态、操作人、时间和备注。
 - 替代关系：被哪次计划替代或替代了哪次计划。
+- 输出治理摘要：输出可用性、内部输出包编号、完整性检查、释放建议/授权摘要、审计摘要、主数据版本和运行快照。
 
 交互要求：
 
@@ -362,6 +363,7 @@ UI 必须帮助计划员快速回答五个问题：
 - `发布计划`和`撤销发布`属于 Admin 权限动作；普通计划员界面可看到禁用或后端拒绝后的明确原因。
 - 所有动作必须调用 `/planner/workbench/planning-runs/{run_id}/publication/*` 后端 API，不得只在前端改状态。
 - 动作完成后必须重新读取发布状态，保持排程结果、发布包和审计历史一致。
+- 输出治理摘要必须调用后台 governance/output-package read model，不得直接展示原始排程 JSON。
 - 真实 ERP/MES 回写仍属于 `BE-INT-*`，本 UI 只显示内部发布包和目标系统占位。
 
 ### UI-RELEASE-001 释放管理工作区
@@ -380,6 +382,12 @@ UI 必须帮助计划员快速回答五个问题：
 主要动作：查看原因、重新评估、授权释放、查看调度包。
 
 不得因排程已完成就默认释放工单。释放动作必须经过独立门控结果。
+
+重新评估的业务语义：对同一个已完成 Planning Run 读取新的运行状态快照，重新判断物料、在途、WIP 和快照新鲜度；该动作不得重新求解排程，也不得要求重新建立任务包。授权释放时必须记录实际采用的运行状态快照。
+
+**2026-06-21 补充验证：**“重新评估”按钮改为使用最新运行状态快照，普通切换计划仍默认显示冻结快照；若旧快照过期但最新快照新鲜，同一 Planning Run 可重新得到可释放结果，并在授权中记录最新快照 ID。自动化验证：`pytest -q --basetemp .tmp/pytest-full-release-reevaluate-final -p no:cacheprovider`，312 passed，1 warning。
+
+**2026-06-21 补充验证：**释放管理顶部显示当前冻结释放策略版本；阻塞原因抽屉显示策略证据、触发参数和稳定性判断，包括策略绳长分钟、物料检查窗口、策略 WIP 上限、稳定性容忍与重排阈值；授权后的调度包保留释放策略版本。自动化验证：`pytest -q --basetemp .tmp/pytest-full-release-policy-final -p no:cacheprovider`，311 passed，1 warning。该补充属于现有 `UI-RELEASE-001` 的 read model 可见性增强，不新增大 UI 流程。
 
 ### UI-BUFFER-001 约束缓冲执行看板
 
@@ -428,7 +436,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 **状态：基础管理后台用户已确认；临时日历覆盖配置扩展已验证待用户确认**
 
-**当前实现边界：**用户确认的是管理后台基线。日历区域已展示日定义、周定义、临时班次覆盖、排除/修改四层模型，并新增临时日历覆盖创建/查询入口；基础日历、班次模板、节假日主表和维护规则编辑尚未开放，覆盖冲突规则和覆盖直接驱动 CP-SAT 仍属于 `BE-DATA-010 [PARTIAL]`。
+**当前实现边界：**用户确认的是管理后台基线。日历区域已展示日定义、周定义、临时班次覆盖、排除/修改四层模型，并新增临时日历覆盖创建/查询入口；Active 临时覆盖会冻结到新建 Planning Run 并驱动 CP-SAT 能力桶。基础日历、班次模板、节假日主表、维护规则编辑、覆盖冲突规则和审批流仍属于 `BE-DATA-010 [PARTIAL]` 后续边界。
 
 后台按对象分区：资源、日历、工艺路线、订单、库存缓冲、物料需求。
 
@@ -762,6 +770,7 @@ UI 不得直接构造或修改 SQLite 数据。
 - 边界：只调用内部发布生命周期 API；真实 ERP/MES 回写仍由 `BE-INT-*` 跟踪
 - 自动化验证：2026-06-20 执行 `python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
 - 浏览器验证：2026-06-20 在 `#schedule-results` 验证排程结果内嵌治理区存在；中文显示“计划发布治理”“草案”“提交复核”，英文显示 “Plan publication governance”“Draft”“Submit for review”；发布包与发布历史区域存在；桌面和 390px 窄屏无横向溢出
+- 补充验证：2026-06-21 排程结果页同一治理区新增“输出治理”摘要，展示输出可用性、输出包编号、计划指纹、主数据版本、运行快照、释放建议/授权摘要、审计摘要和外部投递占位；页面调用 `/planner/workbench/schedule-results/runs/{run_id}/governance` 与 `/planner/workbench/schedule-results/runs/{run_id}/output-package`，不返回或展示原始大 JSON；自动化验证 `pytest tests/test_api.py -q -k "be_out_010 or be_out_008_009 or schedule_result_workspace" --basetemp .tmp/pytest-output-governance-detail -p no:cacheprovider`，4 passed
 - 用户确认：已确认（2026-06-20）
 
 ### 17.12 第十二验收单元记录
@@ -769,10 +778,11 @@ UI 不得直接构造或修改 SQLite 数据。
 - 规格：`UI-OVERVIEW-001`
 - 后台依赖：`BE-DATA-014`、`BE-SOLVER-009`、`BE-REL-004`、`BE-RUN-009`
 - 状态：用户已确认
-- 范围：计划总览显示测试案例验收摘要，作为后续按案例判断产品行为是否符合预期的入口
+- 范围：计划总览显示测试案例验收摘要和 CP-SAT 业务案例分组，作为后续按案例判断产品行为是否符合预期的入口
 - 边界：当前只显示测试系统案例验收，不替代生产 BI 总览；生产级总览仍等待 `BE-BI-*`
 - 自动化验证：2026-06-20 执行 `python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
 - 浏览器验证：2026-06-20 重建测试库并执行三组 `TST-RUN-*` 后，计划总览显示案例总数 3、已通过 3、待执行 0、未通过 0；案例卡显示 Planning Run、状态、求解器、发布状态、可释放数和阻塞代码；中英文切换正常；390px 窄屏无横向溢出
+- 补充验证：2026-06-21 新增六组 `TST-CP-*` CP-SAT 业务案例；案例卡显示案例分组、类型、期望断言、通过断言和差异原因；定向验证 `pytest tests/test_test_data.py -q --basetemp .tmp/pytest-cp-cases-data -p no:cacheprovider`，9 passed；`pytest tests/test_business_closure.py -q --basetemp .tmp/pytest-cp-cases-business -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "case_acceptance_overview" --basetemp .tmp/pytest-cp-cases-ui -p no:cacheprovider`，1 passed；全量 `pytest -q --basetemp .tmp/pytest-full-cp-business-cases -p no:cacheprovider`，316 passed，1 warning
 - 用户确认：已确认（2026-06-20）
 
 ## 18. 变更记录
@@ -811,5 +821,11 @@ UI 不得直接构造或修改 SQLite 数据。
 | 4.1 | 2026-06-20 | 记录 UI-BUFFER-001 测试分支不可达和 UI-ADMIN-001 日历仅只读展示的已知缺口，避免将已完成页面误报为完整业务配置能力 |
 | 4.2 | 2026-06-20 | 补齐 UI-BUFFER-001 释放授权到缓冲执行端到端证据；UI-ADMIN-001 新增临时日历覆盖配置入口，基础日历编辑仍保持未完成边界 |
 | 4.3 | 2026-06-20 | 用户确认第十、十一、十二验收单元：活动求解器切换、排程结果内嵌计划发布治理、测试案例验收总览 |
+| 4.4 | 2026-06-21 | 释放管理补充冻结释放策略版本、策略证据、阻塞触发参数、稳定性判断和调度包策略版本展示 |
+| 4.5 | 2026-06-21 | 释放管理“重新评估”改为读取最新运行状态快照，同一计划可刷新门控判断并授权，不要求重建任务包 |
+| 4.6 | 2026-06-21 | 管理后台日历说明更新：Active 临时覆盖可驱动新建 Planning Run，基础日历模板与冲突审批仍后续实现 |
+| 4.7 | 2026-06-21 | 临时日历覆盖驱动排程通过自动化验证：冻结到 Planning Run、影响 CP-SAT 能力桶和甘特维护条带；全量 315 passed |
+| 4.8 | 2026-06-21 | 测试案例验收总览扩展 CP-SAT 业务案例分组，案例卡显示类型、期望断言、通过断言和差异原因 |
+| 4.9 | 2026-06-21 | 排程结果页计划治理区补充输出治理摘要：输出包、完整性、释放、审计和外部投递占位均来自后台 read model |
 | 3.0 | 2026-06-19 | 完成并验证第九验收单元：统一状态标签、表格、详情、确认、通知、加载/空/错和数据新鲜度质量护栏 |
 | 3.1 | 2026-06-19 | 用户确认第九验收单元，完成 UI 验收单元基线；将计划总览列入后续产品总览阶段 |

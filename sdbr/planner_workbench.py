@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo as TzInfo
 
 
@@ -17,6 +17,7 @@ class Resource:
     is_buffered: bool = False
     owner_id: str | None = None
     category: str | None = None
+    extra_capacity_windows: list[ExtraCapacityWindow] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,14 @@ class Shift:
 class MaintenanceWindow:
     start: datetime
     end: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExtraCapacityWindow:
+    start: datetime
+    end: datetime
+    capacity_minutes: int
+    source_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,8 +295,16 @@ def _capacity_minutes_for(
             calendar=resource.calendar,
             target_date=bucket_date,
             tzinfo=calendar_tzinfo,
-        )
-    return resource.daily_capacity_minutes.get(bucket_date, 0)
+        ) + _extra_capacity_minutes_for(resource, bucket_date)
+    return resource.daily_capacity_minutes.get(bucket_date, 0) + _extra_capacity_minutes_for(resource, bucket_date)
+
+
+def _extra_capacity_minutes_for(resource: Resource, bucket_date: date) -> int:
+    return sum(
+        window.capacity_minutes
+        for window in resource.extra_capacity_windows
+        if window.start.date() == bucket_date
+    )
 
 
 def calculate_suggested_release_date(

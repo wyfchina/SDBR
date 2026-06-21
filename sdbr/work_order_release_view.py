@@ -10,6 +10,8 @@ from sdbr.release_candidates import (
     WipLimit,
     release_candidate_rows_from_schedule,
 )
+from sdbr.release_policy import release_policy_evidence, release_policy_settings
+from sdbr.release_stability import ReleaseStabilityInput, evaluate_release_stability
 from sdbr.schedule_output import (
     scheduled_order_rows_from_schedule,
     scheduled_work_order_rows_from_schedule,
@@ -224,6 +226,7 @@ def build_release_management_workbench(
     operational_state_status: str,
     operational_state_captured_at: datetime,
     authorizations: list[ReleaseAuthorization],
+    operational_state_snapshot_id: str | None = None,
     release_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
     candidates = release_candidate_rows_from_schedule(
@@ -233,7 +236,9 @@ def build_release_management_workbench(
         material_requirements=material_requirements,
         wip_limits=wip_limits,
         material_availability=material_availability,
+        release_policy=release_policy,
     )
+    policy_settings = release_policy_settings(release_policy)
     authorized_by_order = {
         item.order_id: item
         for item in authorizations
@@ -243,10 +248,22 @@ def build_release_management_workbench(
     enriched = []
     for candidate in candidates:
         order_id = str(candidate["OrderID"])
-        penetration, zone = _buffer_penetration(candidate, evaluated_at)
+        penetration, zone = _buffer_penetration(
+            candidate,
+            evaluated_at,
+            release_policy=release_policy,
+        )
         blocking = _blocking_reasons(
             candidate=candidate,
             operational_state_status=operational_state_status,
+            release_policy=release_policy,
+        )
+        stability = _candidate_stability(
+            candidate=candidate,
+            evaluated_at=evaluated_at,
+            gate_allowed=not blocking
+            and candidate.get("RecommendedAction") == "ReadyForRelease",
+            release_policy=release_policy,
         )
         authorization = authorized_by_order.get(order_id)
         enriched.append(
@@ -255,6 +272,8 @@ def build_release_management_workbench(
                 "BufferZone": zone,
                 "BufferPenetrationPercent": penetration,
                 "BlockingReasons": blocking,
+                "PolicyEvidence": release_policy_evidence(release_policy),
+                "Stability": stability,
                 "ReleaseStatus": (
                     "Authorized" if authorization is not None else "NotReleased"
                 ),
@@ -284,8 +303,9 @@ def build_release_management_workbench(
     return {
         "RunID": planning_run.get("RunID"),
         "EvaluatedAt": evaluated_at.isoformat(),
-        "OperationalStateSnapshotID": planning_run.get(
-            "OperationalStateSnapshotID"
+        "OperationalStateSnapshotID": (
+            operational_state_snapshot_id
+            or planning_run.get("OperationalStateSnapshotID")
         ),
         "OperationalStateCapturedAt": operational_state_captured_at.isoformat(),
         "OperationalStateStatus": operational_state_status,
@@ -293,6 +313,7 @@ def build_release_management_workbench(
             release_policy.get("VersionID") if release_policy else None
         ),
         "ReleasePolicySnapshot": release_policy,
+        "PolicyEvidence": release_policy_evidence(release_policy),
         "Summary": {
             "TotalCount": len(enriched),
             "ReadyCount": sum(1 for item in enriched if item["CanAuthorize"]),
@@ -339,7 +360,9 @@ def _routing_by_product(
 
 
 def _buffer_penetration(
-    candidate: dict[str, object], evaluated_at: datetime
+    candidate: dict[str, object],
+    evaluated_at: datetime,
+    release_policy: dict[str, object] | None = None,
 ) -> tuple[float, str]:
     release_at = _parse_datetime(candidate.get("SuggestedReleaseAt"))
     start_at = _parse_datetime(candidate.get("ScheduledStart"))
@@ -353,9 +376,12 @@ def _buffer_penetration(
     )
     if penetration > 100:
         return penetration, "Late"
-    if penetration >= 66.67:
+    settings = release_policy_settings(release_policy)
+    green_boundary = max(0.0, settings.green_zone_ratio * 100)
+    yellow_boundary = green_boundary + max(0.0, settings.yellow_zone_ratio * 100)
+    if penetration >= yellow_boundary:
         return penetration, "Red"
-    if penetration >= 33.33:
+    if penetration >= green_boundary:
         return penetration, "Yellow"
     return max(penetration, 0.0), "Green"
 
@@ -364,6 +390,7 @@ def _blocking_reasons(
     *,
     candidate: dict[str, object],
     operational_state_status: str,
+    release_policy: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     reasons = []
     if operational_state_status != "Fresh":
@@ -380,7 +407,13 @@ def _blocking_reasons(
                 "Code": "ROPE_TIME_NOT_REACHED",
                 "Category": "Rope",
                 "Details": {
-                    "MinutesUntilRelease": candidate.get("MinutesUntilRelease")
+                    "MinutesUntilRelease": candidate.get("MinutesUntilRelease"),
+                    "RopeBufferMinutes": release_policy_settings(
+                        release_policy
+                    ).rope_buffer_minutes,
+                    "ReleasePolicyVersionID": release_policy_settings(
+                        release_policy
+                    ).version_id,
                 },
             }
         )
@@ -390,7 +423,12 @@ def _blocking_reasons(
             {
                 "Code": "MATERIAL_SHORTAGE",
                 "Category": "Material",
-                "Details": {"Risks": candidate.get("InventoryRisks", [])},
+                "Details": {
+                    "Risks": candidate.get("InventoryRisks", []),
+                    "MaterialLookaheadMinutes": release_policy_settings(
+                        release_policy
+                    ).material_lookahead_minutes,
+                },
             }
         )
     elif material_status == "PendingInbound":
@@ -398,7 +436,12 @@ def _blocking_reasons(
             {
                 "Code": "MATERIAL_INBOUND_PENDING",
                 "Category": "Material",
-                "Details": {"Risks": candidate.get("InventoryRisks", [])},
+                "Details": {
+                    "Risks": candidate.get("InventoryRisks", []),
+                    "MaterialLookaheadMinutes": release_policy_settings(
+                        release_policy
+                    ).material_lookahead_minutes,
+                },
             }
         )
     if candidate.get("WipStatus") == "Blocked":
@@ -406,10 +449,48 @@ def _blocking_reasons(
             {
                 "Code": "WIP_LIMIT_EXCEEDED",
                 "Category": "WIP",
-                "Details": {"Risks": candidate.get("WipRisks", [])},
+                "Details": {
+                    "Risks": candidate.get("WipRisks", []),
+                    "PolicyMaxWipCount": release_policy_settings(
+                        release_policy
+                    ).max_wip_count,
+                },
             }
         )
     return reasons
+
+
+def _candidate_stability(
+    *,
+    candidate: dict[str, object],
+    evaluated_at: datetime,
+    gate_allowed: bool,
+    release_policy: dict[str, object] | None,
+) -> dict[str, object] | None:
+    suggested_release_at = _parse_datetime(candidate.get("SuggestedReleaseAt"))
+    if suggested_release_at is None:
+        return None
+    settings = release_policy_settings(release_policy)
+    result = evaluate_release_stability(
+        ReleaseStabilityInput(
+            order_id=str(candidate.get("OrderID")),
+            planned_release_at=suggested_release_at,
+            evaluated_release_at=evaluated_at,
+            gate_allowed=gate_allowed,
+            consecutive_blocked_count=0 if gate_allowed else 1,
+        ),
+        policy=settings.stability_policy,
+    )
+    return {
+        "DeviationMinutes": result.deviation_minutes,
+        "AbsoluteDeviationMinutes": result.absolute_deviation_minutes,
+        "TimingStatus": result.timing_status,
+        "Severity": result.severity,
+        "Action": result.action,
+        "ReplanRequired": result.replan_required,
+        "ReasonCode": result.reason_code,
+        "Policy": release_policy_evidence(release_policy)["StabilityPolicy"],
+    }
 
 
 def _distinct(rows: list[dict[str, object]], key: str) -> list[object]:

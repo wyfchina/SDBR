@@ -30,11 +30,13 @@ def test_seed_baseline_test_data_builds_business_readable_state():
     assert BASELINE_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert WIP_LIMIT_OPERATIONAL_STATE_ID in store.operational_state_snapshots
-    assert sorted(store.planning_runs) == [
+    assert {
         "TST-RUN-BASELINE-001",
         "TST-RUN-MATERIAL-SHORTAGE-001",
         "TST-RUN-WIP-LIMIT-001",
-    ]
+        "TST-CP-RUN-FINITE-001",
+        "TST-CP-RUN-INFEASIBLE-001",
+    } <= set(store.planning_runs)
     assert all(
         run["SolverBackendID"] == "ortools"
         for run in store.planning_runs.values()
@@ -50,7 +52,7 @@ def test_test_case_catalog_documents_business_acceptance_cases():
     payload = build_test_case_catalog_payload()
 
     assert payload["DatasetID"] == "TST-DATASET-BASELINE-20260619"
-    assert payload["CaseCount"] == 3
+    assert payload["CaseCount"] == 9
     cases = {case["CaseID"]: case for case in payload["Cases"]}
     assert cases["TST-CASE-BASELINE"]["PlanningRunID"] == "TST-RUN-BASELINE-001"
     assert cases["TST-CASE-BASELINE"]["InputSummaryZh"].startswith("使用基准主数据")
@@ -62,6 +64,15 @@ def test_test_case_catalog_documents_business_acceptance_cases():
     ]
     assert cases["TST-CASE-WIP-LIMIT"]["ExpectedBlockingCodes"] == [
         "WIP_LIMIT_EXCEEDED"
+    ]
+    assert cases["TST-CP-FINITE-RESOURCE"]["CaseGroup"] == "CPSATBusinessCases"
+    assert cases["TST-CP-FINITE-RESOURCE"]["ExpectedScheduleAssertions"] == [
+        "FINITE_RESOURCE_NO_OVERLAP",
+        "ALL_ORDERS_SCHEDULED",
+    ]
+    assert cases["TST-CP-INFEASIBLE-WINDOW"]["ExpectedPlanningRunStatus"] == "DeadLetter"
+    assert cases["TST-CP-INFEASIBLE-WINDOW"]["ExpectedDiagnosticCodes"] == [
+        "ORTOOLS_INFEASIBLE"
     ]
     assert all(
         case["ExpectedSolverBackendID"] == "ortools"
@@ -147,7 +158,7 @@ def test_test_case_catalog_endpoint_exposes_environment_metadata(tmp_path):
 
     assert response.status_code == 200
     data = response.json()["Data"]
-    assert data["CaseCount"] == 3
+    assert data["CaseCount"] == 9
     assert data["Environment"]["EnvironmentID"] == "test"
     assert data["Cases"][0]["CoveredSpecIDs"]
 
@@ -163,7 +174,7 @@ def test_test_case_acceptance_endpoint_marks_pending_cases_as_needing_execution(
     data = response.json()["Data"]
     assert data["AcceptancePackageID"] == "TST-ACP-BASELINE-20260619"
     assert data["Summary"]["PendingHumanDecisionCount"] == 0
-    assert data["Summary"]["NeedsExecutionCount"] == 3
+    assert data["Summary"]["NeedsExecutionCount"] == 9
     assert {case["AcceptanceStatus"] for case in data["Cases"]} == {
         "NeedsExecution"
     }

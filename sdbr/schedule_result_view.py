@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
+from sdbr.release_policy import effective_rope_buffer_minutes
+
 
 def build_schedule_result_workbench(
     *,
@@ -19,7 +21,15 @@ def build_schedule_result_workbench(
         schedule=schedule,
         resources=resources,
         buffer_zones=buffer_zones,
-        time_buffer_minutes=int(planning_run.get("TimeBufferMinutes", 0)),
+        time_buffer_minutes=effective_rope_buffer_minutes(
+            release_policy=(
+                planning_run.get("FrozenReleasePolicy")
+                if isinstance(planning_run.get("FrozenReleasePolicy"), dict)
+                else None
+            ),
+            fallback_time_buffer_minutes=int(planning_run.get("TimeBufferMinutes", 0)),
+        ),
+        calendar_overrides=_dict_list(planning_run.get("FrozenCalendarOverrides")),
     )
     system_load, resource_load = _build_load_views(
         schedule=schedule,
@@ -53,6 +63,7 @@ def build_schedule_result_workbench(
             or planning_run.get("CompletedAt"),
             "SolverBackendID": planning_run.get("SolverBackendID"),
             "SolverStatus": planning_run.get("SolverStatus"),
+            "ReleasePolicyVersionID": planning_run.get("ReleasePolicyVersionID"),
         },
         "KPIs": {
             "OrderCount": int(schedule.get("OrderCount", len(order_delivery))),
@@ -137,6 +148,7 @@ def _build_gantt(
     resources: dict[str, dict[str, object]],
     buffer_zones: dict[str, str],
     time_buffer_minutes: int,
+    calendar_overrides: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     first_bar_by_order: dict[str, tuple[str, dict[str, object]]] = {}
@@ -184,6 +196,11 @@ def _build_gantt(
             )
     _append_downtime_bars(
         schedule=schedule,
+        resources=resources,
+        rows_by_resource=rows_by_resource,
+    )
+    _append_calendar_override_bars(
+        calendar_overrides=calendar_overrides or [],
         resources=resources,
         rows_by_resource=rows_by_resource,
     )
@@ -411,6 +428,55 @@ def _append_downtime_bars(
                     "BufferZone": None,
                 }
             )
+
+
+def _append_calendar_override_bars(
+    *,
+    calendar_overrides: list[dict[str, object]],
+    resources: dict[str, dict[str, object]],
+    rows_by_resource: dict[str, dict[str, object]],
+) -> None:
+    for override in calendar_overrides:
+        if override.get("Status") != "Active":
+            continue
+        if override.get("OverrideType") != "ExclusionOrMaintenance":
+            continue
+        parsed_start = _parse_datetime(override.get("EffectiveStartAt"))
+        parsed_end = _parse_datetime(override.get("EffectiveEndAt"))
+        if parsed_start is None or parsed_end is None:
+            continue
+        for resource_id in _override_resource_ids(override, resources):
+            row = rows_by_resource.get(resource_id)
+            if row is None:
+                continue
+            row["Bars"].append(
+                {
+                    "OperationID": override.get("OverrideID") or "CALENDAR-OVERRIDE",
+                    "OrderID": None,
+                    "Start": parsed_start.isoformat(),
+                    "End": parsed_end.isoformat(),
+                    "DurationMinutes": int(
+                        (parsed_end - parsed_start).total_seconds() / 60
+                    ),
+                    "BarType": "Maintenance",
+                    "BufferZone": None,
+                }
+            )
+
+
+def _override_resource_ids(
+    override: dict[str, object],
+    resources: dict[str, dict[str, object]],
+) -> list[str]:
+    resource_id = override.get("ResourceID")
+    if resource_id:
+        return [str(resource_id)] if str(resource_id) in resources else []
+    calendar_id = override.get("CalendarID")
+    return [
+        item_resource_id
+        for item_resource_id, metadata in resources.items()
+        if _dict(metadata.get("Calendar")).get("CalendarID") == calendar_id
+    ]
     reference_tz = None
     for row in rows_by_resource.values():
         for bar in _dict_list(row.get("Bars")):

@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from sdbr.calendar_overrides import apply_calendar_overrides
 from sdbr.planner_workbench import (
     MaintenanceWindow,
     Operation,
@@ -1224,6 +1225,113 @@ def test_build_capacity_buckets_from_resources_uses_calendar_shifts_and_maintena
             capacity_minutes=60,
         ),
     ]
+
+
+def test_calendar_overrides_apply_maintenance_overtime_and_temporary_windows():
+    resource = Resource(
+        resource_id="WC-DRUM",
+        name="Constraint Cutter",
+        is_constraint=True,
+        daily_capacity_minutes={date(2026, 6, 16): 999},
+        calendar=WorkCalendar(
+            calendar_id="CAL-DRUM",
+            working_weekdays={0, 1, 2, 3, 4},
+            shifts=[
+                Shift(
+                    name="Day",
+                    start=datetime.strptime("08:00", "%H:%M").time(),
+                    end=datetime.strptime("12:00", "%H:%M").time(),
+                )
+            ],
+            maintenance_windows=[],
+            holidays=set(),
+        ),
+    )
+
+    application = apply_calendar_overrides(
+        resources=[resource],
+        overrides=[
+            {
+                "OverrideID": "CAL-OVR-MAINT",
+                "CalendarID": "CAL-DRUM",
+                "OverrideType": "ExclusionOrMaintenance",
+                "EffectiveStartAt": "2026-06-16T09:00:00+00:00",
+                "EffectiveEndAt": "2026-06-16T10:00:00+00:00",
+                "Status": "Active",
+            },
+            {
+                "OverrideID": "CAL-OVR-OT",
+                "CalendarID": "CAL-DRUM",
+                "ResourceID": "WC-DRUM",
+                "OverrideType": "Overtime",
+                "EffectiveStartAt": "2026-06-16T06:00:00+00:00",
+                "EffectiveEndAt": "2026-06-16T08:00:00+00:00",
+                "CapacityDeltaMinutes": 90,
+                "Status": "Active",
+            },
+            {
+                "OverrideID": "CAL-OVR-SHIFT",
+                "CalendarID": "CAL-DRUM",
+                "OverrideType": "TemporaryShiftOverride",
+                "EffectiveStartAt": "2026-06-16T13:00:00+00:00",
+                "EffectiveEndAt": "2026-06-16T15:00:00+00:00",
+                "Status": "Active",
+            },
+        ],
+    )
+
+    buckets = build_capacity_buckets_from_resources(
+        application.resources,
+        tzinfo=timezone.utc,
+    )
+
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 8, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
+        capacity_minutes=60,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 10, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 12, tzinfo=timezone.utc),
+        capacity_minutes=120,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 6, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 8, tzinfo=timezone.utc),
+        capacity_minutes=90,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 13, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 15, tzinfo=timezone.utc),
+        capacity_minutes=120,
+    ) in buckets
+    assert {diagnostic.code for diagnostic in application.diagnostics} == {
+        "CALENDAR_OVERRIDES_APPLIED"
+    }
+
+
+def test_calendar_override_reports_not_applied_when_no_resource_matches():
+    application = apply_calendar_overrides(
+        resources=[],
+        overrides=[
+            {
+                "OverrideID": "CAL-OVR-NOMATCH",
+                "CalendarID": "CAL-MISSING",
+                "OverrideType": "Overtime",
+                "EffectiveStartAt": "2026-06-16T06:00:00+00:00",
+                "EffectiveEndAt": "2026-06-16T08:00:00+00:00",
+                "Status": "Active",
+            }
+        ],
+    )
+
+    assert application.applied_overrides == []
+    assert application.diagnostics[0].code == "CALENDAR_OVERRIDE_NOT_APPLIED"
+    assert application.diagnostics[0].entity_id == "CAL-OVR-NOMATCH"
 
 
 def test_baseline_finite_scheduler_serializes_operations_on_same_resource():

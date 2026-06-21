@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import json
 from pathlib import Path
 import shutil
@@ -17,7 +17,7 @@ from sdbr.material_state import (
 )
 from sdbr.operational_state import create_operational_state_snapshot
 from sdbr.order_import import OrderImportRow, import_orders_from_rows
-from sdbr.planner_workbench import Resource, Routing, SchedulingOrder
+from sdbr.planner_workbench import Operation, Resource, Routing, SchedulingOrder, Shift, WorkCalendar
 from sdbr.resource_import import ResourceCapacityImportRow, import_resources_from_capacity_rows
 from sdbr.routing_import import RoutingImportRow, import_routings_from_operation_rows
 from sdbr.runtime_environment import resolve_runtime_environment
@@ -49,6 +49,8 @@ class TestDataResetSummary:
 @dataclass(frozen=True, slots=True)
 class TestCaseSpec:
     case_id: str
+    case_group: str
+    case_type: str
     name_zh: str
     name_en: str
     planning_run_id: str
@@ -61,6 +63,8 @@ class TestCaseSpec:
     expected_release_ready_min: int
     expected_blocking_codes: list[str]
     expected_publication_status: str
+    expected_schedule_assertions: list[str]
+    expected_diagnostic_codes: list[str]
     input_summary_zh: str
     expected_schedule_zh: str
     expected_release_zh: str
@@ -70,6 +74,8 @@ class TestCaseSpec:
     def to_dict(self) -> dict[str, object]:
         return {
             "CaseID": self.case_id,
+            "CaseGroup": self.case_group,
+            "CaseType": self.case_type,
             "NameZh": self.name_zh,
             "NameEn": self.name_en,
             "PlanningRunID": self.planning_run_id,
@@ -82,6 +88,8 @@ class TestCaseSpec:
             "ExpectedReleaseReadyMin": self.expected_release_ready_min,
             "ExpectedBlockingCodes": self.expected_blocking_codes,
             "ExpectedPublicationStatus": self.expected_publication_status,
+            "ExpectedScheduleAssertions": self.expected_schedule_assertions,
+            "ExpectedDiagnosticCodes": self.expected_diagnostic_codes,
             "InputSummaryZh": self.input_summary_zh,
             "ExpectedScheduleZh": self.expected_schedule_zh,
             "ExpectedReleaseZh": self.expected_release_zh,
@@ -94,6 +102,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
     return [
         TestCaseSpec(
             case_id="TST-CASE-BASELINE",
+            case_group="BusinessClosure",
+            case_type="EndToEnd",
             name_zh="基准排程与释放",
             name_en="Baseline schedule and release",
             planning_run_id="TST-RUN-BASELINE-001",
@@ -106,6 +116,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_release_ready_min=1,
             expected_blocking_codes=[],
             expected_publication_status="Draft",
+            expected_schedule_assertions=[],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
             input_summary_zh="使用基准主数据、基准库存/在途/WIP 快照和 12 张测试工单。",
             expected_schedule_zh="CP-SAT 应生成 Completed 计划，约束资源工序不重叠，12 张工单均有计划开始和完工时间。",
             expected_release_zh="至少存在一个可释放候选；可释放工单无结构化阻塞原因。",
@@ -120,6 +132,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
         ),
         TestCaseSpec(
             case_id="TST-CASE-MATERIAL-SHORTAGE",
+            case_group="BusinessClosure",
+            case_type="ReleaseGate",
             name_zh="物料短缺门控",
             name_en="Material shortage release gate",
             planning_run_id="TST-RUN-MATERIAL-SHORTAGE-001",
@@ -132,6 +146,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_release_ready_min=0,
             expected_blocking_codes=["MATERIAL_SHORTAGE"],
             expected_publication_status="Draft",
+            expected_schedule_assertions=[],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
             input_summary_zh="使用相同排程主数据，但运行状态快照将关键物料可用量推迟到未来到达。",
             expected_schedule_zh="有限产能排程仍应完成，物料短缺不作为当前 CP-SAT 硬约束。",
             expected_release_zh="所有候选被物料短缺或在途未到阻塞，并返回 MATERIAL_SHORTAGE。",
@@ -146,6 +162,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
         ),
         TestCaseSpec(
             case_id="TST-CASE-WIP-LIMIT",
+            case_group="BusinessClosure",
+            case_type="ReleaseGate",
             name_zh="WIP 上限门控",
             name_en="WIP limit release gate",
             planning_run_id="TST-RUN-WIP-LIMIT-001",
@@ -158,6 +176,8 @@ def test_case_catalog() -> list[TestCaseSpec]:
             expected_release_ready_min=0,
             expected_blocking_codes=["WIP_LIMIT_EXCEEDED"],
             expected_publication_status="Draft",
+            expected_schedule_assertions=[],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
             input_summary_zh="使用相同排程主数据，但运行状态快照将 WIP 设置到上限。",
             expected_schedule_zh="有限产能排程仍应完成，WIP 限制由释放门控判断。",
             expected_release_zh="所有候选因 WIP 达到上限被阻塞，并返回 WIP_LIMIT_EXCEEDED。",
@@ -169,6 +189,150 @@ def test_case_catalog() -> list[TestCaseSpec]:
                 "BE-REL-005",
                 "BE-UI-004",
             ],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-FINITE-RESOURCE",
+            case_group="CPSATBusinessCases",
+            case_type="FiniteCapacity",
+            name_zh="CP-SAT 约束资源有限产能",
+            name_en="CP-SAT finite constraint capacity",
+            planning_run_id="TST-CP-RUN-FINITE-001",
+            master_data_version_id="TST-CP-MDV-FINITE-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证同一约束资源上的工序不会重叠，业务含义是瓶颈设备一次只能加工一张工单。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["FINITE_RESOURCE_NO_OVERLAP", "ALL_ORDERS_SCHEDULED"],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="两张工单共用同一台约束资源，每张加工 120 分钟，无备用资源。",
+            expected_schedule_zh="两张工单应前后排产，不允许在同一时段占用同一约束资源。",
+            expected_release_zh="本案例聚焦排程，不要求释放候选数量。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=["BE-DATA-014", "BE-SOLVER-009"],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-ALTERNATE-RESOURCE",
+            case_group="CPSATBusinessCases",
+            case_type="AlternateResource",
+            name_zh="CP-SAT 备用资源选择",
+            name_en="CP-SAT alternate resource choice",
+            planning_run_id="TST-CP-RUN-ALTERNATE-001",
+            master_data_version_id="TST-CP-MDV-ALTERNATE-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证主资源拥堵时，CP-SAT 可以把工序分配到备用资源以缩短整体完工。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["ALTERNATE_RESOURCE_USED"],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="两张工单的主资源相同，其中一张允许使用备用资源。",
+            expected_schedule_zh="至少一项工序应使用备用资源；若主资源等待代价更高，备用资源是合理选择。",
+            expected_release_zh="本案例聚焦排程，不要求释放候选数量。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=["BE-DATA-014", "BE-SOLVER-009"],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-CALENDAR-OVERTIME",
+            case_group="CPSATBusinessCases",
+            case_type="CalendarOverride",
+            name_zh="CP-SAT 日历维护与加班",
+            name_en="CP-SAT calendar maintenance and overtime",
+            planning_run_id="TST-CP-RUN-CALENDAR-001",
+            master_data_version_id="TST-CP-MDV-CALENDAR-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证 Active 临时日历覆盖会被冻结到 Planning Run，并真正改变 CP-SAT 可用产能窗口。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["CALENDAR_OVERRIDE_APPLIED", "MAINTENANCE_WINDOW_AVOIDED", "OVERTIME_WINDOW_USED"],
+            expected_diagnostic_codes=["CALENDAR_OVERRIDES_APPLIED", "ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="同一资源白天维护不可用，晚上有加班窗口；工序只能排进可用窗口。",
+            expected_schedule_zh="工序不能落入维护窗口，且应使用加班窗口完成排产。",
+            expected_release_zh="本案例聚焦排程，不要求释放候选数量。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=["BE-DATA-014", "BE-DATA-010", "BE-SOLVER-011"],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-RESOURCE-EFFICIENCY",
+            case_group="CPSATBusinessCases",
+            case_type="ResourceEfficiency",
+            name_zh="CP-SAT 资源效率修正",
+            name_en="CP-SAT resource efficiency adjustment",
+            planning_run_id="TST-CP-RUN-EFFICIENCY-001",
+            master_data_version_id="TST-CP-MDV-EFFICIENCY-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证资源效率会改变实际排程时长，业务含义是低效率设备需要占用更长时间。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["EFFICIENCY_DURATION_APPLIED"],
+            expected_diagnostic_codes=["ORTOOLS_RESOURCE_EFFICIENCY_ENABLED", "ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="同一 60 分钟标准工序分配到效率 50% 的资源。",
+            expected_schedule_zh="计划占用时长应变为 120 分钟，而不是仍按标准 60 分钟。",
+            expected_release_zh="本案例聚焦排程，不要求释放候选数量。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=["BE-DATA-014", "BE-SOLVER-011"],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-SETUP-SEQUENCE",
+            case_group="CPSATBusinessCases",
+            case_type="SetupTransition",
+            name_zh="CP-SAT 顺序相关换型",
+            name_en="CP-SAT sequence dependent setup",
+            planning_run_id="TST-CP-RUN-SETUP-001",
+            master_data_version_id="TST-CP-MDV-SETUP-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证不同产品族在同一有限资源上切换时，需要加入换型间隔。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["SETUP_LAG_APPLIED"],
+            expected_diagnostic_codes=["ORTOOLS_SETUP_TRANSITIONS_ENABLED", "ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="两张不同产品族工单共用同一有限资源，并配置 A 到 B 的 45 分钟换型。",
+            expected_schedule_zh="两张不同产品族工单之间必须至少保留 45 分钟换型间隔，不依赖具体先后顺序。",
+            expected_release_zh="本案例聚焦排程，不要求释放候选数量。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=["BE-DATA-014", "BE-SOLVER-010"],
+        ),
+        TestCaseSpec(
+            case_id="TST-CP-INFEASIBLE-WINDOW",
+            case_group="CPSATBusinessCases",
+            case_type="InfeasibleDiagnostic",
+            name_zh="CP-SAT 时间窗不可行诊断",
+            name_en="CP-SAT infeasible time window diagnostic",
+            planning_run_id="TST-CP-RUN-INFEASIBLE-001",
+            master_data_version_id="TST-CP-MDV-INFEASIBLE-20260621",
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证时间窗过窄时系统返回结构化不可行诊断，而不是输出看似可执行的错误计划。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="DeadLetter",
+            expected_solver_statuses=["Infeasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Unavailable",
+            expected_schedule_assertions=["INFEASIBLE_DIAGNOSTIC_REPORTED"],
+            expected_diagnostic_codes=["ORTOOLS_INFEASIBLE"],
+            input_summary_zh="一项 120 分钟工序被限制在 60 分钟时间窗内完成。",
+            expected_schedule_zh="Planning Run 应失败，SolverStatus 为 Infeasible，并返回 ORTOOLS_INFEASIBLE。",
+            expected_release_zh="不可行计划不进入释放候选。",
+            expected_publication_zh="不可行计划无发布资格，发布视图显示不可用且无允许动作。",
+            covered_spec_ids=["BE-DATA-014", "BE-SOLVER-009", "BE-SOLVER-011"],
         ),
     ]
 
@@ -291,6 +455,7 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             snapshot_id=snapshot_id,
             requested_at=captured_at,
         )
+    _seed_cp_sat_business_cases(store=store, captured_at=captured_at)
 
     store.audit_events.append(
         {
@@ -317,6 +482,217 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
         routing_count=len(routings),
         order_count=len(orders),
     )
+
+
+def _seed_cp_sat_business_cases(
+    *,
+    store: WorkbenchStateStore,
+    captured_at: datetime,
+) -> None:
+    case_builders = [
+        _cp_finite_case,
+        _cp_alternate_case,
+        _cp_calendar_case,
+        _cp_efficiency_case,
+        _cp_setup_case,
+        _cp_infeasible_case,
+    ]
+    for builder in case_builders:
+        version_id, run_id, resources, routings, orders, run_options = builder(captured_at)
+        inventory_buffers = _baseline_inventory_buffers()
+        material_requirements: list[MaterialRequirement] = []
+        validation = validate_master_data(
+            resources=resources,
+            routings=routings,
+            orders=orders,
+            inventory_buffers=inventory_buffers,
+            material_requirements=material_requirements,
+            calendar_timezone=None,
+        )
+        store.master_data_versions[version_id] = {
+            "VersionID": version_id,
+            "CapturedAt": captured_at.isoformat(),
+            "SourceSystem": "SDBR-CP-SAT-TestData",
+            "CreatedBy": "sdbr-test-data",
+            "CalendarTimezone": run_options.get("CalendarTimezone"),
+            "Status": "Valid" if validation.is_valid else "Invalid",
+            "Resources": _resources_to_dict(resources),
+            "Routings": _routings_to_dict(routings),
+            "Orders": _orders_to_dict(orders),
+            "InventoryBuffers": _inventory_buffers_to_dict(inventory_buffers),
+            "MaterialRequirements": [],
+            "Validation": _validation_to_dict(validation),
+        }
+        store.planning_runs[run_id] = _pending_run_record(
+            run_id=run_id,
+            snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            requested_at=captured_at,
+            master_data_version_id=version_id,
+            problem_id=str(run_options.get("ProblemID", run_id.replace("RUN", "PROBLEM"))),
+            time_buffer_minutes=int(run_options.get("TimeBufferMinutes", 0)),
+            objective_strategy_id=str(run_options.get("ObjectiveStrategyID", "balanced")),
+            setup_transitions=list(run_options.get("SetupTransitions", [])),
+            frozen_calendar_overrides=list(
+                run_options.get("FrozenCalendarOverrides", [])
+            ),
+        )
+        for override in run_options.get("FrozenCalendarOverrides", []):
+            store.calendar_overrides[str(override["OverrideID"])] = dict(override)
+
+
+def _cp_finite_case(captured_at: datetime):
+    resource = Resource("TST-CP-DRUM", "CP案例-单台约束资源", True, {date(2026, 6, 22): 480})
+    routing = Routing(
+        "TST-CP-FG-FIN",
+        [Operation("CUT", "TST-CP-DRUM", 120, 10)],
+    )
+    orders = [
+        SchedulingOrder("TST-CP-WO-FIN-1", routing.product_id, 1, datetime(2026, 6, 22, 17, tzinfo=timezone.utc), date(2026, 6, 22)),
+        SchedulingOrder("TST-CP-WO-FIN-2", routing.product_id, 1, datetime(2026, 6, 22, 17, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    return "TST-CP-MDV-FINITE-20260621", "TST-CP-RUN-FINITE-001", [resource], [routing], orders, {}
+
+
+def _cp_alternate_case(captured_at: datetime):
+    resources = [
+        Resource("TST-CP-PRIMARY", "CP案例-主资源", True, {date(2026, 6, 22): 480}),
+        Resource("TST-CP-ALT", "CP案例-备用资源", True, {date(2026, 6, 22): 480}),
+    ]
+    routing = Routing(
+        "TST-CP-FG-ALT",
+        [Operation("CUT", "TST-CP-PRIMARY", 120, 10, ["TST-CP-ALT"])],
+    )
+    orders = [
+        SchedulingOrder("TST-CP-WO-ALT-1", routing.product_id, 1, datetime(2026, 6, 22, 13, tzinfo=timezone.utc), date(2026, 6, 22)),
+        SchedulingOrder("TST-CP-WO-ALT-2", routing.product_id, 1, datetime(2026, 6, 22, 13, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    return "TST-CP-MDV-ALTERNATE-20260621", "TST-CP-RUN-ALTERNATE-001", resources, [routing], orders, {
+        "ObjectiveStrategyID": "flow_first"
+    }
+
+
+def _cp_calendar_case(captured_at: datetime):
+    resource = Resource(
+        "TST-CP-CAL",
+        "CP案例-日历资源",
+        True,
+        {date(2026, 6, 22): 240},
+        calendar=WorkCalendar(
+            "TST-CP-CAL-CALENDAR",
+            {0},
+            [Shift("早班", time(8), time(12))],
+            [],
+        ),
+    )
+    routing = Routing(
+        "TST-CP-FG-CAL",
+        [Operation("HEAT", "TST-CP-CAL", 90, 10)],
+    )
+    orders = [
+        SchedulingOrder("TST-CP-WO-CAL-1", routing.product_id, 1, datetime(2026, 6, 22, 23, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    overrides = [
+        {
+            "OverrideID": "TST-CP-CAL-MAINT-001",
+            "CalendarID": "TST-CP-CAL-CALENDAR",
+            "ResourceID": "TST-CP-CAL",
+            "OverrideType": "ExclusionOrMaintenance",
+            "EffectiveStartAt": "2026-06-22T08:00:00+00:00",
+            "EffectiveEndAt": "2026-06-22T12:00:00+00:00",
+            "CapacityDeltaMinutes": 0,
+            "ShiftName": "维护",
+            "Reason": "业务案例：白天维护不可排产",
+            "CreatedAt": captured_at.isoformat(),
+            "CreatedBy": "sdbr-test-data",
+            "Status": "Active",
+        },
+        {
+            "OverrideID": "TST-CP-CAL-OT-001",
+            "CalendarID": "TST-CP-CAL-CALENDAR",
+            "ResourceID": "TST-CP-CAL",
+            "OverrideType": "Overtime",
+            "EffectiveStartAt": "2026-06-22T18:00:00+00:00",
+            "EffectiveEndAt": "2026-06-22T20:00:00+00:00",
+            "CapacityDeltaMinutes": 120,
+            "ShiftName": "加班",
+            "Reason": "业务案例：晚间加班可排产",
+            "CreatedAt": captured_at.isoformat(),
+            "CreatedBy": "sdbr-test-data",
+            "Status": "Active",
+        },
+    ]
+    return "TST-CP-MDV-CALENDAR-20260621", "TST-CP-RUN-CALENDAR-001", [resource], [routing], orders, {
+        "FrozenCalendarOverrides": overrides,
+        "CalendarTimezone": "UTC",
+    }
+
+
+def _cp_efficiency_case(captured_at: datetime):
+    resource = Resource(
+        "TST-CP-SLOW",
+        "CP案例-低效率资源",
+        True,
+        {date(2026, 6, 22): 480},
+        efficiency_percent=50,
+    )
+    routing = Routing(
+        "TST-CP-FG-EFF",
+        [Operation("PROCESS", "TST-CP-SLOW", 60, 10)],
+    )
+    orders = [
+        SchedulingOrder("TST-CP-WO-EFF-1", routing.product_id, 1, datetime(2026, 6, 22, 17, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    return "TST-CP-MDV-EFFICIENCY-20260621", "TST-CP-RUN-EFFICIENCY-001", [resource], [routing], orders, {}
+
+
+def _cp_setup_case(captured_at: datetime):
+    resource = Resource("TST-CP-SETUP", "CP案例-换型资源", True, {date(2026, 6, 22): 480})
+    routings = [
+        Routing("TST-CP-FG-A", [Operation("CUT", "TST-CP-SETUP", 60, 10, setup_family="FAM-A")]),
+        Routing("TST-CP-FG-B", [Operation("CUT", "TST-CP-SETUP", 60, 10, setup_family="FAM-B")]),
+    ]
+    orders = [
+        SchedulingOrder("TST-CP-WO-SET-A", "TST-CP-FG-A", 1, datetime(2026, 6, 22, 13, tzinfo=timezone.utc), date(2026, 6, 22)),
+        SchedulingOrder("TST-CP-WO-SET-B", "TST-CP-FG-B", 1, datetime(2026, 6, 22, 14, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    return "TST-CP-MDV-SETUP-20260621", "TST-CP-RUN-SETUP-001", [resource], routings, orders, {
+            "SetupTransitions": [
+                {
+                    "ResourceID": "TST-CP-SETUP",
+                    "FromFamily": "FAM-A",
+                    "ToFamily": "FAM-B",
+                    "SetupMinutes": 45,
+                },
+                {
+                    "ResourceID": "TST-CP-SETUP",
+                    "FromFamily": "FAM-B",
+                    "ToFamily": "FAM-A",
+                    "SetupMinutes": 45,
+                },
+            ]
+    }
+
+
+def _cp_infeasible_case(captured_at: datetime):
+    start = datetime(2026, 6, 22, 8, tzinfo=timezone.utc)
+    resource = Resource("TST-CP-TIGHT", "CP案例-时间窗资源", True, {date(2026, 6, 22): 480})
+    routing = Routing(
+        "TST-CP-FG-INF",
+        [
+            Operation(
+                "CUT",
+                "TST-CP-TIGHT",
+                120,
+                10,
+                earliest_start_at=start,
+                latest_end_at=start + timedelta(minutes=60),
+            )
+        ],
+    )
+    orders = [
+        SchedulingOrder("TST-CP-WO-INF-1", routing.product_id, 1, datetime(2026, 6, 22, 17, tzinfo=timezone.utc), date(2026, 6, 22)),
+    ]
+    return "TST-CP-MDV-INFEASIBLE-20260621", "TST-CP-RUN-INFEASIBLE-001", [resource], [routing], orders, {}
 
 
 def reset_test_database(
@@ -512,17 +888,31 @@ def _pending_run_record(
     run_id: str,
     snapshot_id: str,
     requested_at: datetime,
+    master_data_version_id: str = BASELINE_MASTER_DATA_VERSION_ID,
+    problem_id: str = "TST-PROBLEM-BASELINE",
+    time_buffer_minutes: int = 480,
+    objective_strategy_id: str = "balanced",
+    setup_transitions: list[dict[str, object]] | None = None,
+    frozen_calendar_overrides: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "RunID": run_id,
-        "ProblemID": "TST-PROBLEM-BASELINE",
+        "ProblemID": problem_id,
         "Status": "Pending",
-        "MasterDataVersionID": BASELINE_MASTER_DATA_VERSION_ID,
+        "MasterDataVersionID": master_data_version_id,
         "MasterDataCapturedAt": requested_at.isoformat(),
         "OperationalStateSnapshotID": snapshot_id,
         "OperationalStateCapturedAt": requested_at.isoformat(),
+        "SourceRunID": None,
+        "ReleasePolicyVersionID": None,
+        "FrozenReleasePolicy": None,
+        "FrozenCalendarOverrides": [dict(item) for item in (frozen_calendar_overrides or [])],
         "ScheduleStartAt": datetime(2026, 6, 22, 8, tzinfo=timezone.utc).isoformat(),
-        "TimeBufferMinutes": 480,
+        "TimeBufferMinutes": time_buffer_minutes,
+        "FreezeWindowMinutes": 0,
+        "ObjectiveStrategyID": objective_strategy_id,
+        "FrozenSchedulingStrategy": None,
+        "SetupTransitions": [dict(item) for item in (setup_transitions or [])],
         "SolverBackendID": "ortools",
         "TimeLimitSeconds": 300,
         "MaxAttempts": 3,
@@ -572,6 +962,39 @@ def _resources_to_dict(resources: list[Resource]) -> list[dict[str, object]]:
                 capacity_date.isoformat(): minutes
                 for capacity_date, minutes in resource.daily_capacity_minutes.items()
             },
+            "CapacityUnits": resource.capacity_units,
+            "EfficiencyPercent": resource.efficiency_percent,
+            "ResourceType": resource.resource_type,
+            "IsBuffered": resource.is_buffered,
+            "OwnerID": resource.owner_id,
+            "Category": resource.category,
+            "Calendar": (
+                {
+                    "CalendarID": resource.calendar.calendar_id,
+                    "WorkingWeekdays": sorted(resource.calendar.working_weekdays),
+                    "Shifts": [
+                        {
+                            "Name": shift.name,
+                            "Start": shift.start.isoformat(),
+                            "End": shift.end.isoformat(),
+                        }
+                        for shift in resource.calendar.shifts
+                    ],
+                    "MaintenanceWindows": [
+                        {
+                            "Start": window.start.isoformat(),
+                            "End": window.end.isoformat(),
+                        }
+                        for window in resource.calendar.maintenance_windows
+                    ],
+                    "Holidays": [
+                        holiday.isoformat()
+                        for holiday in sorted(resource.calendar.holidays or set())
+                    ],
+                }
+                if resource.calendar is not None
+                else None
+            ),
         }
         for resource in resources
     ]
@@ -590,6 +1013,17 @@ def _routings_to_dict(routings: list[Routing]) -> list[dict[str, object]]:
                     "DurationMinutes": operation.duration_minutes,
                     "Sequence": operation.sequence,
                     "AlternateResourceIDs": operation.alternate_resource_ids or [],
+                    "SetupFamily": operation.setup_family,
+                    "EarliestStartAt": (
+                        operation.earliest_start_at.isoformat()
+                        if operation.earliest_start_at is not None
+                        else None
+                    ),
+                    "LatestEndAt": (
+                        operation.latest_end_at.isoformat()
+                        if operation.latest_end_at is not None
+                        else None
+                    ),
                 }
                 for operation in routing.operations
             ],

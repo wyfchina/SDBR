@@ -25,6 +25,8 @@ class ReleaseAuthorization:
     operational_state_snapshot_id: str | None = None
     operational_state_captured_at: str | None = None
     decision_package_id: str | None = None
+    release_policy_version_id: str | None = None
+    release_policy_evidence: dict[str, object] | None = None
 
 
 def create_release_authorization(
@@ -36,6 +38,8 @@ def create_release_authorization(
     operational_state_snapshot_id: str | None = None,
     operational_state_captured_at: datetime | None = None,
     decision_package_id: str | None = None,
+    release_policy_version_id: str | None = None,
+    release_policy_evidence: dict[str, object] | None = None,
 ) -> ReleaseAuthorization:
     if candidate.get("RecommendedAction") != "ReadyForRelease":
         raise ValueError("Only ReadyForRelease candidates can be authorized")
@@ -58,6 +62,8 @@ def create_release_authorization(
             else None
         ),
         decision_package_id=decision_package_id,
+        release_policy_version_id=release_policy_version_id,
+        release_policy_evidence=release_policy_evidence,
     )
 
 
@@ -84,6 +90,10 @@ def build_dispatch_package(
         )
     if authorization.decision_package_id is not None:
         package["DecisionPackageID"] = authorization.decision_package_id
+    if authorization.release_policy_version_id is not None:
+        package["ReleasePolicyVersionID"] = authorization.release_policy_version_id
+    if authorization.release_policy_evidence is not None:
+        package["ReleasePolicyEvidence"] = authorization.release_policy_evidence
     return package
 
 

@@ -114,7 +114,14 @@ def _case_row(
             "PublicationStatus"
         ],
     }
-    if planning_run.get("Status") != "Completed" or not isinstance(
+    if isinstance(planning_run.get("Schedule"), dict):
+        schedule = planning_run["Schedule"]
+        actual["OrderCount"] = schedule.get("OrderCount")
+        actual["GeneratedAt"] = schedule.get("GeneratedAt")
+        actual["DiagnosticCodes"] = _diagnostic_codes(schedule)
+        actual["ScheduleAssertions"] = _schedule_assertions(schedule=schedule, case=case)
+
+    if not isinstance(
         planning_run.get("Schedule"), dict
     ):
         return {
@@ -127,17 +134,20 @@ def _case_row(
             "Actual": actual,
         }
 
-    schedule = planning_run["Schedule"]
-    if isinstance(schedule, dict):
-        actual["OrderCount"] = schedule.get("OrderCount")
-        actual["GeneratedAt"] = schedule.get("GeneratedAt")
-
-    release = _release_summary(
-        planning_run=planning_run,
-        master_data_versions=master_data_versions,
-        operational_state_snapshots=operational_state_snapshots,
-        release_authorizations=release_authorizations,
-        evaluated_at=evaluated_at,
+    release = (
+        _release_summary(
+            planning_run=planning_run,
+            master_data_versions=master_data_versions,
+            operational_state_snapshots=operational_state_snapshots,
+            release_authorizations=release_authorizations,
+            evaluated_at=evaluated_at,
+        )
+        if planning_run.get("Status") == "Completed"
+        else {
+            "Status": "NotEvaluatedForNonCompletedPlan",
+            "Summary": {},
+            "BlockingCodes": [],
+        }
     )
     actual["Release"] = release
     failures = _case_failures(case=case, actual=actual, release=release)
@@ -223,6 +233,22 @@ def _case_failures(
         failures.append("PLANNING_RUN_STATUS_MISMATCH")
     if actual.get("SolverStatus") not in case.get("ExpectedSolverStatuses", []):
         failures.append("SOLVER_STATUS_MISMATCH")
+    diagnostic_codes = set(actual.get("DiagnosticCodes", []))
+    for code in case.get("ExpectedDiagnosticCodes", []):
+        if code not in diagnostic_codes:
+            failures.append(f"EXPECTED_DIAGNOSTIC_CODE_MISSING:{code}")
+    passed_assertions = {
+        str(item.get("AssertionID"))
+        for item in actual.get("ScheduleAssertions", [])
+        if isinstance(item, dict) and item.get("Passed") is True
+    }
+    for assertion_id in case.get("ExpectedScheduleAssertions", []):
+        if assertion_id not in passed_assertions:
+            failures.append(f"SCHEDULE_ASSERTION_FAILED:{assertion_id}")
+    if case.get("ExpectedPlanningRunStatus") != "Completed":
+        if actual.get("PublicationStatus") != case.get("ExpectedPublicationStatus"):
+            failures.append("PUBLICATION_STATUS_MISMATCH")
+        return failures
     if release.get("Status") != "Available":
         failures.append(str(release.get("Status") or "RELEASE_SUMMARY_UNAVAILABLE"))
         return failures
@@ -252,6 +278,8 @@ def _expected_summary(case: dict[str, object]) -> dict[str, object]:
         "ScheduleZh": case.get("ExpectedScheduleZh"),
         "ReleaseZh": case.get("ExpectedReleaseZh"),
         "PublicationZh": case.get("ExpectedPublicationZh"),
+        "ScheduleAssertions": case.get("ExpectedScheduleAssertions", []),
+        "DiagnosticCodes": case.get("ExpectedDiagnosticCodes", []),
     }
 
 
@@ -302,6 +330,24 @@ def _actual_vs_expected(
             actual.get("PublicationStatus"),
             actual.get("PublicationStatus") == case.get("ExpectedPublicationStatus"),
         ),
+        (
+            "DiagnosticCodes",
+            case.get("ExpectedDiagnosticCodes", []),
+            actual.get("DiagnosticCodes", []),
+            set(case.get("ExpectedDiagnosticCodes", []))
+            <= set(actual.get("DiagnosticCodes", [])),
+        ),
+        (
+            "ScheduleAssertions",
+            case.get("ExpectedScheduleAssertions", []),
+            actual.get("ScheduleAssertions", []),
+            set(case.get("ExpectedScheduleAssertions", []))
+            <= {
+                str(item.get("AssertionID"))
+                for item in actual.get("ScheduleAssertions", [])
+                if isinstance(item, dict) and item.get("Passed") is True
+            },
+        ),
     ]
     return [
         {
@@ -312,6 +358,163 @@ def _actual_vs_expected(
         }
         for check_id, expected, actual_value, passed in comparisons
     ]
+
+
+def _diagnostic_codes(schedule: dict[str, object]) -> list[str]:
+    return sorted(
+        {
+            str(item.get("Code"))
+            for item in schedule.get("SolverDiagnostics", [])
+            if isinstance(item, dict) and item.get("Code")
+        }
+    )
+
+
+def _schedule_assertions(
+    *,
+    schedule: dict[str, object],
+    case: dict[str, object],
+) -> list[dict[str, object]]:
+    requested = set(case.get("ExpectedScheduleAssertions", []))
+    checks: list[dict[str, object]] = []
+    if "ALL_ORDERS_SCHEDULED" in requested:
+        scheduled = _scheduled_order_count(schedule)
+        expected = int(schedule.get("OrderCount") or 0)
+        checks.append(
+            _assertion(
+                "ALL_ORDERS_SCHEDULED",
+                expected > 0 and scheduled == expected,
+                f"{scheduled} / {expected} orders have scheduled bars.",
+            )
+        )
+    if "FINITE_RESOURCE_NO_OVERLAP" in requested:
+        checks.append(_finite_resource_no_overlap(schedule))
+    if "ALTERNATE_RESOURCE_USED" in requested:
+        checks.append(
+            _assertion(
+                "ALTERNATE_RESOURCE_USED",
+                any("ALT" in str(bar.get("ResourceID", "")) for bar in _bars(schedule)),
+                "At least one scheduled bar is assigned to an alternate resource.",
+            )
+        )
+    if "CALENDAR_OVERRIDE_APPLIED" in requested:
+        summary = schedule.get("CalendarOverrideSummary", {})
+        checks.append(
+            _assertion(
+                "CALENDAR_OVERRIDE_APPLIED",
+                isinstance(summary, dict)
+                and int(summary.get("AppliedOverrideCount") or 0) > 0,
+                f"Applied overrides: {summary.get('AppliedOverrideCount') if isinstance(summary, dict) else 0}.",
+            )
+        )
+    if "MAINTENANCE_WINDOW_AVOIDED" in requested:
+        checks.append(_maintenance_window_avoided(schedule))
+    if "OVERTIME_WINDOW_USED" in requested:
+        checks.append(_overtime_window_used(schedule))
+    if "EFFICIENCY_DURATION_APPLIED" in requested:
+        checks.append(_operation_duration_assertion(schedule, "EFFICIENCY_DURATION_APPLIED", 120))
+    if "SETUP_LAG_APPLIED" in requested:
+        checks.append(_setup_lag_applied(schedule))
+    if "INFEASIBLE_DIAGNOSTIC_REPORTED" in requested:
+        checks.append(
+            _assertion(
+                "INFEASIBLE_DIAGNOSTIC_REPORTED",
+                "ORTOOLS_INFEASIBLE" in _diagnostic_codes(schedule),
+                "Solver diagnostics include ORTOOLS_INFEASIBLE.",
+            )
+        )
+    return checks
+
+
+def _assertion(assertion_id: str, passed: bool, evidence: str) -> dict[str, object]:
+    return {"AssertionID": assertion_id, "Passed": bool(passed), "Evidence": evidence}
+
+
+def _bars(schedule: dict[str, object]) -> list[dict[str, object]]:
+    result = []
+    rows = schedule.get("GanttRows", [])
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        for bar in row.get("Bars", []):
+            if isinstance(bar, dict):
+                result.append({**bar, "ResourceID": row.get("ResourceID")})
+    return result
+
+
+def _scheduled_order_count(schedule: dict[str, object]) -> int:
+    return len({str(bar.get("OrderID")) for bar in _bars(schedule) if bar.get("OrderID")})
+
+
+def _finite_resource_no_overlap(schedule: dict[str, object]) -> dict[str, object]:
+    rows = schedule.get("GanttRows", [])
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        bars = sorted(
+            [
+                bar
+                for bar in row.get("Bars", [])
+                if isinstance(bar, dict) and bar.get("Start") and bar.get("End")
+            ],
+            key=lambda item: str(item.get("Start")),
+        )
+        for left, right in zip(bars, bars[1:]):
+            if str(left.get("End")) > str(right.get("Start")):
+                return _assertion(
+                    "FINITE_RESOURCE_NO_OVERLAP",
+                    False,
+                    f"{row.get('ResourceID')} overlaps {left.get('OperationID')} and {right.get('OperationID')}.",
+                )
+    return _assertion("FINITE_RESOURCE_NO_OVERLAP", True, "No overlapping bars on scheduled resources.")
+
+
+def _maintenance_window_avoided(schedule: dict[str, object]) -> dict[str, object]:
+    maint_start = "2026-06-22T08:00:00+00:00"
+    maint_end = "2026-06-22T12:00:00+00:00"
+    for bar in _bars(schedule):
+        if str(bar.get("ResourceID")) != "TST-CP-CAL":
+            continue
+        if str(bar.get("Start")) < maint_end and str(bar.get("End")) > maint_start:
+            return _assertion("MAINTENANCE_WINDOW_AVOIDED", False, "Processing bar overlaps the maintenance window.")
+    return _assertion("MAINTENANCE_WINDOW_AVOIDED", True, "No processing bar overlaps the maintenance window.")
+
+
+def _overtime_window_used(schedule: dict[str, object]) -> dict[str, object]:
+    for bar in _bars(schedule):
+        if str(bar.get("ResourceID")) == "TST-CP-CAL" and str(bar.get("Start")).startswith("2026-06-22T18:"):
+            return _assertion("OVERTIME_WINDOW_USED", True, "A processing bar starts in the overtime window.")
+    return _assertion("OVERTIME_WINDOW_USED", False, "No processing bar used the configured overtime window.")
+
+
+def _operation_duration_assertion(
+    schedule: dict[str, object],
+    assertion_id: str,
+    expected_minutes: int,
+) -> dict[str, object]:
+    durations = [int(bar.get("DurationMinutes") or 0) for bar in _bars(schedule)]
+    return _assertion(
+        assertion_id,
+        expected_minutes in durations,
+        f"Observed durations: {durations}; expected {expected_minutes} minutes.",
+    )
+
+
+def _setup_lag_applied(schedule: dict[str, object]) -> dict[str, object]:
+    bars = sorted(
+        [bar for bar in _bars(schedule) if str(bar.get("ResourceID")) == "TST-CP-SETUP"],
+        key=lambda item: str(item.get("Start")),
+    )
+    if len(bars) < 2:
+        return _assertion("SETUP_LAG_APPLIED", False, "Less than two setup-case bars were scheduled.")
+    left_end = datetime.fromisoformat(str(bars[0]["End"]))
+    right_start = datetime.fromisoformat(str(bars[1]["Start"]))
+    lag = int((right_start - left_end).total_seconds() / 60)
+    return _assertion(
+        "SETUP_LAG_APPLIED",
+        lag >= 45,
+        f"Observed setup lag is {lag} minutes.",
+    )
 
 
 def _latest_decision(

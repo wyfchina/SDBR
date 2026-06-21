@@ -13,6 +13,7 @@ from sdbr.planner_workbench import (
     SchedulingOrder,
     build_planner_workbench,
 )
+from sdbr.release_policy import effective_rope_buffer_minutes
 from sdbr.scheduling_solver import (
     BaselineFiniteScheduler,
     FixedOperationAssignment,
@@ -136,12 +137,17 @@ def build_planner_workbench_view(
     setup_transitions: list[SetupTransition] | None = None,
     objective: SchedulingObjective | None = None,
     align_release_to_schedule: bool = False,
+    release_policy: dict[str, object] | None = None,
 ) -> PlannerWorkbenchView:
+    effective_time_buffer_minutes = effective_rope_buffer_minutes(
+        release_policy=release_policy,
+        fallback_time_buffer_minutes=time_buffer_minutes,
+    )
     workbench = build_planner_workbench(
         orders=orders,
         resources=resources,
         routings=routings,
-        time_buffer_minutes=time_buffer_minutes,
+        time_buffer_minutes=effective_time_buffer_minutes,
         calendar_tzinfo=calendar_tzinfo,
     )
     problem = build_scheduling_problem(
@@ -154,7 +160,7 @@ def build_planner_workbench_view(
             schedule_start_at.tzinfo,
         ),
         schedule_start_at=schedule_start_at,
-        time_buffer_minutes=time_buffer_minutes,
+        time_buffer_minutes=effective_time_buffer_minutes,
         solver_time_limit_seconds=solver_time_limit_seconds,
         fixed_assignments=fixed_assignments,
         setup_transitions=setup_transitions,
@@ -172,7 +178,7 @@ def build_planner_workbench_view(
         release_recommendations = release_recommendations_aligned_to_schedule(
             fallback_recommendations=workbench.release_recommendations,
             schedule_assignments=schedule.assignments,
-            time_buffer_minutes=time_buffer_minutes,
+            time_buffer_minutes=effective_time_buffer_minutes,
         )
     buffer_board = build_buffer_board(
         orders=orders,

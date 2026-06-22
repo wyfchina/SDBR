@@ -604,6 +604,12 @@ def _add_objective_terms(*, model, problem, ends, presence, horizon):
 
 def _objective_weights(problem: SchedulingProblem) -> dict[str, float]:
     objective = problem.objective
+    if objective.strategy_id == "v1_delivery_flow_bottleneck":
+        return {
+            "tardiness": max(objective.tardiness_weight, 8.0),
+            "makespan": max(objective.makespan_weight, 1.0),
+            "alternate_resource": max(objective.alternate_resource_weight, 0.5),
+        }
     if objective.strategy_id == "delivery_first":
         return {
             "tardiness": max(objective.tardiness_weight, 5.0),

@@ -133,7 +133,8 @@ UI 必须帮助计划员快速回答五个问题：
 | NAV-04 | 排程结果 | Schedule Results | 甘特图、负荷、订单与诊断 |
 | NAV-05 | 释放管理 | Release Management | 绳长、物料、WIP和缓冲门控 |
 | NAV-06 | 异常中心 | Exceptions | 失败、死信、重排和稳定性 |
-| NAV-07 | 管理后台 | Administration | 主数据、集成、求解器和权限 |
+| NAV-07 | 日历配置 | Calendar Configuration | 基础日历、资源分配、临时覆盖和最终可用窗口预览 |
+| NAV-08 | 管理后台 | Administration | 主数据、集成、求解器和权限 |
 
 ### 6.2 应用外壳
 
@@ -201,6 +202,8 @@ UI 必须帮助计划员快速回答五个问题：
 - 显示测试数据集、评估时间、通过/待执行/失败案例数。
 - 每个案例显示案例名称、关联 Planning Run、排程状态、求解器状态、发布治理状态、释放可行数和阻塞原因代码。
 - 支持从案例跳转到排程结果页查看具体计划。
+- 未完成、死信或尚未执行的案例不得假装可打开排程结果，必须显示不可打开原因。
+- 每个案例支持复位，全部案例支持一键复位，复位后回到可重新执行状态并清除人工确认/驳回影响。
 - 明确这是测试系统案例验收视图，不得混入生产数据。
 
 ### UI-DATA-001 数据就绪中心
@@ -258,8 +261,64 @@ UI 必须帮助计划员快速回答五个问题：
 - `Gurobi` 保留历史产品路径，但显示 `已暂停 / Paused`，不可用于提交新计划。
 - `启用 Simio 验证`为独立开关，不属于求解器选择。
 - 未启用 Simio：求解器结果直接进入排程输出。
-- 启用 Simio：求解器结果进入仿真验证，并允许配置最终输出来源为 `求解器结果`或`Simio 验证后结果`。
-- Simio 未配置时开关不可启用，并显示原因。
+
+### UI-CALENDAR-001 日历配置独立页面
+
+**状态：已验证待用户确认**
+
+日历配置必须从管理后台拆分为独立页面，因为它直接决定 CP-SAT 看到的资源能力窗口。
+
+第一阶段页面关注“事项要素是否齐全”“核心配置是否可操作”和“最终可用窗口是否可解释”，不做复杂审批流。
+
+页面区域：
+
+- 基础日历模板：多班次、工作日、节假日、维护窗口、状态。
+- 资源日历分配：资源与 Active 基础日历的绑定关系。
+- 临时覆盖：临时班次、加班、维护/不可用。
+- 冲突优先级：维护 > 节假日 > 临时覆盖 > 加班 > 基础班次。
+- 最终可用窗口预览：按资源和日期范围展示 CP-SAT 实际消费的能力窗口。
+- 事项要素检查：显示事项、CP-SAT 需要原因、缺失影响域。
+- Planning Run 影响：说明 Active 日历与覆盖会在新建 Planning Run 时冻结。
+
+日历预览阶段重点事项：
+
+| 事项 | CP-SAT 需求原因 | 缺失影响域 |
+| --- | --- | --- |
+| 资源日历分配 | 确定每个资源使用哪个日历生成能力桶 | 资源可能回退到日能力总量，排程与现场班次不一致 |
+| 基础班次开始/结束 | 决定资源在一天内哪些时间可加工 | 工序可能排到非工作时间，或产能被低估 |
+| 工作日规则 | 判断日历是否在某天生效 | 周末或非工作日可能被错误排产 |
+| 节假日 | 扣除整天不可用时间 | 计划可能排到停工日，或节假日加班规则不清 |
+| 维护/停机窗口 | 切掉所有低优先级可用窗口 | 工序可能排到设备维护期间 |
+| 加班窗口 | 增加额外能力桶 | 紧急订单可能被误判不可行或延后 |
+| 临时班次覆盖 | 体现计划员短期排班调整 | 重排结果无法反映临时排班变化 |
+| 冲突优先级 | 多规则重叠时唯一确定最终窗口 | 同一时间可能同时被解释为可用和不可用 |
+| 时区 | 保证日期、班次、交期一致 | 跨天、跨班次和节假日判断偏移 |
+| 跨班次加工规则 | 决定长工序是否可跨窗口 | 当前 CP-SAT 要求工序完整落入一个能力桶，规则缺失会影响可行性 |
+
+后台依赖：
+
+- `GET /planner/workbench/calendar/preview`
+- 返回 `RequiredElements`、`ConflictPriority`、`Resources[].Elements`、`Resources[].FinalCapacityWindows`、`MissingDailyCapacityDates`。
+- `POST /planner/workbench/admin/base-calendars`
+- `POST /planner/workbench/admin/resource-calendar-assignments`
+- `POST /planner/workbench/admin/calendar-overrides`
+
+验收：
+
+- 页面提供资源级日历的核心操作入口：工作周/基础日历、日模式/班次时段、资源日历分配、节假日、维护、加班、临时班次覆盖。
+- 系统自动生成日历编号、分配编号和覆盖编号；资源与日历使用下拉选择；工作日使用周一到周日复选框。
+- 管理后台不再提供日历编辑表单或日历摘要区；日历配置统一进入独立 `日历配置 / Calendar Configuration` 页面。
+- 用户选择资源和日期范围后，能看到基础班次、节假日、维护、加班、临时覆盖和最终 CP-SAT 能力窗口。
+- 缺少日能力日期、资源日历分配或时区问题必须可见，不得只显示空白。
+- 页面不得暗示已支持审批流、节假日强制加班例外或跨班次连续加工。
+
+验证记录：
+
+- 2026-06-22：新增独立导航 `日历配置 / Calendar Configuration`，页面可调用 `GET /planner/workbench/calendar/preview` 展示事项要素、最终能力窗口、规则来源和缺失日能力日期；补充类似 Simio 的“工作周 + 日模式”轻量操作区，可创建基础日历、资源绑定和临时覆盖。
+- 2026-06-22：修正日历页产品化细节：降低表单内容字号、加重标题层级、自动生成编号、资源/日历改为下拉选择、工作日改为复选框；管理后台取消日历编辑表单和日历摘要区。
+- 2026-06-22：排程结果甘特区增加双视图：`资源占用图`按资源展示加工、维护和不可用条带，用于确认日历维护/加班窗口是否影响资源能力；`工单流程图`按工单展示工序流转，用于确认订单经过哪些资源和时间段。
+- 自动化证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "calendar_preview or ui_calendar or semantic_application_shell or admin_001_002" --basetemp .tmp/pytest-calendar-page -p no:cacheprovider`，4 passed。
+- 用户确认：待确认。
 
 ### UI-RUN-003 Planning Run 详情
 
@@ -385,6 +444,10 @@ UI 必须帮助计划员快速回答五个问题：
 
 重新评估的业务语义：对同一个已完成 Planning Run 读取新的运行状态快照，重新判断物料、在途、WIP 和快照新鲜度；该动作不得重新求解排程，也不得要求重新建立任务包。授权释放时必须记录实际采用的运行状态快照。
 
+**2026-06-22 补充说明：**如果释放管理显示“运行状态快照已过期”，页面必须提示“同步或生成新的资源/物料/WIP 快照后重新评估”；不得把该状态表达成“需要重新排程”。重排只在新鲜快照重新评估后，由稳定性阈值或人工决策触发。
+
+**2026-06-22 Mock 闭环补充：**第一版采用 Mock API 时，“重新评估”按钮必须先调用 Mock 运行状态快照刷新接口，生成评估时点的新鲜资源/物料/WIP 快照，再重新读取释放门控；否则后续授权释放和约束缓冲执行页面无法验收。
+
 **2026-06-21 补充验证：**“重新评估”按钮改为使用最新运行状态快照，普通切换计划仍默认显示冻结快照；若旧快照过期但最新快照新鲜，同一 Planning Run 可重新得到可释放结果，并在授权中记录最新快照 ID。自动化验证：`pytest -q --basetemp .tmp/pytest-full-release-reevaluate-final -p no:cacheprovider`，312 passed，1 warning。
 
 **2026-06-21 补充验证：**释放管理顶部显示当前冻结释放策略版本；阻塞原因抽屉显示策略证据、触发参数和稳定性判断，包括策略绳长分钟、物料检查窗口、策略 WIP 上限、稳定性容忍与重排阈值；授权后的调度包保留释放策略版本。自动化验证：`pytest -q --basetemp .tmp/pytest-full-release-policy-final -p no:cacheprovider`，311 passed，1 warning。该补充属于现有 `UI-RELEASE-001` 的 read model 可见性增强，不新增大 UI 流程。
@@ -412,6 +475,8 @@ UI 必须帮助计划员快速回答五个问题：
 - 详情显示客户、承诺日期、优先级、接收状态和当前原因。
 - Late 区及按策略要求的缓冲区执行接收/开工事务时，必须选择标准原因码。
 - 支持按数量、完成百分比或工时记录事务，但具体可用方式由后台配置决定。
+- 同页轻量展示 MES 派工队列验收入口：按资源/工作中心显示正式工序级队列、候选/预警、缓冲颜色、渗透率、计划顺序、派工顺序、冲突结果和是否需要调度员确认。
+- MES 派工队列只调用内部 read model，不执行真实 MES 投递；未释放或最新门控阻塞的工单必须显示为候选/预警，不得混入正式队列。
 - 本看板属于现场执行协同边界；完整操作工终端仍不在第一版范围内。
 
 ### UI-EXCEPTION-001 异常与死信中心
@@ -434,9 +499,9 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-ADMIN-001 主数据后台
 
-**状态：基础管理后台用户已确认；临时日历覆盖配置扩展已验证待用户确认**
+**状态：基础管理后台用户已确认；日历配置已迁移到独立页面**
 
-**当前实现边界：**用户确认的是管理后台基线。日历区域已展示日定义、周定义、临时班次覆盖、排除/修改四层模型，并新增临时日历覆盖创建/查询入口；Active 临时覆盖会冻结到新建 Planning Run 并驱动 CP-SAT 能力桶。基础日历、班次模板、节假日主表、维护规则编辑、覆盖冲突规则和审批流仍属于 `BE-DATA-010 [PARTIAL]` 后续边界。
+**当前实现边界：**用户确认的是管理后台基线。日历配置不再放在管理后台；基础日历、资源分配、临时覆盖、事项预览和最终能力窗口统一迁移到独立 `日历配置` 页面。管理后台保留主数据、集成、求解器与策略类管理信息，不重复提供日历设置入口，避免用户在两个位置维护同一类配置。
 
 后台按对象分区：资源、日历、工艺路线、订单、库存缓冲、物料需求。
 
@@ -457,6 +522,8 @@ UI 必须帮助计划员快速回答五个问题：
 页面显示：
 
 - ERP、MES 连接状态和最近同步时间。
+- 集成模式显示 Direct Adapter、UNS MQTT Adapter、Mock API Adapter 的启用状态、最近消息时间、死信数量和重放入口；第一版活动方式为 Mock API，Direct 与 UNS 仅作为后续可替换路径展示。该显示对应后台 `BE-INT-*` 的 Canonical Message + Integration Port + 可替换 Adapter 架构。
+- MES 第一版只显示派工建议队列，不显示为真实下发、已投递或已连接 MES。
 - OR-Tools CP-SAT、Gurobi 能力状态；CP-SAT 显示可用，Gurobi 显示已暂停。
 - Simio 验证接口状态。
 - Worker 在线状态、心跳和队列指标。
@@ -708,6 +775,7 @@ UI 不得直接构造或修改 SQLite 数据。
 - 业务摘要：顶部显示位置、约束资源、缓冲负责人、当日总负荷和最近排程时间；每个矩阵单元显示工单数、总工时与工单卡片
 - 事务边界：详情显示客户、承诺日期、优先级、接收状态和当前原因；支持后台配置的数量、完成百分比和工时记录方式，Late 区接收/开工强制标准原因码
 - MES 边界：页面只提供计划与现场协同事务，不承担扫码、设备采集或完整操作员终端职责
+- MES 派工队列增强：2026-06-21 在缓冲执行页同屏增加资源/工作中心 + 工序级队列验收入口，显示正式队列、候选/预警、`按计划执行 / 建议插队 / 需要重排` 和调度员确认提示；真实 MES 投递仍由 `BE-INT-*` 后续 Adapter 完成
 - 自动化验证：2026-06-19 执行 `pytest -q`，`243 passed, 2 warnings`；Python 编译和前端脚本语法检查通过
 - 运行时验证：服务返回 200，OpenAPI 包含缓冲看板、工单详情和事务路由；正式数据无已完成计划时保持真实空状态
 - 浏览器验证：中文与英文标题、说明、导航和空状态正确切换；当前 599px 窄窗口下页面宽度与内容宽度均为 599px，无整页横向溢出；控制台无错误
@@ -783,6 +851,7 @@ UI 不得直接构造或修改 SQLite 数据。
 - 自动化验证：2026-06-20 执行 `python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "semantic_application_shell or admin_001_002 or plan_publication_governance or case_acceptance_overview or cp_sat_assumptions" --basetemp .tmp/pytest-ui-pending-confirmation-regression -p no:cacheprovider`，5 passed；`pytest -q --basetemp .tmp/pytest-full-ui-pending-confirmation-20260620-final2 -p no:cacheprovider`，305 passed，1 warning
 - 浏览器验证：2026-06-20 重建测试库并执行三组 `TST-RUN-*` 后，计划总览显示案例总数 3、已通过 3、待执行 0、未通过 0；案例卡显示 Planning Run、状态、求解器、发布状态、可释放数和阻塞代码；中英文切换正常；390px 窄屏无横向溢出
 - 补充验证：2026-06-21 新增六组 `TST-CP-*` CP-SAT 业务案例；案例卡显示案例分组、类型、期望断言、通过断言和差异原因；定向验证 `pytest tests/test_test_data.py -q --basetemp .tmp/pytest-cp-cases-data -p no:cacheprovider`，9 passed；`pytest tests/test_business_closure.py -q --basetemp .tmp/pytest-cp-cases-business -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "case_acceptance_overview" --basetemp .tmp/pytest-cp-cases-ui -p no:cacheprovider`，1 passed；全量 `pytest -q --basetemp .tmp/pytest-full-cp-business-cases -p no:cacheprovider`，316 passed，1 warning
+- 补充验证：2026-06-22 案例卡新增 `ScheduleResultOpenable` 与不可打开原因展示，未完成案例显示“排程未完成”；新增单案例复位和全部案例复位入口；覆盖三组业务闭环案例和六组 `TST-CP-*` 案例，验证 Completed 案例均可打开排程结果、不可行案例返回明确不可打开原因；定向验证 `pytest tests/test_business_closure.py tests/test_api.py -q -k "openable_schedule_results or acceptance_reset or reset_all or case_acceptance_overview or admin_001_002 or cp_sat_business_cases or schedule_result_workspace or ui_calendar" --basetemp .tmp/pytest-case-reset -p no:cacheprovider`，9 passed
 - 用户确认：已确认（2026-06-20）
 
 ## 18. 变更记录
@@ -827,5 +896,13 @@ UI 不得直接构造或修改 SQLite 数据。
 | 4.7 | 2026-06-21 | 临时日历覆盖驱动排程通过自动化验证：冻结到 Planning Run、影响 CP-SAT 能力桶和甘特维护条带；全量 315 passed |
 | 4.8 | 2026-06-21 | 测试案例验收总览扩展 CP-SAT 业务案例分组，案例卡显示类型、期望断言、通过断言和差异原因 |
 | 4.9 | 2026-06-21 | 排程结果页计划治理区补充输出治理摘要：输出包、完整性、释放、审计和外部投递占位均来自后台 read model |
+| 5.0 | 2026-06-21 | 管理后台新增基础日历模板和资源日历分配快速配置入口，Active 配置会冻结到 Planning Run 并驱动 CP-SAT |
+| 5.1 | 2026-06-21 | 管理后台集成设置补充可替换 Adapter 展示要求，未来同时支持直连 ERP/MES 与 UNS MQTT 路线 |
+| 5.2 | 2026-06-21 | 基础日历管理明确资源级范围、管理员/计划员分工、草案/生效/停用状态和冲突优先级展示 |
+| 5.3 | 2026-06-21 | 缓冲执行页增加 MES 派工队列验收入口，按资源/工作中心展示正式队列、候选预警、插队冲突和调度员确认提示 |
+| 5.4 | 2026-06-21 | 第一版交付边界同步：管理后台显示 Mock API 为活动集成方式，MES 为派工建议模式；Direct ERP/MES 与 UNS 路径后续替换，不在第一版真实连接 |
+| 5.5 | 2026-06-22 | 案例验收总览新增排程结果可打开性、不可打开原因、单案例复位和全部复位；管理后台移除日历区块，日历配置统一进入独立页面 |
+| 5.6 | 2026-06-22 | 释放管理在运行快照过期时提示同步/生成新快照后重新评估，避免将数据新鲜度问题误表达为重新排程 |
+| 5.7 | 2026-06-22 | 释放管理“重新评估”在 Mock 模式下生成新鲜运行快照；排程结果“重新排程”创建源计划重排任务并入队；Planning Run 列表对 Queued 暴露“处理队列”动作 |
 | 3.0 | 2026-06-19 | 完成并验证第九验收单元：统一状态标签、表格、详情、确认、通知、加载/空/错和数据新鲜度质量护栏 |
 | 3.1 | 2026-06-19 | 用户确认第九验收单元，完成 UI 验收单元基线；将计划总览列入后续产品总览阶段 |

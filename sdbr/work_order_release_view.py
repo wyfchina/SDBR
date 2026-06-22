@@ -394,11 +394,19 @@ def _blocking_reasons(
 ) -> list[dict[str, object]]:
     reasons = []
     if operational_state_status != "Fresh":
+        action = (
+            "RefreshOperationalSnapshotAndReevaluate"
+            if operational_state_status == "Stale"
+            else "CorrectEvaluationTimeOrSnapshot"
+        )
         reasons.append(
             {
                 "Code": f"OPERATIONAL_SNAPSHOT_{operational_state_status.upper()}",
                 "Category": "Data",
-                "Details": {},
+                "Details": {
+                    "RecommendedAction": action,
+                    "RequiresReschedule": False,
+                },
             }
         )
     if candidate.get("RopeStatus") == "Early":

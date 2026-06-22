@@ -484,6 +484,184 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
     )
 
 
+def reset_test_case_state(
+    store: WorkbenchStateStore,
+    *,
+    case_id: str,
+    reset_at: datetime | None = None,
+) -> dict[str, object]:
+    case = next((item for item in test_case_catalog() if item.case_id == case_id), None)
+    if case is None:
+        raise KeyError(case_id)
+    effective_reset_at = reset_at or datetime(2026, 6, 19, 8, tzinfo=timezone.utc)
+    if case.case_id.startswith("TST-CP-"):
+        _reset_cp_sat_case(store=store, case=case, captured_at=effective_reset_at)
+    else:
+        _reset_business_closure_case(store=store, case=case, captured_at=effective_reset_at)
+    _remove_case_runtime_state(store=store, case=case)
+    store.audit_events.append(
+        {
+            "EventID": f"AUD-{case.case_id}-RESET-{effective_reset_at.strftime('%Y%m%d%H%M%S')}",
+            "RunID": case.planning_run_id,
+            "Action": "TestCaseReset",
+            "ActorID": "sdbr-test-data",
+            "OccurredAt": effective_reset_at.isoformat(),
+            "Details": {
+                "CaseID": case.case_id,
+                "PlanningRunID": case.planning_run_id,
+                "SpecIDs": ["BE-DATA-014"],
+            },
+        }
+    )
+    return {
+        "CaseID": case.case_id,
+        "PlanningRunID": case.planning_run_id,
+        "Status": "Reset",
+        "ResetAt": effective_reset_at.isoformat(),
+    }
+
+
+def _reset_business_closure_case(
+    *,
+    store: WorkbenchStateStore,
+    case: TestCaseSpec,
+    captured_at: datetime,
+) -> None:
+    if BASELINE_MASTER_DATA_VERSION_ID not in store.master_data_versions:
+        resources = _baseline_resources()
+        routings = _baseline_routings()
+        orders = _baseline_orders()
+        inventory_buffers = _baseline_inventory_buffers()
+        material_requirements = _baseline_material_requirements(orders)
+        validation = validate_master_data(
+            resources=resources,
+            routings=routings,
+            orders=orders,
+            inventory_buffers=inventory_buffers,
+            material_requirements=material_requirements,
+            calendar_timezone=None,
+        )
+        store.master_data_versions[BASELINE_MASTER_DATA_VERSION_ID] = {
+            "VersionID": BASELINE_MASTER_DATA_VERSION_ID,
+            "CapturedAt": captured_at.isoformat(),
+            "SourceSystem": "SDBR-TestData",
+            "CreatedBy": "sdbr-test-data",
+            "CalendarTimezone": None,
+            "Status": "Valid" if validation.is_valid else "Invalid",
+            "Resources": _resources_to_dict(resources),
+            "Routings": _routings_to_dict(routings),
+            "Orders": _orders_to_dict(orders),
+            "InventoryBuffers": _inventory_buffers_to_dict(inventory_buffers),
+            "MaterialRequirements": _material_requirements_to_dict(material_requirements),
+            "Validation": _validation_to_dict(validation),
+        }
+    store.planning_runs[case.planning_run_id] = _pending_run_record(
+        run_id=case.planning_run_id,
+        snapshot_id=case.operational_state_snapshot_id,
+        requested_at=captured_at,
+        master_data_version_id=case.master_data_version_id,
+    )
+
+
+def _reset_cp_sat_case(
+    *,
+    store: WorkbenchStateStore,
+    case: TestCaseSpec,
+    captured_at: datetime,
+) -> None:
+    builder_by_case_id = {
+        "TST-CP-FINITE-RESOURCE": _cp_finite_case,
+        "TST-CP-ALTERNATE-RESOURCE": _cp_alternate_case,
+        "TST-CP-CALENDAR-OVERTIME": _cp_calendar_case,
+        "TST-CP-RESOURCE-EFFICIENCY": _cp_efficiency_case,
+        "TST-CP-SETUP-SEQUENCE": _cp_setup_case,
+        "TST-CP-INFEASIBLE-WINDOW": _cp_infeasible_case,
+    }
+    builder = builder_by_case_id.get(case.case_id)
+    if builder is None:
+        raise KeyError(case.case_id)
+    version_id, run_id, resources, routings, orders, run_options = builder(captured_at)
+    inventory_buffers = _baseline_inventory_buffers()
+    validation = validate_master_data(
+        resources=resources,
+        routings=routings,
+        orders=orders,
+        inventory_buffers=inventory_buffers,
+        material_requirements=[],
+        calendar_timezone=None,
+    )
+    store.master_data_versions[version_id] = {
+        "VersionID": version_id,
+        "CapturedAt": captured_at.isoformat(),
+        "SourceSystem": "SDBR-CP-SAT-TestData",
+        "CreatedBy": "sdbr-test-data",
+        "CalendarTimezone": run_options.get("CalendarTimezone"),
+        "Status": "Valid" if validation.is_valid else "Invalid",
+        "Resources": _resources_to_dict(resources),
+        "Routings": _routings_to_dict(routings),
+        "Orders": _orders_to_dict(orders),
+        "InventoryBuffers": _inventory_buffers_to_dict(inventory_buffers),
+        "MaterialRequirements": [],
+        "Validation": _validation_to_dict(validation),
+    }
+    store.planning_runs[run_id] = _pending_run_record(
+        run_id=run_id,
+        snapshot_id=case.operational_state_snapshot_id,
+        requested_at=captured_at,
+        master_data_version_id=version_id,
+        problem_id=str(run_options.get("ProblemID", run_id.replace("RUN", "PROBLEM"))),
+        time_buffer_minutes=int(run_options.get("TimeBufferMinutes", 0)),
+        objective_strategy_id=str(run_options.get("ObjectiveStrategyID", "balanced")),
+        setup_transitions=list(run_options.get("SetupTransitions", [])),
+        frozen_calendar_overrides=list(run_options.get("FrozenCalendarOverrides", [])),
+    )
+    for override in run_options.get("FrozenCalendarOverrides", []):
+        store.calendar_overrides[str(override["OverrideID"])] = dict(override)
+
+
+def _remove_case_runtime_state(
+    *,
+    store: WorkbenchStateStore,
+    case: TestCaseSpec,
+) -> None:
+    run_id = case.planning_run_id
+    version = store.master_data_versions.get(case.master_data_version_id, {})
+    order_ids = {
+        str(item.get("OrderID"))
+        for item in version.get("Orders", [])
+        if isinstance(item, dict) and item.get("OrderID") is not None
+    }
+    store.test_case_acceptance_decisions[:] = [
+        item for item in store.test_case_acceptance_decisions
+        if item.get("CaseID") != case.case_id
+    ]
+    store.release_authorizations[:] = [
+        item for item in store.release_authorizations
+        if item.request_id != run_id and item.order_id not in order_ids
+    ]
+    store.execution_events[:] = [
+        item for item in store.execution_events
+        if getattr(item, "run_id", None) != run_id
+        and getattr(item, "order_id", None) not in order_ids
+    ]
+    store.release_decision_packages[:] = [
+        item for item in store.release_decision_packages
+        if item.get("RunID") != run_id
+    ]
+    store.replan_requests[:] = [
+        item for item in store.replan_requests
+        if getattr(item, "order_id", None) not in order_ids
+    ]
+    store.replan_schedule_snapshots[:] = [
+        item for item in store.replan_schedule_snapshots
+        if item.get("RunID") != run_id and item.get("SourceRunID") != run_id
+    ]
+    store.audit_events[:] = [
+        item for item in store.audit_events
+        if item.get("RunID") not in {run_id, case.case_id}
+    ]
+
+
 def _seed_cp_sat_business_cases(
     *,
     store: WorkbenchStateStore,

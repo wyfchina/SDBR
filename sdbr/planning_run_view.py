@@ -5,7 +5,7 @@ from datetime import datetime
 
 STATUS_ACTIONS = {
     "Pending": ["Enqueue", "Execute", "Cancel"],
-    "Queued": [],
+    "Queued": ["ProcessQueue"],
     "Running": [],
     "Completed": ["OpenResults"],
     "Failed": [],
@@ -97,6 +97,19 @@ def build_planning_run_detail(
         "SourceRunID": planning_run.get("SourceRunID"),
         "ReleasePolicyVersionID": planning_run.get("ReleasePolicyVersionID"),
         "FrozenReleasePolicy": planning_run.get("FrozenReleasePolicy"),
+        "FrozenBaseCalendars": list(planning_run.get("FrozenBaseCalendars", [])),
+        "FrozenResourceCalendarAssignments": list(
+            planning_run.get("FrozenResourceCalendarAssignments", [])
+        ),
+        "FrozenBaseCalendarSummary": {
+            "FrozenCalendarCount": len(planning_run.get("FrozenBaseCalendars", [])),
+            "FrozenAssignmentCount": len(
+                planning_run.get("FrozenResourceCalendarAssignments", [])
+            ),
+            "AppliedAssignmentCount": _applied_base_calendar_assignment_count(
+                planning_run
+            ),
+        },
         "FrozenCalendarOverrides": list(
             planning_run.get("FrozenCalendarOverrides", [])
         ),
@@ -183,6 +196,18 @@ def _diagnostics(planning_run: dict[str, object]) -> list[dict[str, object]]:
             "EntityID": planning_run.get("RunID"),
         }
     ]
+
+
+def _applied_base_calendar_assignment_count(
+    planning_run: dict[str, object],
+) -> int:
+    summary = planning_run.get("BaseCalendarSummary")
+    if not isinstance(summary, dict):
+        schedule = planning_run.get("Schedule")
+        summary = schedule.get("BaseCalendarSummary") if isinstance(schedule, dict) else None
+    if not isinstance(summary, dict):
+        return 0
+    return int(summary.get("AppliedAssignmentCount", 0) or 0)
 
 
 def _applied_calendar_override_count(planning_run: dict[str, object]) -> int:

@@ -90,11 +90,11 @@ ERP / 主数据源
 | `BE-DATA-007` | 校验资源、约束、路线、工序、缓冲和物料需求 | `[VERIFIED]` | `C` `sdbr/master_data_validation.py`; `A` `/master-data/validate`; `T` `tests/test_master_data_validation.py` | 后续增加面向 UI 的问题分类与修复建议 |
 | `BE-DATA-008` | 创建不可变、可追溯的 Master Data Version | `[VERIFIED]` | `A` `/master-data/versions`; `T` `tests/test_api.py`, `tests/test_backend_readiness.py` | 已满足当前审计需求 |
 | `BE-DATA-009` | 创建运行状态快照并判断新鲜度 | `[VERIFIED]` | `C` `sdbr/operational_state.py`; `A` `/operational-state/snapshots`; `T` `tests/test_operational_state.py` | 后续增加资源实时状态字段 |
-| `BE-DATA-010` | 柔性日历、班次、节假日和维护扣减 | `[PARTIAL]` | `C` `sdbr/calendar_import.py`, `sdbr/calendar_overrides.py`, `sdbr/scheduling_solver.py`; `A` 主数据版本比较/发布/回滚、`/planner/workbench/admin/calendar-overrides`; `UI` 管理后台临时覆盖配置入口；`T` `tests/test_calendar_import.py`, `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已支持版本化日历输入、维护扣减、受控主数据发布、临时覆盖冻结到 Planning Run 并驱动 CP-SAT 能力桶；基础日历/班次模板编辑、覆盖冲突规则和审批流仍待业务规则确认 |
+| `BE-DATA-010` | 柔性日历、班次、节假日和维护扣减 | `[PARTIAL]` | `C` `sdbr/calendar_import.py`, `sdbr/base_calendar.py`, `sdbr/calendar_overrides.py`, `sdbr/calendar_preview.py`, `sdbr/scheduling_solver.py`; `A` 主数据版本比较/发布/回滚、`/planner/workbench/admin/base-calendars`、`/planner/workbench/admin/resource-calendar-assignments`、`/planner/workbench/admin/calendar-overrides`、`/planner/workbench/calendar/preview`; `UI` 管理后台基础日历与临时覆盖配置入口，`UI-CALENDAR-001` 已定义独立日历页面；`T` `tests/test_calendar_import.py`, `tests/test_scheduling_solver.py`, `tests/test_api.py` | 已支持资源级日历、版本化日历输入、基础日历模板、多班次、节假日、资源日历分配、维护扣减、加班/临时覆盖、日历预览事项要素检查、受控主数据发布，以及基础日历和临时覆盖冻结到 Planning Run 并按“维护 > 节假日 > 临时覆盖 > 加班 > 基础班次”驱动 CP-SAT 能力桶；审批流、企业节假日自动同步、完整日历编辑器和节假日强制加班例外规则仍待后续确认 |
 | `BE-DATA-011` | 丰富资源属性 | `[PARTIAL]` | `C` `Resource` 已有约束标识、能力、日历、资源数量、效率、类型、缓冲标识、负责人和分类；`T` `tests/test_api.py` | 班组人数、固定偏移和更细换型属性仍需独立业务规则 |
-| `BE-DATA-012` | BOM、多级物料需求和替代料模型 | `[NOT-STARTED]` | `D` 当前只有工单物料需求及可用量 | 明确 ERP 提供净需求还是本系统执行轻量 MRP，并完成批次化可用量计算 |
+| `BE-DATA-012` | BOM、多级物料需求和替代料模型 | `[PARTIAL]` | `C` `sdbr/light_mrp.py`; `A` `/planner/workbench/light-mrp/evaluate`; `T` `tests/test_material_state.py`, `tests/test_api.py` | 第一版已确认由本系统执行轻量 MRP：按工单物料需求、库存缓冲、已分配库存、在途数量和物料检查窗口输出可用/在途覆盖/短缺/缺库存记录结论；完整 BOM 展开、多级 MRP、替代料、批次/效期分配和 ERP 库存账务仍未实现 |
 | `BE-DATA-013` | 主数据版本差异、发布和回滚 | `[VERIFIED]` | `C/A` `/master-data/version-comparison`、`/master-data/versions/{id}/publish|retire|rollback`; `T` `tests/test_api.py` | 已满足后台治理闭环；真实 ERP 主数据发布回写由 `BE-INT-*` 跟踪 |
-| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`, `sdbr/test_case_acceptance.py`; `D` `docs/cp-sat-business-case-acceptance.md`; `A` `/planner/workbench/test-data/cases`, `/planner/workbench/test-data/acceptance`, `/planner/workbench/test-data/acceptance/{case_id}/decision`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限、CP-SAT 有限产能/备用资源/日历覆盖/效率/换型/不可行诊断案例、测试库重建、自动验收包、预期/实际差异和人工确认/驳回记录；当前场景可驱动 Planning Run 执行、计划输出、释放门控、发布治理与 CP-SAT 业务行为验收 |
+| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`, `sdbr/test_case_acceptance.py`; `D` `docs/cp-sat-business-case-acceptance.md`; `A` `/planner/workbench/test-data/cases`, `/planner/workbench/test-data/acceptance`, `/planner/workbench/test-data/acceptance/{case_id}/decision`, `/planner/workbench/test-data/acceptance/{case_id}/reset`, `/planner/workbench/test-data/acceptance/reset`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限、CP-SAT 有限产能/备用资源/日历覆盖/效率/换型/不可行诊断案例、测试库重建、单案例/全案例复位、自动验收包、预期/实际差异、排程结果可打开性状态和人工确认/驳回记录；当前场景可驱动 Planning Run 执行、计划输出、释放门控、发布治理与 CP-SAT 业务行为验收 |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -127,7 +127,7 @@ ERP / 主数据源
 | `BE-SOLVER-011` | 资源数量、效率、班组人数和固定偏移约束 | `[PARTIAL]` | `C` `capacity_units`、`efficiency_percent`、工序时间窗、临时日历覆盖能力桶；`T` `tests/test_scheduling_solver.py`, `tests/test_api.py`, `tests/test_business_closure.py` | 已实现资源并行数量、效率修正、工序 earliest/latest 时间窗和 Active 日历覆盖驱动 CP-SAT，并通过 `TST-CP-CALENDAR-OVERTIME`、`TST-CP-RESOURCE-EFFICIENCY` 和 `TST-CP-INFEASIBLE-WINDOW` 验证；班组人数和固定偏移仍需独立业务规则 |
 | `BE-SOLVER-012` | 工单锁定、冻结区和人工固定安排 | `[PARTIAL]` | `C` `FixedOperationAssignment`、CP-SAT 固定开始/固定资源硬约束、显式 `SourceRunID`、重排来源追踪和工序差异摘要；`T` `tests/test_scheduling_solver.py`、`tests/test_api.py` | 已完成工序级固定开始/资源、锁定工单、冻结窗口、Planning Run 显式源计划选择和重排差异输出；锁定范围细分到工序/资源/订单的交互策略仍需 UI/业务规则确认 |
 | `BE-SOLVER-013` | 批次、合批、拆批和订单分组 | `[NOT-STARTED]` | `D` `administration_view.py` 已暴露批次字段和策略分组占位 | 暂不硬编码；需先定义合批粒度、拆批条件、批量容量和订单混批限制 |
-| `BE-SOLVER-014` | 多目标策略和配置化权重 | `[PARTIAL]` | `C` `strategy_id`、`ObjectiveStrategyID`、内置策略权重、版本化策略台账、自定义权重驱动 CP-SAT；`A` `/planner/workbench/admin/scheduling-strategies`, `/planner/workbench/admin/cp-sat/assumptions`; `T` `tests/test_scheduling_solver.py`, `tests/test_api.py`, `tests/test_business_closure.py` | 已实现内置策略、自定义策略权重持久化、自定义策略驱动 CP-SAT、算法假设/可调参数说明接口，并在 `TST-CP-*` 业务案例中输出可解释断言；策略仿真解释和 UI 调参仍需后续完成 |
+| `BE-SOLVER-014` | 多目标策略和配置化权重 | `[PARTIAL]` | `C` `strategy_id`、`ObjectiveStrategyID`、内置策略权重、版本化策略台账、自定义权重驱动 CP-SAT；`A` `/planner/workbench/admin/scheduling-strategies`, `/planner/workbench/admin/cp-sat/assumptions`; `T` `tests/test_scheduling_solver.py`, `tests/test_api.py`, `tests/test_business_closure.py` | 第一版默认策略为 `v1_delivery_flow_bottleneck`：交期优先、流动时间第二、瓶颈/备用资源保护第三；已实现内置策略、自定义策略权重持久化、自定义策略驱动 CP-SAT、算法假设/可调参数说明接口，并在 `TST-CP-*` 业务案例中输出可解释断言；策略仿真解释和 UI 调参仍需后续完成 |
 | `BE-SOLVER-015` | 大规模性能基线与许可证容量治理 | `[NOT-STARTED]` | `D` 已记录 `CORES=256` 议题 | 与 OR-Tools/Simio 阶段共同建立规模矩阵、硬件/许可检查和降级策略 |
 
 ### 6.1 当前 CP-SAT 建模假设
@@ -140,10 +140,10 @@ ERP / 主数据源
 4. 约束资源采用有限产能；非约束资源默认采用无限产能并保留冲刺能力语义。
 5. 资源效率通过 `ceil(标准工时 * 100 / 效率百分比)` 修正工序时长。
 6. 时间缓冲当前主要通过保护交期参与迟期目标，不等同于完整 DBR 数学模型。
-7. 物料齐套、在途、WIP 和绳长释放继续由释放门控层判断，不作为当前 CP-SAT 硬约束。
-8. 当前优化目标由总迟期、总完工跨度和备用资源使用惩罚加权组成；策略权重仍需按具体业务验证。
+7. 物料齐套、在途、轻量 MRP、WIP 和绳长释放继续由释放门控/物料评估层判断，不作为当前 CP-SAT 硬约束。
+8. 第一版默认优化偏好为交期优先、流动时间第二、瓶颈/备用资源保护第三；策略权重仍需按具体业务验证。
 9. 单机有限资源支持顺序相关换型；多并行资源的机台级换型等待具体业务规则。
-10. BOM/MRP、批次、合批、拆批、班组人数及 Simio 反馈不属于当前通用模型。
+10. 完整 BOM 展开、多级 MRP、替代料、批次、合批、拆批、班组人数及 Simio 反馈不属于当前通用模型。
 
 ### 6.2 当前可调参数边界
 
@@ -175,7 +175,7 @@ ERP / 主数据源
 | `BE-REL-008` | 偏差触发重排请求并支持人工决策 | `[VERIFIED]` | `C` `replanning.py`; `A` replan endpoints; `T` `tests/test_replanning.py`, `tests/test_api.py` | 已满足 |
 | `BE-REL-009` | 时间缓冲红黄绿计算 | `[VERIFIED]` | `C` `planner_view.py`, `work_order_release_view.py`; `T` `tests/test_planner_view.py`, `tests/test_api.py` | Planning Run 释放管理已按冻结释放策略比例计算红黄绿；Buffer Board 更复杂优先级仍由 BE-REL-011 跟踪 |
 | `BE-REL-010` | 两阶段五区域 Buffer Board 聚合 | `[VERIFIED]` | `C` `sdbr/buffer_execution_view.py`; `A` Buffer Board workbench/detail endpoints; `T` `tests/test_api.py` | 已按 Planning Run 聚合授权、冻结计划和执行事件；更复杂的优先级由 BE-REL-011 承担 |
-| `BE-REL-011` | 配置化执行优先级矩阵 | `[PARTIAL]` | `C` 当前按 Red/Yellow/Green 固定排序 | 增加 MTS、Min-Max、MTO 独立策略及 Stockout/Critical/OTOG 等权重 |
+| `BE-REL-011` | 配置化执行优先级矩阵 | `[PARTIAL]` | `C` `sdbr/dispatch_priority.py`; `A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`; `T` `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版 MES 派工优先级已按“已授权释放、红黄绿、渗透率、约束资源计划开始、客户交期”输出资源/工作中心 + 工序级队列；MTS、Min-Max、MTO 独立策略及 Stockout/Critical/OTOG 等权重仍后续配置化 |
 | `BE-REL-012` | 版本化 DBR 与释放策略中心 | `[VERIFIED]` | `C/A` `/dbr/release-policies` 列表/创建/查询、Planning Run 冻结 `ReleasePolicyVersionID` 和策略快照、释放推荐/门控/授权证据消费策略、管理后台配置摘要；`T` `tests/test_api.py` | 已实现绳长、缓冲比例、策略 WIP 上限、物料检查窗口和稳定性阈值驱动当前释放算法；后续只做业务校准、编辑 UI 和审批流程 |
 
 ## 8. 计划输出、负载与方案比较
@@ -183,7 +183,7 @@ ERP / 主数据源
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
 | --- | --- | --- | --- | --- |
 | `BE-OUT-001` | 输出工序级和工单级计划 | `[VERIFIED]` | `C` `sdbr/schedule_output.py`; `A` scheduled work-order/order endpoints; `T` `tests/test_schedule_output.py`, `tests/test_business_closure.py` | 已满足基础结果输出 |
-| `BE-OUT-002` | 资源甘特数据 | `[PARTIAL]` | `C` `sdbr/gantt_view.py`, `sdbr/schedule_result_view.py`; `T` `tests/test_gantt_view.py`, `tests/test_business_closure.py`, `tests/test_api.py` | 已由测试 Planning Run 验证甘特 read model，并按冻结释放策略绳长展示时间缓冲长度；本阶段补内部输出包甘特摘要；更完整计划/实际对比仍待 MES 执行数据 |
+| `BE-OUT-002` | 资源甘特数据 | `[PARTIAL]` | `C` `sdbr/gantt_view.py`, `sdbr/schedule_result_view.py`; `T` `tests/test_gantt_view.py`, `tests/test_business_closure.py`, `tests/test_api.py` | 已由测试 Planning Run 验证甘特 read model，并按冻结释放策略绳长展示时间缓冲长度；前端排程结果页补充 `资源占用图` 与 `工单流程图` 双视图，支持按资源确认维护/不可用窗口、按工单确认工序流转；更完整计划/实际对比仍待 MES 执行数据 |
 | `BE-OUT-003` | 系统级负载图 | `[PARTIAL]` | `C` `LoadGraphRow`, `planner_view.py`, `schedule_result_view.py`; `T` `tests/test_planner_view.py`, `tests/test_business_closure.py`, `tests/test_api.py` | 已由测试 Planning Run 验证负载 read model；本阶段补内部输出包资源负荷摘要；跨资源排名、可配置时间范围和负责人/类型/分类筛选仍后续完善 |
 | `BE-OUT-004` | 单资源逐日负载图 | `[PARTIAL]` | `C` 已有日能力、需求和超载单元格 | 增加 Available/Released/Unreleased/Completed/Remaining 分层 |
 | `BE-OUT-005` | 非约束资源瓶颈候选识别 | `[VERIFIED]` | `C` `build_bottleneck_candidates`; `T` `tests/test_planner_view.py` | 后续阈值配置化 |
@@ -208,13 +208,73 @@ ERP / 主数据源
 
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
 | --- | --- | --- | --- | --- |
-| `BE-INT-001` | ERP 入站连接器 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 已定义 ERP 入站契约、字段校验、幂等键、确认、死信和重放测试桩；真实 ERP 增量同步、映射适配、重试调度和对账仍未实现 |
-| `BE-INT-002` | ERP 出站计划与释放回写 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 已定义确认计划、建议释放、实际释放和异常状态的出站契约及确认/重放边界；真实 ERP 回写连接器、投递队列和回执对账仍未实现 |
+| `BE-INT-001` | ERP 入站连接器 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/mock-api/status`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 第一版采用 Mock API 作为活动适配器；已定义 ERP 入站契约、字段校验、幂等键、确认、死信和重放测试桩；未来通过可替换 Adapter 接入直连 ERP 或 UNS Topic；真实 ERP 增量同步、映射适配、重试调度和对账仍未实现 |
+| `BE-INT-002` | ERP 出站计划与释放回写 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/mock-api/status`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 第一版采用 Mock API，不真实回写 ERP；已定义确认计划、建议释放、实际释放和异常状态的出站契约及确认/重放边界；未来通过可替换 Adapter 接入直连 ERP 或 UNS Topic；真实 ERP 回写连接器、投递队列和回执对账仍未实现 |
 | `BE-INT-003` | ERP 业务所有权 | `[EXTERNAL]` | ERP 是权威来源 | 本系统不替代 ERP 主数据、采购和库存账务 |
-| `BE-INT-004` | MES 入站执行事件连接器 | `[PARTIAL]` | `C/A` 通用执行事件接口、`sdbr/integration_contracts.py` MES 入站契约和消息测试桩；`T` `tests/test_integration_contracts.py`, `tests/test_shop_floor_execution.py` | 已补幂等键、来源系统、字段校验、死信和重放契约；事件版本、真实 MES 适配、重放执行和对账仍未实现 |
-| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` 已有 dispatch package、`sdbr/integration_contracts.py` MES 出站契约；`T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py` | 已定义版本化派工/释放消息、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
+| `BE-INT-004` | MES 入站执行事件连接器 | `[PARTIAL]` | `C/A` 通用执行事件接口、`sdbr/integration_contracts.py` MES 入站契约和消息测试桩；`T` `tests/test_integration_contracts.py`, `tests/test_shop_floor_execution.py` | 第一版采用 Mock API 接收测试/验收事件；已补幂等键、来源系统、字段校验、死信、重放契约，以及 DispatchAccepted、StartedOperation、CompletedOperation、DispatchRejected、ExceptionReported 第一版回执类型；真实 MES 适配、重放执行和对账仍未实现 |
+| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` dispatch package、`sdbr/dispatch_priority.py`、`sdbr/integration_contracts.py` MES 出站契约；`A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`, `/planner/workbench/integrations/mock-api/status`; `T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py`, `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版只生成 MES 派工建议，不真实下发 MES；已定义版本化派工/释放消息、资源/工作中心 + 工序级派工队列、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
 | `BE-INT-006` | MES/SCADA 业务所有权 | `[EXTERNAL]` | MES/SCADA 负责现场采集和控制 | 本系统消费状态，不直接控制设备 |
 | `BE-INT-007` | 通用集成监控 | `[PARTIAL]` | `C/A` 集成消息台账、死信查询和重放请求接口；`T` `tests/test_integration_contracts.py` | 已提供契约层错误队列和人工重放占位；连接状态、延迟、最后成功时间、自动重试和外部系统健康检查仍未实现 |
+
+### 10.1 可替换集成架构原则
+
+后续 ERP/MES 集成不得把 SDBR 核心业务绑定到某一种外部技术路线。SDBR 核心只处理统一业务消息（Canonical Message），外部系统接入必须通过可替换 Adapter 完成。
+
+目标架构：
+
+```text
+SDBR Core Planning / Release / Dispatch
+  -> Integration Port
+  -> Adapter
+     -> Direct ERP/MES API 或数据库/文件
+     -> UNS MQTT Topic
+     -> Mock/Test Adapter
+```
+
+Canonical Message 必须包含：
+
+- `MessageID`
+- `MessageType`
+- `SchemaVersion`
+- `SourceSystem`
+- `BusinessID`
+- `Revision`
+- `OccurredAt`
+- `IdempotencyKey`
+- `Payload`
+
+第一版消息类型至少覆盖：
+
+- ERP 入站：`WorkOrderImported`、`RoutingImported`、`ResourceImported`、`MaterialRequirementImported`、`InventorySnapshotImported`
+- ERP 出站：`SchedulePublished`、`ReleaseAuthorized`、`PlanningExceptionReported`
+- MES 出站：`DispatchQueueIssued`、`ReleaseInstructionIssued`、`DispatchRevoked`
+- MES 入站：`DispatchAccepted`、`StartedOperation`、`CompletedOperation`、`DispatchRejected`、`ExceptionReported`
+
+Adapter 策略：
+
+- `DirectAdapter`：用于未来直连 ERP/MES REST、数据库中间表、文件或消息队列。
+- `UnsMqttAdapter`：用于未来接入 EMQX/UNS，Topic 由工厂、车间、产线、工作中心和事件类型组成。
+- `MockAdapter`：用于测试数据、案例验收和离线演示。
+
+UNS Topic 命名建议：
+
+```text
+SDBR/{Plant}/{Area}/{Line}/{WorkCenter}/Dispatch/QueueIssued
+SDBR/{Plant}/{Area}/{Line}/{WorkCenter}/Dispatch/ReleaseAuthorized
+SDBR/{Plant}/{Area}/{Line}/{WorkCenter}/Schedule/Published
+source/erp/{Plant}/Orders/WorkOrderImported
+source/erp/{Plant}/Materials/InventorySnapshot
+source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/StartedOperation
+source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/CompletedOperation
+source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
+```
+
+设计约束：
+
+- SDBR 核心业务模块不得直接调用 ERP/MES/EMQX/Node-RED/IoTDB SDK。
+- Direct 与 UNS 只允许出现在 Adapter 层。
+- 消息台账、幂等、确认回执、死信、人工重放和审计必须在 Integration Port 层统一处理。
+- Adapter 切换不得改变 Planning Run、释放门控、派工优先级和发布治理的核心业务代码。
 
 ## 11. Simio 验证
 
@@ -455,14 +515,34 @@ ERP / 主数据源
 - 已知限制：BOM/MRP、批次、合批、拆批、多机台换型、ERP/MES 真实连接、自动重试调度、对账和外部系统健康检查仍需后续业务规则或集成边界明确
 - 用户确认：待确认
 
+### BE-INT-* 可替换接口架构记录
+
+- 状态变更：`BE-INT-001`、`BE-INT-002`、`BE-INT-004`、`BE-INT-005`、`BE-INT-007` 保持 `[PARTIAL]`，补充未来直连 ERP/MES 与 UNS 两种技术路线的统一架构约束
+- 日期：2026-06-21
+- 设计证据：第 10.1 节新增 Canonical Message、Integration Port、Direct Adapter、UNS MQTT Adapter、Mock Adapter、幂等键、死信、重放和 Topic 命名原则
+- 业务验收：SDBR 核心排程、释放、派工和发布治理不得直接依赖 ERP/MES/EMQX/Node-RED/IoTDB SDK；未来如选择直连系统，只替换 Direct Adapter；如选择 UNS，只替换 UnsMqttAdapter；核心业务消息、审计、幂等和重放语义保持一致
+- 已知限制：当前仍是架构规格，不包含真实 ERP/MES 连接器、MQTT 客户端、Topic 订阅发布实现、外部认证和生产级健康监控
+- 用户确认：待确认
+
+### BE-REL-011 / BE-INT-004 / BE-INT-005 MES 派工优先级输出验收记录
+
+- 状态变更：`BE-REL-011`、`BE-INT-004`、`BE-INT-005` 保持 `[PARTIAL]`，补充第一版 MES 派工优先级队列和回执契约证据
+- 日期：2026-06-21
+- 实现证据：`sdbr/dispatch_priority.py` 新增资源/工作中心 + 工序级派工队列；`GET /planner/workbench/dispatch-priority/runs/{run_id}/workbench` 输出队列、候选预警、冲突结果、调度员确认提示和重排建议；`sdbr/api.py` 在派工前使用最新运行状态重新调用释放门控；`sdbr/integration_contracts.py` 补充 DispatchQueueIssued、DispatchAccepted、StartedOperation、CompletedOperation、DispatchRejected、ExceptionReported 消息类型
+- 测试证据：`pytest tests/test_dispatch_priority.py -q --basetemp .tmp/pytest-dispatch-priority -p no:cacheprovider`，3 passed；`pytest tests/test_api.py -q -k "dispatch_priority or integration_contract" --basetemp .tmp/pytest-dispatch-api -p no:cacheprovider`，1 passed；`pytest tests/test_dispatch_priority.py tests/test_integration_contracts.py tests/test_shop_floor_execution.py -q --basetemp .tmp/pytest-dispatch-contracts -p no:cacheprovider`，18 passed；`pytest tests/test_api.py -q -k "dispatch_priority or release_authorization or buffer_board or shop_floor" --basetemp .tmp/pytest-dispatch-related-api -p no:cacheprovider`，23 passed
+- 业务验收：正式派工只包含已授权且最新物料/WIP/快照门控仍通过的工序；未释放或最新门控阻塞的工单只进入候选/预警；同一资源内按红黄绿、渗透率、计划开始和客户交期排序；允许红区插队；约束资源插队时输出 `RequiresPlannerConfirmation`；连续插队超过 2 次后输出 `NeedsReplan`，但不自动重排
+- 已知限制：真实 MES 投递、外部确认对账、UNS Topic 发布、直连 Adapter、投递重试队列和 UI 独立派工页面仍未实现；当前端点是内部稳定 read model/API 契约
+- 用户确认：待确认
+
 ### BE-DATA-014 案例验收体系验收记录
 
 - 状态变更：保持 `[VERIFIED]`，补充案例验收包、预期/实际差异、人工确认/驳回和持久化证据
 - 日期：2026-06-20
 - 实现证据：`sdbr/test_case_acceptance.py` 输出 `AcceptancePackageID`、执行计划、案例预期、实际对照、失败原因、最新人工决策和决策记录；`sdbr/api.py` 新增 `/planner/workbench/test-data/acceptance/{case_id}/decision` 与 `/planner/workbench/test-data/acceptance/decisions`；`sdbr/state_store.py` 持久化 `test_case_acceptance_decisions`
 - 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_business_closure.py -q --basetemp .tmp/pytest-acceptance-business -p no:cacheprovider`，7 passed；`pytest tests/test_test_data.py -q --basetemp .tmp/pytest-acceptance-data -p no:cacheprovider`，9 passed；`pytest -q --basetemp .tmp/pytest-full-acceptance-20260620 -p no:cacheprovider`，300 passed，1 warning
-- 业务验收：案例体系可展示测试数据输入、排程预期、释放预期、发布预期、自动判定结果和逐项差异；通过案例可由人工确认，未执行或未通过案例不能被确认；确认/驳回记录可审计并可跨 SQLite 重载保留
-- 已知限制：当前案例仍限于基准、物料短缺和 WIP 超限三组 `TST-*` 场景；真实业务案例、行业模板和 UI 确认动作仍需后续扩展
+- 补充证据：2026-06-22 新增 `/planner/workbench/test-data/acceptance/{case_id}/reset` 与 `/planner/workbench/test-data/acceptance/reset`；验收包新增 `ScheduleResultOpenable` 与 `ScheduleResultUnavailableReason`；`python -m compileall -q sdbr`；`pytest tests/test_business_closure.py tests/test_api.py -q -k "openable_schedule_results or acceptance_reset or reset_all or case_acceptance_overview or admin_001_002 or cp_sat_business_cases or schedule_result_workspace or ui_calendar" --basetemp .tmp/pytest-case-reset -p no:cacheprovider`，9 passed
+- 业务验收：案例体系可展示测试数据输入、排程预期、释放预期、发布预期、自动判定结果和逐项差异；通过案例可由人工确认，未执行或未通过案例不能被确认；确认/驳回记录可审计并可跨 SQLite 重载保留；每个案例可复位到可重新执行状态，全部案例可一键复位
+- 已知限制：当前案例仍限于基准、物料短缺、WIP 超限和六组 `TST-CP-*` 标准场景；真实业务案例、行业模板和更复杂人工确认工作流仍需后续扩展
 - 用户确认：待确认
 
 ### BE-DATA-014 / BE-SOLVER-009 至 BE-SOLVER-011 / BE-SOLVER-014 CP-SAT 业务案例验收记录
@@ -471,7 +551,7 @@ ERP / 主数据源
 - 日期：2026-06-21
 - 实现证据：`sdbr/test_data.py` 新增六组 `TST-CP-*` Planning Run、独立 Master Data Version 和案例目录字段；`sdbr/test_case_acceptance.py` 增加期望诊断与业务断言判定；`docs/cp-sat-business-case-acceptance.md` 说明有限产能、备用资源、日历覆盖、资源效率、顺序相关换型和不可行诊断案例；`sdbr/web/planner-workbench.js` 在案例卡显示案例分组、类型、期望断言、通过断言和差异原因
 - 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_test_data.py -q --basetemp .tmp/pytest-cp-cases-data -p no:cacheprovider`，9 passed；`pytest tests/test_business_closure.py -q --basetemp .tmp/pytest-cp-cases-business -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "case_acceptance_overview" --basetemp .tmp/pytest-cp-cases-ui -p no:cacheprovider`，1 passed；`pytest -q --basetemp .tmp/pytest-full-cp-business-cases -p no:cacheprovider`，316 passed，1 warning
-- 业务验收：六组 `TST-CP-*` 案例可端到端执行，并通过 `GET /planner/workbench/test-data/acceptance` 输出“期望断言 / 通过断言 / 差异原因”；不可行案例以 `DeadLetter` + `ORTOOLS_INFEASIBLE` 作为正确结果，不伪装成可执行计划
+- 业务验收：六组 `TST-CP-*` 案例可端到端执行，并通过 `GET /planner/workbench/test-data/acceptance` 输出“期望断言 / 通过断言 / 差异原因”；Completed 案例必须标记为可打开排程结果，不可行案例以 `DeadLetter` + `ORTOOLS_INFEASIBLE` 作为正确结果，不伪装成可执行计划，并返回不可打开原因
 - 已知限制：案例只验证当前通用 CP-SAT 假设，不覆盖 BOM/MRP、批次/合批/拆批、多并行资源机台级换型、ERP/MES/Simio 真实集成，也不要求多个等价最优解的具体顺序完全固定
 - 用户确认：待确认
 
@@ -512,7 +592,17 @@ ERP / 主数据源
 - 实现证据：`GET /planner/workbench/release-management/runs/{run_id}/workbench` 增加 `use_latest_operational_state` 和 `operational_state_snapshot_id` 查询参数；`POST /planner/workbench/release-management/runs/{run_id}/orders/{order_id}/authorize` 增加 `UseLatestOperationalState` 和 `OperationalStateSnapshotID`；`sdbr/work_order_release_view.py` 返回实际采用的快照 ID；`sdbr/web/planner-workbench.js` 的“重新评估”使用最新运行快照，授权保留当前评估快照
 - 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "release_management_can_reevaluate_same_run_with_latest_snapshot or planning_run_release_workbench_authorizes_only_ready_order or be_rel_012" --basetemp .tmp/pytest-release-reevaluate -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "data_readiness_endpoint_returns_latest_safe_summaries or release_management_can_reevaluate_same_run_with_latest_snapshot" --basetemp .tmp/pytest-release-reevaluate-fixes -p no:cacheprovider`，2 passed；`pytest -q --basetemp .tmp/pytest-full-release-reevaluate-final -p no:cacheprovider`，312 passed，1 warning
 - 业务验收：如果原 Planning Run 的冻结快照过期，计划员可在不重建任务包、不重新排程的情况下使用最新运行状态快照重新评估物料、在途、WIP 和快照新鲜度；授权释放记录实际使用的新快照
+- 2026-06-22 业务边界补充：运行快照过期只阻止授权释放，并返回 `RecommendedAction=RefreshOperationalSnapshotAndReevaluate`、`RequiresReschedule=false`；它不是重排触发条件。只有使用新鲜快照重新评估后仍出现计划偏差、连续阻塞或超过稳定性阈值，才进入 `BE-REL-008` 重排决策。
+- 2026-06-22 Mock 闭环补充：新增 `POST /planner/workbench/release-management/runs/{run_id}/mock-operational-state-refresh`，在测试/Mock API 模式下基于现有快照生成评估时点的新运行快照，随后同一 Planning Run 可重新评估释放门控并继续授权/缓冲页验证。
 - 已知限制：当前“最新快照”按捕获时间不晚于评估时间的最大值选择；未来可按工厂、产线、资源范围筛选最新快照
+
+### BE-RUN-004 / BE-RUN-006 Planning Run 队列处理补充验收记录
+
+- 状态变更：保持 `[VERIFIED]`，补充“进入队列后可由交互式 Worker 显式领取并执行”的产品闭环证据
+- 日期：2026-06-22
+- 实现证据：`POST /planner/workbench/planning-runs/{run_id}/process-queued` 将指定 `Queued` 任务推进为 `Running`，校验租约后调用 CP-SAT 执行，最终写回 `Completed`、`Failed`、重试 `Queued` 或 `DeadLetter`；Planning Run 列表对 `Queued` 暴露 `ProcessQueue` 动作
+- 测试证据：`pytest tests/test_api.py -q -k "mock_refresh_creates_fresh_snapshot or queued_planning_run_can_be_processed_by_interactive_worker or release_management_can_reevaluate_same_run_with_latest_snapshot" --basetemp .tmp/pytest-release-queue-flow -p no:cacheprovider`，3 passed
+- 业务验收：第一版不要求常驻后台 Worker；计划员可通过“处理队列”模拟 Worker 领取、计算、完成和通知，后续可替换为自动 Worker 服务。
 
 ### BE-DATA-010 / BE-SOLVER-011 / BE-UI-006 临时日历覆盖驱动排程验收记录
 
@@ -522,6 +612,34 @@ ERP / 主数据源
 - 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_scheduling_solver.py tests/test_api.py -q -k "calendar_override or calendar_overrides_freeze_and_drive_planning_run or resource_calendar_capacity" --basetemp .tmp/pytest-calendar-overrides -p no:cacheprovider`，5 passed；`pytest tests/test_api.py -q -k "calendar_overrides_freeze_and_drive_planning_run" --basetemp .tmp/pytest-calendar-overrides-api -p no:cacheprovider`，1 passed；`pytest -q --basetemp .tmp/pytest-full-calendar-overrides -p no:cacheprovider`，315 passed，1 warning
 - 业务验收：计划员可在管理后台创建 Active 临时覆盖，新建 Planning Run 会冻结该覆盖并让 CP-SAT 避开维护窗口或使用加班/临时班次窗口；历史 Run 不受后续覆盖变化影响
 - 已知限制：基础日历模板、资源日历分配、覆盖冲突自动解决和审批流仍未实现；`TemporaryShiftOverride` 当前按新增窗口处理，不替换原班次
+
+### BE-DATA-010 / BE-SOLVER-011 / BE-UI-006 基础日历配置验收记录
+
+- 状态变更：保持 `[PARTIAL]`，补充基础日历模板和资源日历分配可配置、可冻结、可驱动 CP-SAT 的证据
+- 日期：2026-06-21
+- 实现证据：`sdbr/base_calendar.py` 新增基础日历模板应用；`sdbr/api.py` 新增 `/planner/workbench/admin/base-calendars` 与 `/planner/workbench/admin/resource-calendar-assignments` 创建/列表/详情接口；Planning Run 创建时冻结 `FrozenBaseCalendars` 与 `FrozenResourceCalendarAssignments`；执行时先应用基础日历，再应用临时覆盖；`sdbr/administration_view.py` 和管理后台 UI 展示基础日历、资源分配和 driver status
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "base_calendar or calendar_override_configuration" --basetemp .tmp/pytest-base-calendar -p no:cacheprovider`，3 passed；`pytest tests/test_api.py -q -k "administration_workbench or admin_001_002 or base_calendar or calendar_override_configuration" --basetemp .tmp/pytest-base-calendar-admin -p no:cacheprovider`，5 passed；2026-06-21 补充 `pytest tests/test_scheduling_solver.py -q -k "calendar_override or resource_calendar_conflict_priority" --basetemp .tmp/pytest-calendar-priority-solver -p no:cacheprovider`，3 passed；`pytest tests/test_api.py -q -k "base_calendar or calendar_override_configuration or administration_workbench" --basetemp .tmp/pytest-calendar-priority-api -p no:cacheprovider`，4 passed
+- 业务验收：基础日历可定义工作日、多班次、节假日和维护窗口；资源日历分配可将活动日历模板绑定到资源，并保证同一资源只有一个 Active 分配；新建 Planning Run 冻结当时的活动基础日历与资源分配，后续配置变更不影响历史 Run；CP-SAT 按冻结基础日历能力桶排程，测试中资源从 10:00 班次开始排产，切换到 06:00 班次后新 Run 使用新分配；加班和临时覆盖窗口遇到维护会被切段，遇到节假日会被扣除
+- 已知限制：审批流、企业节假日自动同步、跨工厂日历继承、节假日强制加班例外规则和 UI 复杂班次编辑器仍未完成；当前 UI 只提供单班次快速创建入口，完整模板编辑仍可通过 API 扩展
+- 用户确认：待确认
+
+### BE-DATA-010 / UI-CALENDAR-001 日历预览验收记录
+
+- 状态变更：`BE-DATA-010` 保持 `[PARTIAL]`，补充独立日历页面规格、预览 read model 和前端页面；`UI-CALENDAR-001` 推进到已验证待用户确认
+- 日期：2026-06-22
+- 实现证据：`docs/ui-specification.md` 新增 `日历配置 / Calendar Configuration` 一级导航和 `UI-CALENDAR-001`；`sdbr/calendar_preview.py` 新增日历事项要素表、冲突优先级、资源级最终能力窗口预览；`GET /planner/workbench/calendar/preview` 返回 `RequiredElements`、`Resources[].Elements`、`Resources[].FinalCapacityWindows`、`MissingDailyCapacityDates`；`GET /planner/workbench/calendar/resources` 返回最新主数据资源供下拉选择；`sdbr/web/planner-workbench.html`、`sdbr/web/planner-workbench.js`、`sdbr/web/planner-workbench.css` 新增独立日历配置页面、双语文案、资源/日期筛选、事项要素、最终窗口和规则来源展示，并复用 `/planner/workbench/admin/base-calendars`、`/planner/workbench/admin/resource-calendar-assignments`、`/planner/workbench/admin/calendar-overrides` 提供工作周/日模式、资源绑定、节假日、维护、加班和临时覆盖的操作入口；管理后台取消日历编辑表单和日历摘要区
+- 测试证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "calendar_preview or ui_calendar or semantic_application_shell or admin_001_002" --basetemp .tmp/pytest-calendar-page -p no:cacheprovider`，4 passed
+- 业务验收：预览阶段重点检查事项是否齐全，包括资源日历分配、基础班次、工作日、节假日、维护、加班、临时覆盖、冲突优先级、时区和跨班次加工规则；最终能力窗口与 CP-SAT 能力桶语义一致
+- 已知限制：本阶段完成独立页面的预览、要素检查和核心配置操作，不实现审批流、节假日强制加班例外、跨班次连续加工、复杂表格编辑器和企业节假日同步
+
+### BE-DATA-012 / BE-INT-* / BE-SOLVER-014 第一版交付边界验收记录
+
+- 状态变更：`BE-DATA-012` 从 `[NOT-STARTED]` 推进到 `[PARTIAL]`；`BE-INT-001`、`BE-INT-002`、`BE-INT-004`、`BE-INT-005` 保持 `[PARTIAL]` 并明确第一版采用 Mock API；`BE-SOLVER-014` 保持 `[PARTIAL]` 并明确第一版默认目标策略
+- 日期：2026-06-21
+- 实现证据：`sdbr/light_mrp.py` 新增轻量 MRP 评估；`POST /planner/workbench/light-mrp/evaluate` 输出工单物料可用、在途覆盖、短缺和缺库存记录；`sdbr/integration_contracts.py` 新增 `MockApiFirstVersion` 与可替换 Adapter 状态；`GET /planner/workbench/integrations/mock-api/status` 返回 Mock API、Direct ERP/MES、UNS MQTT 三种路径状态；`sdbr/scheduling_solver.py` 与 `sdbr/cp_sat_solver.py` 新增第一版默认策略 `v1_delivery_flow_bottleneck`
+- 测试证据：`pytest tests/test_material_state.py tests/test_integration_contracts.py tests/test_api.py -q -k "light_mrp or integration_contract or mock_api or administration_workbench" --basetemp .tmp/pytest-v1-boundary-target -p no:cacheprovider`，9 passed；`pytest tests/test_material_state.py tests/test_integration_contracts.py tests/test_api.py tests/test_scheduling_solver.py tests/test_dispatch_priority.py -q -k "light_mrp or integration_contract or mock_api or administration_workbench or objective or dispatch_priority" --basetemp .tmp/pytest-v1-boundary-expanded -p no:cacheprovider`，15 passed；`pytest -q --basetemp .tmp/pytest-full-v1-boundary-final -p no:cacheprovider`，328 passed，1 warning
+- 业务验收：第一版外部接口采用 Mock API；MES 只生成资源/工作中心 + 工序级派工建议，不真实下发；本系统做轻量 MRP，但不替代 ERP 库存账务；默认排程偏好为交期优先、流动时间第二、瓶颈/备用资源保护第三
+- 已知限制：完整 BOM 展开、多级净需求、替代料、批次/效期分配、真实 ERP/MES/UNS Adapter、自动投递、回执对账和生产级重试调度仍未实现
 
 ## 17. 当前验证基线
 
@@ -533,10 +651,11 @@ ERP / 主数据源
 - 当前开发：OR-Tools CP-SAT 已成为唯一活动求解器；高级排程 P1 闭环已部分完成，剩余为多机台换型、班组人数、固定偏移、版本化策略中心和批次规则。
 - 已暂停：Gurobi 新计划执行、Simio 实际仿真验证。
 - 外部边界：ERP 账务与主数据所有权、MES/SCADA 现场操作与设备控制、BI 报表设计器。
-- 完整自动化测试：2026-06-21 最近执行 `pytest -q --basetemp .tmp/pytest-full-cp-business-cases -p no:cacheprovider`，结果为 `316 passed, 1 warning`。警告来自 Starlette TestClient/httpx 弃用提示，不影响测试通过。
+- 完整自动化测试：2026-06-21 最近执行 `pytest -q --basetemp .tmp/pytest-full-v1-boundary-final -p no:cacheprovider`，结果为 `328 passed, 1 warning`。警告来自 Starlette TestClient/httpx 弃用提示，不影响测试通过。
 - 测试/生产隔离基线：新增 `BE-OPS-011` 环境元数据与独立 SQLite 路径，新增 `BE-DATA-014` 基准工厂、场景包和测试库重建。
 - 释放/缓冲测试证据（`BE-DATA-014` / `BE-REL-010` / `BE-EXEC-004`）：已新增时间一致且快照新鲜的端到端案例；默认 60 分钟运行快照新鲜度下可完成释放授权、进入 Buffer Board，并通过执行事务从“待接收”移动到“已接收”。
-- 已知日历缺口（`BE-DATA-010` / `BE-UI-006`）：管理 read model 已展示日历四层结构并提供临时覆盖配置入口；Active 临时覆盖已可冻结并驱动新建 Planning Run 的 CP-SAT 能力桶；基础日历编辑、班次模板、冲突规则和审批流尚未完成。
+- 已知日历缺口（`BE-DATA-010` / `BE-UI-006`）：管理 read model 已展示日历四层结构，基础日历模板、资源分配和临时覆盖均可配置；Active 基础日历/分配/临时覆盖已可冻结并驱动新建 Planning Run 的 CP-SAT 能力桶；维护、节假日、临时覆盖、加班和基础班次优先级已进入能力桶计算；审批流、企业节假日同步、节假日强制加班例外和完整 UI 日历编辑器尚未完成。
+- 第一版交付边界（`BE-INT-*` / `BE-DATA-012` / `BE-SOLVER-014`）：外部接口采用 Mock API；MES 第一版只生成派工建议，不真实下发；本系统执行轻量 MRP；默认排程偏好为交期优先、流动时间第二、瓶颈/备用资源保护第三；真实 ERP/MES/UNS、完整多级 MRP 和高级批次规则暂不纳入第一版交付。
 - 性能与恢复基线记录于 `docs/backend-readiness-2026-06-19.md`；任何状态更新应重新运行相关测试。
 
 ## 18. 变更记录
@@ -563,6 +682,15 @@ ERP / 主数据源
 | 2.23 | 2026-06-21 | 临时日历覆盖冻结到 Planning Run 并驱动 CP-SAT 能力桶；基础日历模板编辑与冲突审批仍保持后续边界 |
 | 2.24 | 2026-06-21 | 新增六组 `TST-CP-*` CP-SAT 业务案例、人工验收手册、案例断言和总览展示字段，用于按业务直觉验收有限产能、备用资源、日历覆盖、效率、换型和不可行诊断 |
 | 2.25 | 2026-06-21 | 新增排程输出治理 read model、内部计划输出包和工单详情治理上下文；真实 ERP/MES 投递仍归 `BE-INT-*` |
+| 2.26 | 2026-06-21 | 新增基础日历模板与资源日历分配配置 API，冻结到 Planning Run 并驱动 CP-SAT 能力桶；复杂冲突审批仍保持后续边界 |
+| 2.27 | 2026-06-21 | 明确 ERP/MES 集成采用 Canonical Message + Integration Port + 可替换 Adapter 架构，同时支持直连 ERP/MES 与未来 UNS MQTT 路线 |
+| 2.28 | 2026-06-21 | 基础日历补齐资源级冲突优先级：维护 > 节假日 > 临时覆盖 > 加班 > 基础班次；加班和临时覆盖遇维护切段、遇节假日扣除 |
+| 2.29 | 2026-06-21 | 新增 MES 派工优先级输出：资源/工作中心 + 工序级队列，授权释放硬门槛，最新物料/WIP 再检查，插队/确认/重排建议 |
+| 2.30 | 2026-06-21 | 固化第一版交付边界：Mock API 为活动集成方式、MES 仅派工建议、轻量 MRP 第一版、默认目标策略为交期优先/流动时间/瓶颈保护 |
+| 2.31 | 2026-06-22 | 新增日历配置独立页面、日历预览 read model、前端预览区和轻量配置操作区，输出事项要素、冲突优先级、最终 CP-SAT 能力窗口和缺失日能力日期；资源/日历改为选择式输入，管理后台取消日历编辑表单和日历摘要区 |
+| 2.32 | 2026-06-22 | 案例验收新增排程结果可打开性状态、不可打开原因、单案例复位和全部案例复位，确保 `TST-CP-*` 案例可重复验收 |
+| 2.33 | 2026-06-22 | 明确运行快照过期只触发“刷新快照并重新评估释放”，不触发重新排程；阻塞原因增加推荐动作和 `RequiresReschedule=false` 证据 |
+| 2.34 | 2026-06-22 | 补齐 Mock 运行快照刷新和 Planning Run 交互式队列处理：释放门控可生成新鲜测试快照后继续授权，Queued 任务可显式领取、计算并完成 |
 | 2.1 | 2026-06-19 | 新增 BE-DATA-014 与 BE-OPS-011，用于测试/生产隔离、基准测试数据集、场景包和测试库重建能力 |
 | 2.2 | 2026-06-19 | 完成 BE-OPS-011 测试/生产环境隔离与 BE-DATA-014 测试数据重建工具，记录 257 项测试基线 |
 | 2.3 | 2026-06-19 | 明确后台业务闭环 1-4 验收边界：测试数据驱动 Planning Run、计划输出、释放门控对齐及计划确认/发布生命周期 |

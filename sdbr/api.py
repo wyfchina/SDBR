@@ -17,6 +17,11 @@ from pydantic import BaseModel, Field
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.administration_view import build_administration_workbench
+from sdbr.base_calendar import (
+    apply_base_calendar_assignments,
+    base_calendar_driver_status,
+    resource_calendar_assignment_driver_status,
+)
 from sdbr.calendar_import import (
     CalendarImportRow,
     attach_work_calendars_to_resources,
@@ -26,7 +31,9 @@ from sdbr.calendar_overrides import (
     apply_calendar_overrides,
     calendar_override_driver_status,
 )
+from sdbr.calendar_preview import build_calendar_preview
 from sdbr.data_readiness import build_data_readiness
+from sdbr.dispatch_priority import build_mes_dispatch_priority_queue
 from sdbr.buffer_execution_view import (
     build_buffer_execution_workbench,
     build_buffer_order_detail,
@@ -38,6 +45,7 @@ from sdbr.exception_center_view import (
 from sdbr.inventory_import import InventoryBufferImportRow, import_inventory_buffers_from_rows
 from sdbr.integration_contracts import (
     find_integration_contract,
+    integration_adapter_status_payload,
     integration_contracts_payload,
     integration_dead_letters,
     integration_message_record,
@@ -55,6 +63,7 @@ from sdbr.material_state import (
     import_material_availability_from_rows,
     import_wip_limits_from_rows,
 )
+from sdbr.light_mrp import evaluate_light_mrp
 from sdbr.order_import import OrderImportRow, import_orders_from_rows
 from sdbr.operational_state import (
     OperationalStateSnapshot,
@@ -167,7 +176,11 @@ from sdbr.state_store import (
     StateStoreRevisionConflict,
     WorkbenchStateStore,
 )
-from sdbr.test_data import test_case_catalog_payload
+from sdbr.test_data import (
+    reset_test_case_state,
+    seed_baseline_test_data,
+    test_case_catalog_payload,
+)
 from sdbr.test_case_acceptance import (
     DEFAULT_CASE_EVALUATED_AT,
     build_test_case_acceptance_workbench,
@@ -274,7 +287,7 @@ class PlannerWorkbenchCalculatePayload(BaseModel):
     SolverBackendID: str = "baseline-finite"
     TimeBufferMinutes: int = 0
     FreezeWindowMinutes: int = Field(default=0, ge=0)
-    ObjectiveStrategyID: str = "balanced"
+    ObjectiveStrategyID: str = "v1_delivery_flow_bottleneck"
     GeneratedAt: datetime | None = None
     InventoryBuffers: list[InventoryBufferPayload] = []
     MaterialRequirements: list[MaterialRequirementPayload] = []
@@ -436,6 +449,28 @@ class CalendarOverridePayload(BaseModel):
     Status: Literal["Draft", "Active", "Retired"] = "Draft"
 
 
+class BaseCalendarPayload(BaseModel):
+    CalendarID: str
+    DisplayName: str | None = None
+    WorkingWeekdays: list[int]
+    Shifts: list[ShiftPayload]
+    MaintenanceWindows: list[MaintenanceWindowPayload] = []
+    Holidays: list[date] = []
+    Timezone: str = "UTC"
+    CreatedAt: datetime
+    CreatedBy: str
+    Status: Literal["Draft", "Active", "Retired"] = "Draft"
+
+
+class ResourceCalendarAssignmentPayload(BaseModel):
+    AssignmentID: str
+    ResourceID: str
+    CalendarID: str
+    CreatedAt: datetime
+    CreatedBy: str
+    Status: Literal["Draft", "Active", "Retired"] = "Draft"
+
+
 class SchedulingStrategyPayload(BaseModel):
     StrategyID: str
     DisplayName: str
@@ -458,7 +493,7 @@ class PlanningRunPayload(BaseModel):
     ScheduleStartAt: datetime
     TimeBufferMinutes: int = Field(default=0, ge=0)
     FreezeWindowMinutes: int = Field(default=0, ge=0)
-    ObjectiveStrategyID: str = "balanced"
+    ObjectiveStrategyID: str = "v1_delivery_flow_bottleneck"
     SetupTransitions: list[SetupTransitionPayload] = []
     SolverBackendID: Literal["ortools", "gurobi"] = "ortools"
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
@@ -494,6 +529,13 @@ class PlanningRunLeaseRenewalPayload(BaseModel):
     LeaseToken: str
     RenewedAt: datetime
     LeaseSeconds: int = Field(default=300, ge=10, le=3600)
+
+
+class PlanningRunProcessQueuedPayload(BaseModel):
+    WorkerID: str = "interactive-worker"
+    ProcessedAt: datetime
+    LeaseSeconds: int = Field(default=300, ge=10, le=3600)
+    TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
 
 
 class PlanningRunCancellationPayload(BaseModel):
@@ -561,6 +603,9 @@ class ExecutionEventPayload(BaseModel):
     TargetStartAt: datetime
     ExceptionCode: str | None = None
     AuthorizationID: str | None = None
+    OperationID: str | None = None
+    ResourceID: str | None = None
+    DispatchConflictResult: str | None = None
 
 
 class BufferTransactionPayload(BaseModel):
@@ -610,6 +655,13 @@ class OperationalStateSnapshotPayload(BaseModel):
     WipLimits: list[WipLimitPayload] = []
 
 
+class MockOperationalStateRefreshPayload(BaseModel):
+    EvaluatedAt: datetime
+    SnapshotID: str | None = None
+    SourceSnapshotID: str | None = None
+    ActorID: str = "planner"
+
+
 class ReleaseCandidatePayload(BaseModel):
     EvaluatedAt: datetime
     ReleasePolicyVersionID: str | None = None
@@ -617,6 +669,14 @@ class ReleaseCandidatePayload(BaseModel):
     InventoryBuffers: list[InventoryBufferPayload] = []
     MaterialRequirements: list[MaterialRequirementPayload] = []
     WipLimits: list[WipLimitPayload] = []
+    MaterialAvailability: list[MaterialAvailabilityPayload] = []
+
+
+class LightMrpEvaluationPayload(BaseModel):
+    EvaluatedAt: datetime
+    MaterialCheckWindowMinutes: int = Field(default=0, ge=0)
+    InventoryBuffers: list[InventoryBufferPayload] = []
+    MaterialRequirements: list[MaterialRequirementPayload] = []
     MaterialAvailability: list[MaterialAvailabilityPayload] = []
 
 
@@ -806,6 +866,23 @@ def _append_planning_run_audit_event(
     )
 
 
+def _enrich_test_case_openability(cases: list[dict[str, object]]) -> None:
+    for case in cases:
+        actual = case.get("Actual") if isinstance(case.get("Actual"), dict) else {}
+        status = actual.get("PlanningRunStatus") if isinstance(actual, dict) else None
+        can_open = bool(status == "Completed" and actual.get("GeneratedAt") is not None)
+        reason = None
+        if not can_open:
+            if status == "DeadLetter":
+                reason = "PLANNING_RUN_DEAD_LETTER"
+            elif status is None:
+                reason = "PLANNING_RUN_NOT_EXECUTED"
+            else:
+                reason = "PLANNING_RUN_NOT_COMPLETED"
+        case["ScheduleResultOpenable"] = can_open
+        case["ScheduleResultUnavailableReason"] = reason
+
+
 def create_app(
     state_store: WorkbenchStateStore | None = None,
     *,
@@ -830,6 +907,8 @@ def create_app(
     operational_state_snapshots = active_store.operational_state_snapshots
     release_decision_packages = active_store.release_decision_packages
     dbr_release_policies = active_store.dbr_release_policies
+    base_calendars = active_store.base_calendars
+    resource_calendar_assignments = active_store.resource_calendar_assignments
     calendar_overrides = active_store.calendar_overrides
     scheduling_strategy_versions = active_store.scheduling_strategy_versions
     integration_messages = active_store.integration_messages
@@ -1032,6 +1111,28 @@ def create_app(
             },
         }
 
+    @app.post("/planner/workbench/light-mrp/evaluate")
+    def planner_workbench_light_mrp_evaluate(
+        payload: LightMrpEvaluationPayload,
+    ) -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/light-mrp/evaluate",
+            "StatusCode": 200,
+            "Data": evaluate_light_mrp(
+                material_requirements=_material_requirements_from_payload(
+                    payload.MaterialRequirements
+                ),
+                inventory_buffers=_inventory_buffers_from_payload(
+                    payload.InventoryBuffers
+                ),
+                material_availability=_material_availability_from_payload(
+                    payload.MaterialAvailability
+                ),
+                evaluated_at=payload.EvaluatedAt,
+                material_check_window_minutes=payload.MaterialCheckWindowMinutes,
+            ),
+        }
+
     @app.post("/planner/workbench/wip-limits/import")
     def planner_workbench_wip_limits_import(payload: WipLimitImportPayload):
         endpoint = "/planner/workbench/wip-limits/import"
@@ -1174,20 +1275,59 @@ def create_app(
     def planner_workbench_test_data_acceptance(
         evaluated_at: datetime = DEFAULT_CASE_EVALUATED_AT,
     ) -> dict[str, object]:
+        workbench = build_test_case_acceptance_workbench(
+            planning_runs=planning_runs,
+            master_data_versions=master_data_versions,
+            operational_state_snapshots=operational_state_snapshots,
+            release_authorizations=release_authorizations,
+            acceptance_decisions=test_case_acceptance_decisions,
+            evaluated_at=evaluated_at,
+        )
+        _enrich_test_case_openability(workbench["Cases"])
         return {
             "Endpoint": "/planner/workbench/test-data/acceptance",
             "StatusCode": 200,
             "Data": {
-                **build_test_case_acceptance_workbench(
-                    planning_runs=planning_runs,
-                    master_data_versions=master_data_versions,
-                    operational_state_snapshots=operational_state_snapshots,
-                    release_authorizations=release_authorizations,
-                    acceptance_decisions=test_case_acceptance_decisions,
-                    evaluated_at=evaluated_at,
-                ),
+                **workbench,
                 "Environment": active_environment.to_dict(),
             },
+        }
+
+    @app.post("/planner/workbench/test-data/acceptance/reset")
+    def planner_workbench_test_data_acceptance_reset_all() -> dict[str, object]:
+        summary = seed_baseline_test_data(active_store)
+        return {
+            "Endpoint": "/planner/workbench/test-data/acceptance/reset",
+            "StatusCode": 200,
+            "Data": {
+                "Status": "Reset",
+                "Scope": "AllCases",
+                "Summary": summary.to_dict(),
+            },
+        }
+
+    @app.post("/planner/workbench/test-data/acceptance/{case_id}/reset")
+    def planner_workbench_test_data_acceptance_reset_case(case_id: str):
+        endpoint = f"/planner/workbench/test-data/acceptance/{case_id}/reset"
+        try:
+            result = reset_test_case_state(active_store, case_id=case_id)
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "CaseID": case_id,
+                        "Status": "TestCaseNotFound",
+                        "Message": f"Test case {case_id} was not found.",
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": result,
         }
 
     @app.get("/planner/workbench/test-data/acceptance/decisions")
@@ -1289,6 +1429,13 @@ def create_app(
                 master_data_versions=master_data_versions.values(),
                 planning_runs=planning_runs.values(),
                 dbr_release_policies=dbr_release_policies.values(),
+                base_calendars=base_calendars.values(),
+                resource_calendar_assignments=_resource_calendar_assignments_with_driver_status(
+                    assignments=resource_calendar_assignments.values(),
+                    calendars=base_calendars.values(),
+                    master_data_versions=master_data_versions.values(),
+                    planning_runs=planning_runs.values(),
+                ),
                 calendar_overrides=_calendar_overrides_with_driver_status(
                     overrides=calendar_overrides.values(),
                     master_data_versions=master_data_versions.values(),
@@ -1300,6 +1447,213 @@ def create_app(
                 state_store_health=active_store.health(),
                 ortools_available=availability.available,
             ),
+        }
+
+    @app.post("/planner/workbench/admin/base-calendars")
+    def planner_workbench_base_calendar_create(payload: BaseCalendarPayload):
+        endpoint = "/planner/workbench/admin/base-calendars"
+        if payload.CalendarID in base_calendars:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "CalendarID": payload.CalendarID,
+                        "Status": "BaseCalendarConflict",
+                        "Message": f"Base calendar {payload.CalendarID} already exists.",
+                    },
+                },
+            )
+        invalid_shift = next(
+            (shift for shift in payload.Shifts if shift.End <= shift.Start),
+            None,
+        )
+        if invalid_shift is not None:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 422,
+                    "Data": {
+                        "CalendarID": payload.CalendarID,
+                        "Status": "BaseCalendarInvalid",
+                        "Message": "Shift End must be later than Start.",
+                    },
+                },
+            )
+        invalid_window = next(
+            (
+                window
+                for window in payload.MaintenanceWindows
+                if window.End <= window.Start
+            ),
+            None,
+        )
+        if invalid_window is not None:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 422,
+                    "Data": {
+                        "CalendarID": payload.CalendarID,
+                        "Status": "BaseCalendarInvalid",
+                        "Message": "Maintenance window End must be later than Start.",
+                    },
+                },
+            )
+        calendar = _base_calendar_from_payload(payload)
+        base_calendars[payload.CalendarID] = calendar
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=payload.CalendarID,
+            action="BaseCalendarCreated",
+            actor_id=payload.CreatedBy,
+            occurred_at=payload.CreatedAt,
+            details={
+                "CalendarID": payload.CalendarID,
+                "Status": payload.Status,
+                "ShiftCount": len(payload.Shifts),
+            },
+        )
+        enriched = _base_calendars_with_driver_status(
+            calendars=[calendar],
+            assignments=resource_calendar_assignments.values(),
+            planning_runs=planning_runs.values(),
+        )[0]
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Calendar": enriched}}
+
+    @app.get("/planner/workbench/admin/base-calendars")
+    def planner_workbench_base_calendar_list() -> dict[str, object]:
+        calendars = sorted(
+            _base_calendars_with_driver_status(
+                calendars=base_calendars.values(),
+                assignments=resource_calendar_assignments.values(),
+                planning_runs=planning_runs.values(),
+            ),
+            key=lambda item: str(item.get("CreatedAt", "")),
+            reverse=True,
+        )
+        return {
+            "Endpoint": "/planner/workbench/admin/base-calendars",
+            "StatusCode": 200,
+            "Data": {
+                "CalendarCount": len(calendars),
+                "ActiveCalendarCount": sum(
+                    1 for item in calendars if item.get("Status") == "Active"
+                ),
+                "Calendars": calendars,
+            },
+        }
+
+    @app.get("/planner/workbench/admin/base-calendars/{calendar_id}")
+    def planner_workbench_base_calendar_get(calendar_id: str):
+        endpoint = f"/planner/workbench/admin/base-calendars/{calendar_id}"
+        calendar = base_calendars.get(calendar_id)
+        if calendar is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "CalendarID": calendar_id,
+                        "Status": "BaseCalendarNotFound",
+                        "Message": f"Base calendar {calendar_id} was not found.",
+                    },
+                },
+            )
+        enriched = _base_calendars_with_driver_status(
+            calendars=[calendar],
+            assignments=resource_calendar_assignments.values(),
+            planning_runs=planning_runs.values(),
+        )[0]
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Calendar": enriched}}
+
+    @app.post("/planner/workbench/admin/resource-calendar-assignments")
+    def planner_workbench_resource_calendar_assignment_create(
+        payload: ResourceCalendarAssignmentPayload,
+    ):
+        endpoint = "/planner/workbench/admin/resource-calendar-assignments"
+        if payload.AssignmentID in resource_calendar_assignments:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "AssignmentID": payload.AssignmentID,
+                        "Status": "ResourceCalendarAssignmentConflict",
+                        "Message": (
+                            f"Resource calendar assignment {payload.AssignmentID} already exists."
+                        ),
+                    },
+                },
+            )
+        if payload.CalendarID not in base_calendars:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "CalendarID": payload.CalendarID,
+                        "Status": "BaseCalendarNotFound",
+                        "Message": f"Base calendar {payload.CalendarID} was not found.",
+                    },
+                },
+            )
+        assignment = _resource_calendar_assignment_from_payload(payload)
+        if assignment["Status"] == "Active":
+            _retire_other_active_resource_calendar_assignments(
+                assignments=resource_calendar_assignments,
+                active_assignment_id=payload.AssignmentID,
+                resource_id=payload.ResourceID,
+            )
+        resource_calendar_assignments[payload.AssignmentID] = assignment
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=payload.AssignmentID,
+            action="ResourceCalendarAssignmentCreated",
+            actor_id=payload.CreatedBy,
+            occurred_at=payload.CreatedAt,
+            details={
+                "ResourceID": payload.ResourceID,
+                "CalendarID": payload.CalendarID,
+                "Status": payload.Status,
+            },
+        )
+        enriched = _resource_calendar_assignments_with_driver_status(
+            assignments=[assignment],
+            calendars=base_calendars.values(),
+            master_data_versions=master_data_versions.values(),
+            planning_runs=planning_runs.values(),
+        )[0]
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Assignment": enriched}}
+
+    @app.get("/planner/workbench/admin/resource-calendar-assignments")
+    def planner_workbench_resource_calendar_assignment_list() -> dict[str, object]:
+        assignments = sorted(
+            _resource_calendar_assignments_with_driver_status(
+                assignments=resource_calendar_assignments.values(),
+                calendars=base_calendars.values(),
+                master_data_versions=master_data_versions.values(),
+                planning_runs=planning_runs.values(),
+            ),
+            key=lambda item: str(item.get("CreatedAt", "")),
+            reverse=True,
+        )
+        return {
+            "Endpoint": "/planner/workbench/admin/resource-calendar-assignments",
+            "StatusCode": 200,
+            "Data": {
+                "AssignmentCount": len(assignments),
+                "ActiveAssignmentCount": sum(
+                    1 for item in assignments if item.get("Status") == "Active"
+                ),
+                "Assignments": assignments,
+            },
         }
 
     @app.post("/planner/workbench/admin/calendar-overrides")
@@ -1402,6 +1756,107 @@ def create_app(
         )[0]
         return {"Endpoint": endpoint, "StatusCode": 200, "Data": {"Override": enriched}}
 
+    @app.get("/planner/workbench/calendar/resources")
+    def planner_workbench_calendar_resources(
+        MasterDataVersionID: str | None = None,
+    ) -> dict[str, object]:
+        version = _calendar_preview_master_data_version(
+            master_data_versions=master_data_versions,
+            version_id=MasterDataVersionID,
+        )
+        resources = _resources_from_payload(
+            [ResourcePayload(**item) for item in version.get("Resources", [])]
+        ) if version else []
+        rows = _resources_to_payload_dict(resources)
+        return {
+            "Endpoint": "/planner/workbench/calendar/resources",
+            "StatusCode": 200,
+            "Data": {
+                "ResourceCount": len(rows),
+                "Resources": rows,
+            },
+        }
+
+    @app.get("/planner/workbench/calendar/preview")
+    def planner_workbench_calendar_preview(
+        StartDate: date,
+        EndDate: date,
+        ResourceID: str | None = None,
+        MasterDataVersionID: str | None = None,
+        Timezone: str = "UTC",
+    ):
+        endpoint = "/planner/workbench/calendar/preview"
+        if EndDate < StartDate:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 422,
+                    "Data": {
+                        "Status": "CalendarPreviewInvalidRange",
+                        "Message": "EndDate must be on or after StartDate.",
+                    },
+                },
+            )
+        try:
+            tzinfo = ZoneInfo(Timezone)
+        except Exception:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 422,
+                    "Data": {
+                        "Status": "CalendarPreviewInvalidTimezone",
+                        "Message": f"Timezone {Timezone} is not valid.",
+                    },
+                },
+            )
+        version = _calendar_preview_master_data_version(
+            master_data_versions=master_data_versions,
+            version_id=MasterDataVersionID,
+        )
+        if version is None:
+            return _planning_run_reference_error(
+                endpoint=endpoint,
+                entity_id=MasterDataVersionID or "latest",
+                status="MasterDataVersionNotFound",
+                message="No master data version with resources was found for calendar preview.",
+            )
+        resources = _resources_from_payload(
+            [
+                ResourcePayload(**item)
+                for item in version.get("Resources", [])
+                if isinstance(item, dict)
+            ]
+        )
+        if ResourceID is not None and all(
+            resource.resource_id != ResourceID for resource in resources
+        ):
+            return _planning_run_reference_error(
+                endpoint=endpoint,
+                entity_id=ResourceID,
+                status="ResourceNotFound",
+                message=f"Resource {ResourceID} was not found in master data version {version.get('VersionID')}.",
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_calendar_preview(
+                resources=resources,
+                base_calendars=list(base_calendars.values()),
+                resource_calendar_assignments=list(
+                    resource_calendar_assignments.values()
+                ),
+                calendar_overrides=list(calendar_overrides.values()),
+                start_date=StartDate,
+                end_date=EndDate,
+                tzinfo=tzinfo,
+                resource_id=ResourceID,
+            )
+            | {"MasterDataVersionID": version.get("VersionID")},
+        }
+
     @app.post("/planner/workbench/admin/scheduling-strategies")
     def planner_workbench_scheduling_strategy_create(
         payload: SchedulingStrategyPayload,
@@ -1465,6 +1920,7 @@ def create_app(
                 "StrategyCount": len(strategies),
                 "ActiveStrategyID": active.get("StrategyID") if active else None,
                 "BuiltInStrategyIDs": [
+                    "v1_delivery_flow_bottleneck",
                     "balanced",
                     "delivery_first",
                     "flow_first",
@@ -1512,6 +1968,14 @@ def create_app(
             "Endpoint": "/planner/workbench/integrations/contracts",
             "StatusCode": 200,
             "Data": integration_contracts_payload(),
+        }
+
+    @app.get("/planner/workbench/integrations/mock-api/status")
+    def planner_workbench_integration_mock_api_status() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/integrations/mock-api/status",
+            "StatusCode": 200,
+            "Data": integration_adapter_status_payload(),
         }
 
     @app.get("/planner/workbench/integrations/contracts/{contract_id}")
@@ -2104,6 +2568,10 @@ def create_app(
             operational_snapshot=operational_snapshot,
             release_policy=release_policy,
             scheduling_strategy=scheduling_strategy,
+            frozen_base_calendars=_active_base_calendars(base_calendars.values()),
+            frozen_resource_calendar_assignments=_active_resource_calendar_assignments(
+                resource_calendar_assignments.values()
+            ),
             frozen_calendar_overrides=_active_calendar_overrides(
                 calendar_overrides.values()
             ),
@@ -2370,6 +2838,18 @@ def create_app(
                 solver_time_limit_seconds=payload.TimeLimitSeconds,
                 scheduling_strategy_versions=scheduling_strategy_versions,
                 frozen_scheduling_strategy=planning_run.get("FrozenSchedulingStrategy"),
+                frozen_base_calendars=(
+                    planning_run.get("FrozenBaseCalendars")
+                    if isinstance(planning_run.get("FrozenBaseCalendars"), list)
+                    else []
+                ),
+                frozen_resource_calendar_assignments=(
+                    planning_run.get("FrozenResourceCalendarAssignments")
+                    if isinstance(
+                        planning_run.get("FrozenResourceCalendarAssignments"), list
+                    )
+                    else []
+                ),
                 frozen_calendar_overrides=(
                     planning_run.get("FrozenCalendarOverrides")
                     if isinstance(planning_run.get("FrozenCalendarOverrides"), list)
@@ -2443,6 +2923,119 @@ def create_app(
             "StatusCode": 200,
             "Data": {"PlanningRun": _planning_run_public_record(completed_run)},
         }
+
+    @app.post("/planner/workbench/planning-runs/{run_id}/process-queued")
+    def planner_workbench_planning_run_process_queued(
+        run_id: str,
+        payload: PlanningRunProcessQueuedPayload,
+        request: Request,
+    ):
+        endpoint = f"/planner/workbench/planning-runs/{run_id}/process-queued"
+        with claim_lock:
+            identity_error = _worker_identity_mismatch_response(
+                request=request,
+                claimed_worker_id=payload.WorkerID,
+                endpoint=endpoint,
+            )
+            if identity_error is not None:
+                return identity_error
+            planning_run = planning_runs.get(run_id)
+            if planning_run is None:
+                return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+            if planning_run.get("SolverBackendID") in PAUSED_SOLVER_BACKEND_IDS:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "RunID": run_id,
+                            "SolverBackendID": planning_run.get("SolverBackendID"),
+                            "Status": "SolverBackendPaused",
+                            "Message": "Paused solver runs must be copied to a new CP-SAT planning run.",
+                        },
+                    },
+                )
+            if planning_run.get("Status") != "Queued":
+                return _planning_run_transition_conflict(
+                    endpoint=endpoint,
+                    planning_run=planning_run,
+                    message=(
+                        f"Planning run {run_id} is not queued and cannot be "
+                        "processed by the interactive worker."
+                    ),
+                )
+            if not _planning_run_ready_for_claim(planning_run, payload.ProcessedAt):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "RunID": run_id,
+                            "Status": "PlanningRunNotReadyForClaim",
+                            "NextAttemptAt": planning_run.get("NextAttemptAt"),
+                        },
+                    },
+                )
+            lease_token = token_urlsafe(24)
+            claimed_run = dict(planning_run)
+            claimed_run.pop("LeaseToken", None)
+            claimed_run.update(
+                {
+                    "Status": "Running",
+                    "WorkerID": payload.WorkerID,
+                    "LeaseTokenHash": _lease_token_hash(lease_token),
+                    "LeaseClaimedAt": payload.ProcessedAt.isoformat(),
+                    "LeaseExpiresAt": (
+                        payload.ProcessedAt
+                        + timedelta(seconds=payload.LeaseSeconds)
+                    ).isoformat(),
+                    "LeaseSeconds": payload.LeaseSeconds,
+                    "AttemptCount": int(planning_run.get("AttemptCount", 0)) + 1,
+                    "RecoveredFromExpiredLease": False,
+                }
+            )
+            claimed_run["StatusHistory"] = [
+                *planning_run["StatusHistory"],
+                {
+                    "Status": "Running",
+                    "ChangedAt": payload.ProcessedAt.isoformat(),
+                    "ChangedBy": payload.WorkerID,
+                    "Reason": "InteractiveWorkerClaim",
+                },
+            ]
+            planning_runs[run_id] = claimed_run
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=run_id,
+                action="PlanningRunClaimed",
+                actor_id=_effective_actor_id(request, payload.WorkerID),
+                occurred_at=payload.ProcessedAt,
+                details={
+                    "AttemptCount": claimed_run["AttemptCount"],
+                    "Mode": "InteractiveWorker",
+                },
+            )
+        execution_response = planner_workbench_planning_run_execute(
+            run_id,
+            PlanningRunExecutionPayload(
+                ExecutedBy=payload.WorkerID,
+                StartedAt=payload.ProcessedAt,
+                TimeLimitSeconds=payload.TimeLimitSeconds,
+                LeaseToken=lease_token,
+            ),
+            request,
+        )
+        if isinstance(execution_response, JSONResponse):
+            return execution_response
+        execution_response["Endpoint"] = endpoint
+        execution_response["Data"]["WorkerLifecycle"] = {
+            "WorkerID": payload.WorkerID,
+            "ClaimedAt": payload.ProcessedAt.isoformat(),
+            "ExecutionMode": "InteractiveWorker",
+        }
+        return execution_response
 
     @app.post("/planner/workbench/planning-runs/{run_id}/renew-lease")
     def planner_workbench_planning_run_renew_lease(
@@ -3298,6 +3891,102 @@ def create_app(
                     dbr_release_policies=dbr_release_policies,
                 ),
             ),
+        }
+
+    @app.post(
+        "/planner/workbench/release-management/runs/{run_id}"
+        "/mock-operational-state-refresh"
+    )
+    def planner_workbench_release_management_mock_refresh(
+        run_id: str,
+        payload: MockOperationalStateRefreshPayload,
+        request: Request,
+    ):
+        endpoint = (
+            f"/planner/workbench/release-management/runs/{run_id}"
+            "/mock-operational-state-refresh"
+        )
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        if planning_run.get("Status") != "Completed" or not isinstance(
+            planning_run.get("Schedule"), dict
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "ReleaseCandidatesUnavailable",
+                    },
+                },
+            )
+        source_snapshot = _operational_state_snapshot_for_release_evaluation(
+            planning_run=planning_run,
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=payload.EvaluatedAt,
+            use_latest_operational_state=True,
+            requested_snapshot_id=payload.SourceSnapshotID,
+        )
+        if source_snapshot is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {"Status": "OperationalStateSnapshotNotFound"},
+                },
+            )
+        snapshot_id = payload.SnapshotID or _next_mock_operational_snapshot_id(
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=payload.EvaluatedAt,
+        )
+        if snapshot_id in operational_state_snapshots:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "SnapshotID": snapshot_id,
+                        "Status": "OperationalStateSnapshotConflict",
+                    },
+                },
+            )
+        refreshed_snapshot = create_operational_state_snapshot(
+            snapshot_id=snapshot_id,
+            captured_at=payload.EvaluatedAt,
+            inventory_buffers=list(source_snapshot.inventory_buffers),
+            material_availability=list(source_snapshot.material_availability),
+            wip_limits=list(source_snapshot.wip_limits),
+        )
+        operational_state_snapshots[refreshed_snapshot.snapshot_id] = (
+            refreshed_snapshot
+        )
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=run_id,
+            action="OperationalStateSnapshotMockRefreshed",
+            actor_id=_effective_actor_id(request, payload.ActorID),
+            occurred_at=payload.EvaluatedAt,
+            details={
+                "SourceSnapshotID": source_snapshot.snapshot_id,
+                "SnapshotID": refreshed_snapshot.snapshot_id,
+                "Usage": "ReleaseGateReevaluation",
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "SourceSnapshotID": source_snapshot.snapshot_id,
+                "Snapshot": _operational_state_snapshot_to_dict(
+                    refreshed_snapshot
+                ),
+                "RecommendedNextAction": "ReevaluateReleaseGate",
+            },
         }
 
     @app.post(
@@ -5341,6 +6030,90 @@ def create_app(
             },
         }
 
+    @app.get("/planner/workbench/dispatch-priority/runs/{run_id}/workbench")
+    def planner_workbench_dispatch_priority(
+        run_id: str,
+        evaluated_at: datetime,
+        operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = True,
+        operational_state_snapshot_id: str | None = None,
+    ):
+        endpoint = f"/planner/workbench/dispatch-priority/runs/{run_id}/workbench"
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        if planning_run.get("Status") != "Completed" or not isinstance(
+            planning_run.get("Schedule"), dict
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {"Status": "DispatchPriorityUnavailable", "RunID": run_id},
+                },
+            )
+        snapshot = _operational_state_snapshot_for_release_evaluation(
+            planning_run=planning_run,
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=evaluated_at,
+            use_latest_operational_state=use_latest_operational_state,
+            requested_snapshot_id=operational_state_snapshot_id,
+        )
+        if snapshot is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {"Status": "OperationalStateSnapshotNotFound"},
+                },
+            )
+        freshness = evaluate_operational_state_freshness(
+            snapshot=snapshot,
+            evaluated_at=evaluated_at,
+            max_age_minutes=operational_state_max_age_minutes,
+        )
+        master_data = master_data_versions.get(
+            str(planning_run.get("MasterDataVersionID")), {}
+        )
+        release_policy = _release_policy_for_evaluation(
+            planning_run=planning_run,
+            requested_policy_id=None,
+            dbr_release_policies=dbr_release_policies,
+        )
+        release_workbench = build_release_management_workbench(
+            planning_run=planning_run,
+            evaluated_at=evaluated_at,
+            inventory_buffers=snapshot.inventory_buffers,
+            material_requirements=_material_requirements_from_payload(
+                [
+                    MaterialRequirementPayload(**item)
+                    for item in master_data.get("MaterialRequirements", [])
+                    if isinstance(item, dict)
+                ]
+            ),
+            wip_limits=snapshot.wip_limits,
+            material_availability=snapshot.material_availability,
+            operational_state_status=freshness.status,
+            operational_state_captured_at=snapshot.captured_at,
+            authorizations=release_authorizations,
+            operational_state_snapshot_id=snapshot.snapshot_id,
+            release_policy=release_policy,
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_mes_dispatch_priority_queue(
+                planning_run=planning_run,
+                master_data_version=master_data,
+                release_workbench=release_workbench,
+                authorizations=release_authorizations,
+                execution_events=execution_events,
+                evaluated_at=evaluated_at,
+            ),
+        }
+
     @app.get("/planner/workbench/release-authorizations/{authorization_id}/dispatch-package")
     def planner_workbench_release_authorization_dispatch_package(authorization_id: str):
         endpoint = (
@@ -5445,6 +6218,14 @@ def create_app(
             }
             if payload.AuthorizationID is not None:
                 event_record["AuthorizationID"] = payload.AuthorizationID
+            if payload.OperationID is not None:
+                event_record["OperationID"] = payload.OperationID
+            if payload.ResourceID is not None:
+                event_record["ResourceID"] = payload.ResourceID
+            if payload.DispatchConflictResult is not None:
+                event_record["DispatchConflictResult"] = (
+                    payload.DispatchConflictResult
+                )
             execution_events.append(event_record)
         body = {
             "Endpoint": "/shop-floor/execution/event",
@@ -6603,6 +7384,8 @@ def _pending_planning_run(
     operational_snapshot: OperationalStateSnapshot,
     release_policy: dict[str, object] | None = None,
     scheduling_strategy: dict[str, object] | None = None,
+    frozen_base_calendars: list[dict[str, object]] | None = None,
+    frozen_resource_calendar_assignments: list[dict[str, object]] | None = None,
     frozen_calendar_overrides: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
@@ -6616,6 +7399,12 @@ def _pending_planning_run(
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
         "FrozenReleasePolicy": dict(release_policy) if release_policy else None,
+        "FrozenBaseCalendars": [
+            dict(item) for item in (frozen_base_calendars or [])
+        ],
+        "FrozenResourceCalendarAssignments": [
+            dict(item) for item in (frozen_resource_calendar_assignments or [])
+        ],
         "FrozenCalendarOverrides": [
             dict(item) for item in (frozen_calendar_overrides or [])
         ],
@@ -6664,7 +7453,9 @@ def _planning_run_payload_from_record(
         ScheduleStartAt=planning_run["ScheduleStartAt"],
         TimeBufferMinutes=planning_run["TimeBufferMinutes"],
         FreezeWindowMinutes=planning_run.get("FreezeWindowMinutes", 0),
-        ObjectiveStrategyID=planning_run.get("ObjectiveStrategyID", "balanced"),
+        ObjectiveStrategyID=planning_run.get(
+            "ObjectiveStrategyID", "v1_delivery_flow_bottleneck"
+        ),
         SetupTransitions=[
             SetupTransitionPayload(**item)
             for item in planning_run.get("SetupTransitions", [])
@@ -6686,6 +7477,8 @@ def _execute_planning_run(
     solver_time_limit_seconds: float | None = None,
     scheduling_strategy_versions: dict[str, dict[str, object]] | None = None,
     frozen_scheduling_strategy: object | None = None,
+    frozen_base_calendars: list[dict[str, object]] | None = None,
+    frozen_resource_calendar_assignments: list[dict[str, object]] | None = None,
     frozen_calendar_overrides: list[dict[str, object]] | None = None,
     release_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -6705,6 +7498,12 @@ def _execute_planning_run(
     resources = _resources_from_payload(
         [ResourcePayload(**item) for item in master_data_version["Resources"]]
     )
+    base_calendar_application = apply_base_calendar_assignments(
+        resources=resources,
+        calendars=frozen_base_calendars or [],
+        assignments=frozen_resource_calendar_assignments or [],
+    )
+    resources = base_calendar_application.resources
     calendar_application = apply_calendar_overrides(
         resources=resources,
         overrides=frozen_calendar_overrides or [],
@@ -6758,12 +7557,29 @@ def _execute_planning_run(
         release_policy=release_policy,
     )
     schedule.setdefault("SolverDiagnostics", []).extend(
-        _solver_diagnostics_to_payload_dict(calendar_application.diagnostics)
+        _solver_diagnostics_to_payload_dict(
+            [
+                *base_calendar_application.diagnostics,
+                *calendar_application.diagnostics,
+            ]
+        )
     )
+    schedule["BaseCalendarSummary"] = {
+        "FrozenCalendarCount": len(frozen_base_calendars or []),
+        "FrozenAssignmentCount": len(frozen_resource_calendar_assignments or []),
+        "AppliedAssignmentCount": len(
+            base_calendar_application.applied_assignments
+        ),
+        "AppliedAssignments": base_calendar_application.applied_assignments,
+    }
     schedule["CalendarOverrideSummary"] = {
         "FrozenOverrideCount": len(frozen_calendar_overrides or []),
         "AppliedOverrideCount": len(calendar_application.applied_overrides),
         "AppliedOverrides": calendar_application.applied_overrides,
+    }
+    schedule["CalendarSummary"] = {
+        **schedule["BaseCalendarSummary"],
+        **schedule["CalendarOverrideSummary"],
     }
     schedule["ProblemID"] = payload.ProblemID
     solver_status = str(schedule["SolverStatus"])
@@ -6781,6 +7597,13 @@ def _execute_planning_run(
         "OperationalStateCapturedAt": operational_snapshot.captured_at.isoformat(),
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
+        "FrozenBaseCalendars": [
+            dict(item) for item in (frozen_base_calendars or [])
+        ],
+        "FrozenResourceCalendarAssignments": [
+            dict(item) for item in (frozen_resource_calendar_assignments or [])
+        ],
+        "BaseCalendarSummary": schedule["BaseCalendarSummary"],
         "FrozenCalendarOverrides": [
             dict(item) for item in (frozen_calendar_overrides or [])
         ],
@@ -7119,6 +7942,23 @@ def _operational_state_snapshot_for_release_evaluation(
     )
 
 
+def _next_mock_operational_snapshot_id(
+    *,
+    operational_state_snapshots: dict[str, OperationalStateSnapshot],
+    evaluated_at: datetime,
+) -> str:
+    stem = (
+        "TST-OPS-LATEST-REEVALUATION-"
+        f"{evaluated_at.strftime('%Y%m%d%H%M%S')}"
+    )
+    if stem not in operational_state_snapshots:
+        return stem
+    index = 2
+    while f"{stem}-{index}" in operational_state_snapshots:
+        index += 1
+    return f"{stem}-{index}"
+
+
 def _dbr_release_policy_from_payload(
     payload: DbrReleasePolicyPayload,
 ) -> dict[str, object]:
@@ -7175,6 +8015,73 @@ def _active_calendar_overrides(
     ]
 
 
+def _active_base_calendars(
+    calendars: object,
+) -> list[dict[str, object]]:
+    return [
+        dict(item)
+        for item in calendars
+        if isinstance(item, dict) and item.get("Status") == "Active"
+    ]
+
+
+def _active_resource_calendar_assignments(
+    assignments: object,
+) -> list[dict[str, object]]:
+    return [
+        dict(item)
+        for item in assignments
+        if isinstance(item, dict) and item.get("Status") == "Active"
+    ]
+
+
+def _base_calendars_with_driver_status(
+    *,
+    calendars: object,
+    assignments: object,
+    planning_runs: object,
+) -> list[dict[str, object]]:
+    applied_calendar_ids = _applied_base_calendar_ids(planning_runs)
+    assignment_list = [item for item in assignments if isinstance(item, dict)]
+    enriched: list[dict[str, object]] = []
+    for calendar in calendars:
+        if not isinstance(calendar, dict):
+            continue
+        item = dict(calendar)
+        item["SolverDriverStatus"] = base_calendar_driver_status(
+            calendar=item,
+            assignments=assignment_list,
+            applied_calendar_ids=applied_calendar_ids,
+        )
+        enriched.append(item)
+    return enriched
+
+
+def _resource_calendar_assignments_with_driver_status(
+    *,
+    assignments: object,
+    calendars: object,
+    master_data_versions: object,
+    planning_runs: object,
+) -> list[dict[str, object]]:
+    resources = _latest_master_data_resources(master_data_versions)
+    calendar_list = [item for item in calendars if isinstance(item, dict)]
+    applied_assignment_ids = _applied_resource_calendar_assignment_ids(planning_runs)
+    enriched: list[dict[str, object]] = []
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            continue
+        item = dict(assignment)
+        item["SolverDriverStatus"] = resource_calendar_assignment_driver_status(
+            assignment=item,
+            resources=resources,
+            calendars=calendar_list,
+            applied_assignment_ids=applied_assignment_ids,
+        )
+        enriched.append(item)
+    return enriched
+
+
 def _calendar_overrides_with_driver_status(
     *,
     overrides: object,
@@ -7197,6 +8104,40 @@ def _calendar_overrides_with_driver_status(
     return enriched
 
 
+def _applied_base_calendar_ids(planning_runs: object) -> set[str]:
+    result: set[str] = set()
+    for run in planning_runs:
+        if not isinstance(run, dict):
+            continue
+        summary = run.get("BaseCalendarSummary")
+        if not isinstance(summary, dict):
+            schedule = run.get("Schedule")
+            summary = schedule.get("BaseCalendarSummary") if isinstance(schedule, dict) else None
+        if not isinstance(summary, dict):
+            continue
+        for item in summary.get("AppliedAssignments", []):
+            if isinstance(item, dict) and item.get("CalendarID") is not None:
+                result.add(str(item["CalendarID"]))
+    return result
+
+
+def _applied_resource_calendar_assignment_ids(planning_runs: object) -> set[str]:
+    result: set[str] = set()
+    for run in planning_runs:
+        if not isinstance(run, dict):
+            continue
+        summary = run.get("BaseCalendarSummary")
+        if not isinstance(summary, dict):
+            schedule = run.get("Schedule")
+            summary = schedule.get("BaseCalendarSummary") if isinstance(schedule, dict) else None
+        if not isinstance(summary, dict):
+            continue
+        for item in summary.get("AppliedAssignments", []):
+            if isinstance(item, dict) and item.get("AssignmentID") is not None:
+                result.add(str(item["AssignmentID"]))
+    return result
+
+
 def _latest_master_data_resources(master_data_versions: object) -> list[Resource]:
     versions = [
         version
@@ -7216,6 +8157,24 @@ def _latest_master_data_resources(master_data_versions: object) -> list[Resource
         )
     except Exception:
         return []
+
+
+def _calendar_preview_master_data_version(
+    *,
+    master_data_versions: dict[str, dict[str, object]],
+    version_id: str | None,
+) -> dict[str, object] | None:
+    if version_id is not None:
+        version = master_data_versions.get(version_id)
+        return version if isinstance(version, dict) else None
+    versions = [
+        version
+        for version in master_data_versions.values()
+        if isinstance(version, dict) and isinstance(version.get("Resources"), list)
+    ]
+    if not versions:
+        return None
+    return max(versions, key=lambda item: str(item.get("CapturedAt", "")))
 
 
 def _applied_calendar_override_ids(planning_runs: object) -> set[str]:
@@ -7247,6 +8206,65 @@ def _solver_diagnostics_to_payload_dict(
         }
         for diagnostic in diagnostics
     ]
+
+
+def _base_calendar_from_payload(payload: BaseCalendarPayload) -> dict[str, object]:
+    return {
+        "CalendarID": payload.CalendarID,
+        "DisplayName": payload.DisplayName,
+        "WorkingWeekdays": list(payload.WorkingWeekdays),
+        "Shifts": [
+            {
+                "Name": shift.Name,
+                "Start": shift.Start.isoformat(),
+                "End": shift.End.isoformat(),
+            }
+            for shift in payload.Shifts
+        ],
+        "MaintenanceWindows": [
+            {
+                "Start": window.Start.isoformat(),
+                "End": window.End.isoformat(),
+            }
+            for window in payload.MaintenanceWindows
+        ],
+        "Holidays": [item.isoformat() for item in payload.Holidays],
+        "Timezone": payload.Timezone,
+        "CreatedAt": payload.CreatedAt.isoformat(),
+        "CreatedBy": payload.CreatedBy,
+        "Status": payload.Status,
+        "SolverDriverStatus": "NotAssigned",
+    }
+
+
+def _resource_calendar_assignment_from_payload(
+    payload: ResourceCalendarAssignmentPayload,
+) -> dict[str, object]:
+    return {
+        "AssignmentID": payload.AssignmentID,
+        "ResourceID": payload.ResourceID,
+        "CalendarID": payload.CalendarID,
+        "CreatedAt": payload.CreatedAt.isoformat(),
+        "CreatedBy": payload.CreatedBy,
+        "Status": payload.Status,
+        "SolverDriverStatus": "NotApplied",
+    }
+
+
+def _retire_other_active_resource_calendar_assignments(
+    *,
+    assignments: dict[str, dict[str, object]],
+    active_assignment_id: str,
+    resource_id: str,
+) -> None:
+    for assignment_id, assignment in assignments.items():
+        if (
+            assignment_id != active_assignment_id
+            and assignment.get("ResourceID") == resource_id
+            and assignment.get("Status") == "Active"
+        ):
+            assignment["Status"] = "Retired"
+            assignment["RetiredByAssignmentID"] = active_assignment_id
 
 
 def _calendar_override_from_payload(

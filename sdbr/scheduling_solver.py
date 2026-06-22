@@ -12,7 +12,13 @@ from sdbr.planner_workbench import Resource, Routing, SchedulingOrder
 ACTIVE_SOLVER_BACKEND_ID = "ortools"
 PAUSED_SOLVER_BACKEND_IDS = frozenset({"gurobi"})
 BUILT_IN_OBJECTIVE_STRATEGY_IDS = frozenset(
-    {"balanced", "delivery_first", "flow_first", "bottleneck_protect"}
+    {
+        "v1_delivery_flow_bottleneck",
+        "balanced",
+        "delivery_first",
+        "flow_first",
+        "bottleneck_protect",
+    }
 )
 
 
@@ -100,7 +106,7 @@ class SchedulingObjective:
     tardiness_weight: float = 1.0
     makespan_weight: float = 0.001
     alternate_resource_weight: float = 0.01
-    strategy_id: str = "balanced"
+    strategy_id: str = "v1_delivery_flow_bottleneck"
 
 
 @dataclass(frozen=True, slots=True)
@@ -876,19 +882,67 @@ def _calendar_capacity_buckets_for_resource(
 
 
 def _extra_capacity_buckets_for_resource(resource: Resource) -> list[CapacityBucket]:
-    return [
-        CapacityBucket(
-            resource_id=resource.resource_id,
-            bucket_start=window.start,
-            bucket_end=window.end,
-            capacity_minutes=window.capacity_minutes,
+    buckets: list[CapacityBucket] = []
+    for window in sorted(
+        resource.extra_capacity_windows,
+        key=lambda item: (item.start, item.end, item.source_id or ""),
+    ):
+        if window.capacity_minutes <= 0 or window.start >= window.end:
+            continue
+        remaining_capacity = window.capacity_minutes
+        for segment_start, segment_end in _extra_capacity_available_segments(
+            resource=resource,
+            window_start=window.start,
+            window_end=window.end,
+        ):
+            segment_minutes = int((segment_end - segment_start).total_seconds() / 60)
+            capacity_minutes = min(segment_minutes, remaining_capacity)
+            if capacity_minutes <= 0:
+                continue
+            buckets.append(
+                CapacityBucket(
+                    resource_id=resource.resource_id,
+                    bucket_start=segment_start,
+                    bucket_end=segment_end,
+                    capacity_minutes=capacity_minutes,
+                )
+            )
+            remaining_capacity -= capacity_minutes
+            if remaining_capacity <= 0:
+                break
+    return buckets
+
+
+def _extra_capacity_available_segments(
+    *,
+    resource: Resource,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    if resource.calendar is None:
+        return [(window_start, window_end)]
+    segments: list[tuple[datetime, datetime]] = []
+    cursor = window_start
+    while cursor < window_end:
+        next_midnight = datetime.combine(
+            cursor.date() + timedelta(days=1),
+            time.min,
+            tzinfo=cursor.tzinfo,
         )
-        for window in sorted(
-            resource.extra_capacity_windows,
-            key=lambda item: (item.start, item.end, item.source_id or ""),
-        )
-        if window.capacity_minutes > 0 and window.start < window.end
-    ]
+        day_end = min(window_end, next_midnight)
+        if not (
+            resource.calendar.holidays is not None
+            and cursor.date() in resource.calendar.holidays
+        ):
+            segments.extend(
+                _subtract_maintenance_windows(
+                    shift_start=cursor,
+                    shift_end=day_end,
+                    maintenance_windows=resource.calendar.maintenance_windows,
+                )
+            )
+        cursor = day_end
+    return segments
 
 
 def _subtract_maintenance_windows(

@@ -12,7 +12,13 @@ def test_integration_contract_catalog_defines_erp_mes_boundaries():
 
     assert response.status_code == 200
     data = response.json()["Data"]
+    assert data["Status"] == "MockApiFirstVersion"
+    assert data["FirstVersionIntegrationMode"] == "MockAPI"
+    assert data["MesDispatchDeliveryMode"] == "RecommendationOnly"
+    assert data["AdapterStrategy"]["ActiveAdapterID"] == "mock_api"
+    assert data["AdapterStrategy"]["OutboundMesPolicy"]["SendsToMes"] is False
     assert data["Summary"]["ContractCount"] == 4
+    assert data["Summary"]["MockApiEnabled"] is True
     contracts = {item["ContractID"]: item for item in data["Contracts"]}
     assert contracts["ERP-INBOUND-V1"]["Status"] == "ContractOnly"
     assert contracts["ERP-INBOUND-V1"]["OwnerBoundary"].startswith("ERP is authoritative")
@@ -23,6 +29,25 @@ def test_integration_contract_catalog_defines_erp_mes_boundaries():
     assert "ArrivedBuffer" in contracts["MES-INBOUND-V1"]["MessageTypes"]
     assert contracts["MES-OUTBOUND-V1"]["Status"] == "ContractStub"
     assert "DispatchPackageIssued" in contracts["MES-OUTBOUND-V1"]["MessageTypes"]
+
+
+def test_be_int_mock_api_status_declares_replaceable_adapter_boundary():
+    # BE-INT-001 / BE-INT-004 / BE-INT-005 / BE-INT-007
+    client = TestClient(create_app())
+
+    response = client.get("/planner/workbench/integrations/mock-api/status")
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["ActiveAdapterID"] == "mock_api"
+    assert data["OutboundMesPolicy"]["DeliveryMode"] == "RecommendationOnly"
+    assert data["OutboundMesPolicy"]["SendsToMes"] is False
+    adapter_statuses = {item["AdapterID"]: item["Status"] for item in data["Adapters"]}
+    assert adapter_statuses == {
+        "mock_api": "EnabledForV1",
+        "direct_erp_mes": "Deferred",
+        "uns_mqtt": "Deferred",
+    }
 
 
 def test_integration_message_stub_accepts_and_deduplicates_by_idempotency_key():

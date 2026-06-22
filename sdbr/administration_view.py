@@ -9,6 +9,8 @@ def build_administration_workbench(
     master_data_versions: Iterable[dict[str, object]],
     planning_runs: Iterable[dict[str, object]],
     dbr_release_policies: Iterable[dict[str, object]] = (),
+    base_calendars: Iterable[dict[str, object]] = (),
+    resource_calendar_assignments: Iterable[dict[str, object]] = (),
     calendar_overrides: Iterable[dict[str, object]] = (),
     scheduling_strategies: Iterable[dict[str, object]] = (),
     integration_contracts: Iterable[dict[str, object]] = (),
@@ -21,6 +23,8 @@ def build_administration_workbench(
     versions = list(master_data_versions)
     latest_version = _latest_master_data_version(versions)
     policies = list(dbr_release_policies)
+    calendars = list(base_calendars)
+    assignments = list(resource_calendar_assignments)
     overrides = list(calendar_overrides)
     strategies = list(scheduling_strategies)
     contracts = list(integration_contracts)
@@ -35,7 +39,12 @@ def build_administration_workbench(
             "TemporaryShiftOverride",
             "ExclusionOrMaintenance",
         ],
-        "CalendarConfiguration": _calendar_configuration(latest_version, overrides),
+        "CalendarConfiguration": _calendar_configuration(
+            latest_version,
+            base_calendars=calendars,
+            resource_calendar_assignments=assignments,
+            overrides=overrides,
+        ),
         "ReleasePolicyConfiguration": _release_policy_configuration(policies),
         "SchedulingStrategyConfiguration": _scheduling_strategy_configuration(strategies),
         "PolicyGroups": _policy_groups(),
@@ -54,12 +63,14 @@ def build_administration_workbench(
             },
         ],
         "Integrations": [
-            _integration("erp", "ERP", "NotConfigured"),
-            _integration("mes", "MES", "NotConfigured"),
+            _integration("erp", "ERP", "MockAPI"),
+            _integration("mes", "MES", "RecommendationOnly"),
             _integration("simio", "Simio", "Paused"),
         ],
         "IntegrationContracts": {
-            "Status": "ContractOnly",
+            "Status": "MockApiFirstVersion",
+            "FirstVersionIntegrationMode": "MockAPI",
+            "MesDispatchDeliveryMode": "RecommendationOnly",
             "ContractCount": len(contracts),
             "DeadLetterCount": sum(
                 1 for message in messages if message.get("Status") == "Rejected"
@@ -219,6 +230,9 @@ def _policy_groups() -> list[dict[str, object]]:
 
 def _calendar_configuration(
     version: dict[str, object] | None,
+    *,
+    base_calendars: list[dict[str, object]],
+    resource_calendar_assignments: list[dict[str, object]],
     overrides: list[dict[str, object]],
 ) -> dict[str, object]:
     resources = version.get("Resources", []) if version else []
@@ -238,13 +252,37 @@ def _calendar_configuration(
         item for item in overrides if item.get("Status") == "Active"
     ]
     return {
-        "Status": "EditableViaVersionedMasterData",
+        "Status": "ConfigurableAndVersioned",
         "CalendarCount": len(calendar_ids),
         "CalendarIDs": calendar_ids,
+        "BaseCalendarCount": len(base_calendars),
+        "ActiveBaseCalendarCount": sum(
+            1 for item in base_calendars if item.get("Status") == "Active"
+        ),
+        "ResourceCalendarAssignmentCount": len(resource_calendar_assignments),
+        "ActiveResourceCalendarAssignmentCount": sum(
+            1
+            for item in resource_calendar_assignments
+            if item.get("Status") == "Active"
+        ),
         "ResourceCountWithCalendar": len(calendar_resources),
         "SupportsShiftDefinition": True,
         "SupportsHolidayExclusion": True,
         "SupportsMaintenanceDeduction": True,
+        "CalendarScope": "ResourceOnly",
+        "BaseCalendarOwnerRole": "Admin",
+        "TemporaryOverrideOwnerRole": "Planner",
+        "ApprovalFlowStatus": "StatusOnly",
+        "SupportedStatuses": ["Draft", "Active", "Retired"],
+        "ConflictPriority": [
+            "Maintenance",
+            "Holiday",
+            "TemporaryShiftOverride",
+            "Overtime",
+            "BaseShift",
+        ],
+        "BaseCalendarApiStatus": "Available",
+        "ResourceAssignmentApiStatus": "Available",
         "TemporaryOverrideApiStatus": "Available",
         "OverrideCount": len(overrides),
         "ActiveOverrideCount": len(active_overrides),
@@ -261,6 +299,16 @@ def _calendar_configuration(
                 str(item.get("EffectiveStartAt", "")),
                 str(item.get("OverrideID", "")),
             ),
+            reverse=True,
+        ),
+        "BaseCalendars": sorted(
+            base_calendars,
+            key=lambda item: str(item.get("CreatedAt", "")),
+            reverse=True,
+        ),
+        "ResourceCalendarAssignments": sorted(
+            resource_calendar_assignments,
+            key=lambda item: str(item.get("CreatedAt", "")),
             reverse=True,
         ),
     }
@@ -309,6 +357,12 @@ def _scheduling_strategy_configuration(
         "PausedSolverBackendIDs": ["gurobi"],
         "BuiltInObjectiveStrategies": [
             {
+                "StrategyID": "v1_delivery_flow_bottleneck",
+                "DisplayName": "V1 delivery, flow, bottleneck",
+                "Source": "BuiltIn",
+                "DefaultForV1": True,
+            },
+            {
                 "StrategyID": "balanced",
                 "DisplayName": "Balanced",
                 "Source": "BuiltIn",
@@ -326,6 +380,7 @@ def _scheduling_strategy_configuration(
             },
         ],
         "ObjectiveStrategies": [
+            "v1_delivery_flow_bottleneck",
             "balanced",
             "delivery_first",
             "flow_first",

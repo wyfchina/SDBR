@@ -357,6 +357,68 @@ def test_planner_workbench_material_availability_import_endpoint_returns_standar
     }
 
 
+def test_be_data_012_light_mrp_endpoint_returns_first_version_readiness():
+    # BE-DATA-012 / BE-INT-001
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/planner/workbench/light-mrp/evaluate",
+        json={
+            "EvaluatedAt": "2026-06-21T08:00:00+00:00",
+            "MaterialCheckWindowMinutes": 120,
+            "InventoryBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "OnHandQty": 10,
+                    "RedZoneQty": 2,
+                    "YellowZoneQty": 5,
+                    "GreenZoneQty": 10,
+                },
+                {
+                    "ItemID": "RM-COPPER",
+                    "LocationID": "MAIN",
+                    "OnHandQty": 1,
+                    "RedZoneQty": 1,
+                    "YellowZoneQty": 3,
+                    "GreenZoneQty": 6,
+                },
+            ],
+            "MaterialAvailability": [
+                {
+                    "ItemID": "RM-COPPER",
+                    "LocationID": "MAIN",
+                    "InboundQty": 5,
+                    "InboundAvailableAt": "2026-06-21T09:00:00+00:00",
+                }
+            ],
+            "MaterialRequirements": [
+                {
+                    "OrderID": "WO-1",
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "RequiredQty": 5,
+                },
+                {
+                    "OrderID": "WO-2",
+                    "ItemID": "RM-COPPER",
+                    "LocationID": "MAIN",
+                    "RequiredQty": 4,
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["EvaluationMode"] == "LightMRPV1"
+    assert data["Summary"]["ReadyForPlanning"] is True
+    assert [line["Status"] for line in data["Lines"]] == [
+        "Available",
+        "CoveredByInbound",
+    ]
+
+
 def test_planner_workbench_material_availability_import_rejects_negative_qty():
     client = TestClient(create_app())
 
@@ -1107,6 +1169,66 @@ def test_planning_run_worker_lease_recovers_after_restart_and_rejects_stale_owne
     ]
 
 
+def test_queued_planning_run_can_be_processed_by_interactive_worker():
+    # BE-RUN-004 / BE-RUN-006
+    client = TestClient(create_app())
+    _create_master_data_and_snapshot(
+        client, version_id="MDV-PROCESS-QUEUE", snapshot_id="OPS-PROCESS-QUEUE"
+    )
+    create_response = client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            "RunID": "RUN-PROCESS-QUEUE",
+            "ProblemID": "PLAN-PROCESS-QUEUE",
+            "MasterDataVersionID": "MDV-PROCESS-QUEUE",
+            "OperationalStateSnapshotID": "OPS-PROCESS-QUEUE",
+            "ScheduleStartAt": "2026-06-16T08:00:00+00:00",
+            "SolverBackendID": "ortools",
+            "RequestedBy": "planner-1",
+            "RequestedAt": "2026-06-16T07:50:00+00:00",
+        },
+    )
+    assert create_response.status_code == 200
+    enqueue_response = client.post(
+        "/planner/workbench/planning-runs/RUN-PROCESS-QUEUE/enqueue",
+        json={
+            "EnqueuedBy": "planner-1",
+            "EnqueuedAt": "2026-06-16T07:51:00+00:00",
+        },
+    )
+    assert enqueue_response.status_code == 200
+    assert enqueue_response.json()["Data"]["PlanningRun"]["Status"] == "Queued"
+
+    processed = client.post(
+        "/planner/workbench/planning-runs/RUN-PROCESS-QUEUE/process-queued",
+        json={
+            "WorkerID": "interactive-worker",
+            "ProcessedAt": "2026-06-16T07:52:00+00:00",
+            "TimeLimitSeconds": 30,
+        },
+    )
+
+    assert processed.status_code == 200
+    run = processed.json()["Data"]["PlanningRun"]
+    assert run["Status"] in {"Completed", "Failed", "Queued", "DeadLetter"}
+    assert run["WorkerID"] == "interactive-worker"
+    assert any(
+        item["Status"] == "Running"
+        and item["Reason"] == "InteractiveWorkerClaim"
+        for item in run["StatusHistory"]
+    )
+    if run["Status"] == "Completed":
+        workbench = client.get("/planner/workbench/planning-runs/workbench").json()[
+            "Data"
+        ]
+        row = next(
+            item
+            for item in workbench["Rows"]
+            if item["RunID"] == "RUN-PROCESS-QUEUE"
+        )
+        assert row["AllowedActions"] == ["OpenResults"]
+
+
 def test_planning_run_rbac_can_be_enforced_without_affecting_default_dev_mode():
     client = TestClient(create_app(require_auth=True))
 
@@ -1701,6 +1823,7 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     client = TestClient(create_app())
 
     response = client.get("/planner/workbench")
+    script = client.get("/planner/assets/planner-workbench.js").text
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -1715,6 +1838,7 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'data-route="planning-runs"' in html
     assert 'data-route="schedule-results"' in html
     assert 'data-route="release-management"' in html
+    assert 'data-route="calendar"' in html
     assert 'data-route="exceptions"' in html
     assert 'data-route="administration"' in html
     assert 'id="master-data-version"' in html
@@ -1726,7 +1850,58 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'value="en"' in html
     assert "需求驱动计划员工作台" in html
     assert 'href="/planner/assets/planner-workbench.css"' in html
-    assert 'src="/planner/assets/planner-workbench.js?v=20260620-ui-confirmation"' in html
+    assert "/mock-operational-state-refresh" in script
+    assert "/process-queued" in script
+    assert "createReplanRunFromCurrentSchedule" in script
+    assert 'processQueue: "处理队列"' in script
+
+
+def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
+    # UI-CALENDAR-001 / BE-DATA-010
+    client = TestClient(create_app())
+
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'id="calendar-view"' in html
+    assert 'id="calendar-preview-resource"' in html
+    assert 'id="calendar-required-elements"' in html
+    assert 'id="calendar-final-windows"' in html
+    assert 'id="calendar-source-elements"' in html
+    assert 'id="calendar-base-calendar-form"' in html
+    assert 'id="calendar-assignment-form"' in html
+    assert 'id="calendar-override-form"' in html
+    assert 'id="calendar-preview-resource"' in html
+    assert '<select id="calendar-preview-resource">' in html
+    assert 'id="calendar-page-base-calendar-id" required readonly' in html
+    assert 'id="calendar-page-assignment-id" required readonly' in html
+    assert 'id="calendar-page-override-id" required readonly' in html
+    assert 'data-calendar-weekday value="0" checked' in html
+    assert 'data-calendar-weekday value="6"' in html
+    assert 'id="calendar-page-holiday-date"' in html
+    assert 'id="calendar-page-maintenance-start"' in html
+    assert 'id="calendar-page-override-type"' in html
+    assert 'id="calendar-page-base-timezone"' in html
+    assert 'data-i18n="crossShiftRule"' in html
+    assert "/planner/workbench/calendar/preview" in script
+    assert "/planner/workbench/admin/base-calendars" in script
+    assert "/planner/workbench/admin/resource-calendar-assignments" in script
+    assert "/planner/workbench/admin/calendar-overrides" in script
+    assert "/planner/workbench/calendar/resources" in script
+    assert "submitCalendarPageBaseCalendar" in script
+    assert "submitCalendarPageAssignment" in script
+    assert "submitCalendarPageOverride" in script
+    assert "weekdaysFromCalendarCheckboxes" in script
+    assert 'navCalendar: "日历配置"' in script
+    assert 'navCalendar: "Calendar Configuration"' in script
+    assert 'calendarRequiredElements: "事项要素检查"' in script
+    assert 'calendarRequiredElements: "Required element check"' in script
+    assert 'finalCapacityWindows: "最终可用窗口"' in script
+    assert 'finalCapacityWindows: "Final availability windows"' in script
+    assert 'workSchedules: "工作周 / 基础日历"' in script
+    assert 'workSchedules: "Work schedules / Base calendar"' in script
+    assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
+    assert 'src="/planner/assets/planner-workbench.js?v=20260622-release-queue-flow"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -2238,6 +2413,8 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'id="schedule-tab-delivery"' in html
     assert 'id="schedule-tab-diagnostics"' in html
     assert 'id="gantt-board"' in html
+    assert 'data-gantt-mode="resource"' in html
+    assert 'data-gantt-mode="order"' in html
     assert 'id="system-load-view"' in html
     assert 'id="resource-load-view"' in html
     assert 'id="scenario-comparison"' in html
@@ -2246,6 +2423,9 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert "/planner/workbench/schedule-results/compare" in script
     assert "/governance`" in script
     assert "/output-package`" in script
+    assert "ganttRowsByOrder" in script
+    assert 'resourceOccupationView: "资源占用图"' in script
+    assert 'workOrderFlowView: "工单流程图"' in script
 
 
 def test_planner_workbench_page_exposes_case_acceptance_overview():
@@ -2259,11 +2439,16 @@ def test_planner_workbench_page_exposes_case_acceptance_overview():
     assert 'id="case-acceptance-cards"' in html
     assert 'data-case-summary="PassedCount"' in html
     assert "/planner/workbench/test-data/acceptance" in script
+    assert "/planner/workbench/test-data/acceptance/reset" in script
+    assert "/reset`" in script
     assert "caseAcceptanceTitle" in script
     assert "CPSATBusinessCases" in script
     assert "expectedAssertions" in script
     assert "passedAssertions" in script
     assert "failureReasons" in script
+    assert 'scheduleNotCompleted: "排程未完成"' in script
+    assert 'resetAllCases: "复位全部案例"' in script
+    assert 'resetCase: "复位案例"' in script
 
 
 def test_planner_workbench_page_exposes_plan_publication_governance():
@@ -2394,6 +2579,52 @@ def test_be_out_010_schedule_output_governance_and_package_are_available_for_com
     assert output["ResourceLoadSummary"][0]["OverloadMinutes"] == 120
     assert output["GanttSummary"]["OperationBarCount"] == 1
     assert output["ExternalDelivery"]["Status"] == "NotSent"
+
+
+def test_be_int_005_mes_dispatch_priority_queue_uses_latest_release_gate():
+    # BE-INT-005 / BE-REL-011 / BE-EXEC-001
+    store = _schedule_result_test_store()
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client, current_wip=5)
+    store.release_authorizations.append(
+        create_release_authorization(
+            request_id="RUN-RESULT",
+            candidate={
+                "OrderID": "WO-1",
+                "ScheduledStart": "2026-06-19T08:00:00+00:00",
+                "ScheduledEnd": "2026-06-19T10:00:00+00:00",
+                "SuggestedReleaseAt": "2026-06-19T06:00:00+00:00",
+                "RecommendedAction": "ReadyForRelease",
+            },
+            released_by="planner-1",
+            released_at=datetime(2026, 6, 19, 7, 30, tzinfo=timezone.utc),
+            operational_state_snapshot_id="OPS-RESULT",
+        )
+    )
+
+    response = client.get(
+        "/planner/workbench/dispatch-priority/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:40:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["DispatchPolicy"]["PriorityBasis"] == [
+        "AuthorizedRelease",
+        "BufferZone",
+        "BufferPenetration",
+        "ConstraintResourceScheduledStart",
+        "CustomerDueDate",
+    ]
+    assert data["DispatchPolicy"]["ReleaseIsHardGate"] is True
+    assert data["DispatchPolicy"]["RecheckMaterialAndWipBeforeIssue"] is True
+    assert data["Summary"]["DispatchableOperationCount"] == 0
+    assert data["Summary"]["CandidateWarningCount"] == 1
+    warning = data["Resources"][0]["CandidateWarnings"][0]
+    assert warning["OrderID"] == "WO-1"
+    assert warning["DispatchEligibility"] == "CandidateOnly"
+    assert warning["LatestGateStatus"] == "LatestOperationalStateBlocked"
+    assert warning["LatestGateBlockingReasons"][0]["Code"] == "WIP_LIMIT_EXCEEDED"
 
 
 def test_be_out_010_output_package_rejects_incomplete_or_unscoped_runs():
@@ -2604,6 +2835,10 @@ def test_be_ui_004_release_management_can_reevaluate_same_run_with_latest_snapsh
     assert frozen["Candidates"][0]["BlockingReasons"][0]["Code"] == (
         "OPERATIONAL_SNAPSHOT_STALE"
     )
+    assert frozen["Candidates"][0]["BlockingReasons"][0]["Details"] == {
+        "RecommendedAction": "RefreshOperationalSnapshotAndReevaluate",
+        "RequiresReschedule": False,
+    }
     assert latest_snapshot_response.status_code == 200
     latest = latest_snapshot_response.json()["Data"]
     assert latest["OperationalStateSnapshotID"] == "OPS-LATEST"
@@ -2623,6 +2858,67 @@ def test_be_ui_004_release_management_can_reevaluate_same_run_with_latest_snapsh
     assert authorization.status_code == 200
     record = authorization.json()["Data"]["Authorization"]
     assert record["OperationalStateSnapshotID"] == "OPS-LATEST"
+
+
+def test_release_management_mock_refresh_creates_fresh_snapshot_for_reevaluation():
+    # BE-UI-004 / UI-RELEASE-001
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["OperationalStateSnapshotID"] = "OPS-OLD"
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-OLD",
+            "CapturedAt": "2026-06-19T06:30:00+00:00",
+            "InventoryBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "SUPPLIER-DECOUPLING",
+                    "OnHandQty": 80,
+                    "RedZoneQty": 50,
+                    "YellowZoneQty": 120,
+                    "GreenZoneQty": 200,
+                }
+            ],
+            "WipLimits": [
+                {
+                    "ScopeID": "DRUM-FEED",
+                    "CurrentWipCount": 0,
+                    "MaxWipCount": 5,
+                }
+            ],
+        },
+    ).status_code == 200
+
+    stale = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    ).json()["Data"]
+    assert stale["OperationalStateStatus"] == "Stale"
+    assert stale["Summary"]["ReadyCount"] == 0
+
+    refresh = client.post(
+        "/planner/workbench/release-management/runs/RUN-RESULT/mock-operational-state-refresh",
+        json={
+            "EvaluatedAt": "2026-06-19T07:50:00+00:00",
+            "SourceSnapshotID": "OPS-OLD",
+            "ActorID": "planner-1",
+        },
+    )
+
+    assert refresh.status_code == 200
+    refreshed_snapshot_id = refresh.json()["Data"]["Snapshot"]["SnapshotID"]
+    refreshed = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={
+            "evaluated_at": "2026-06-19T07:50:00+00:00",
+            "use_latest_operational_state": "true",
+        },
+    ).json()["Data"]
+    assert refreshed["OperationalStateSnapshotID"] == refreshed_snapshot_id
+    assert refreshed["OperationalStateStatus"] == "Fresh"
+    assert refreshed["Summary"]["ReadyCount"] == 1
+    assert refreshed["Candidates"][0]["CanAuthorize"] is True
 
 
 def test_be_rel_012_release_management_returns_frozen_policy_snapshot():
@@ -3026,11 +3322,18 @@ def test_ui_buffer_001_workbench_exposes_bilingual_buffer_execution_board():
     assert 'data-route="buffer-board"' in html
     assert 'id="buffer-board-view"' in html
     assert 'id="buffer-board-matrix"' in html
+    assert 'id="mes-dispatch-priority-panel"' in html
+    assert 'id="mes-dispatch-resources"' in html
     assert 'id="buffer-order-detail"' in html
     assert 'id="buffer-transaction-dialog"' in html
     assert 'navBuffer: "缓冲执行"' in script
     assert 'navBuffer: "Buffer Execution"' in script
     assert "/planner/workbench/buffer-board/runs/" in script
+    assert "/planner/workbench/dispatch-priority/runs/" in script
+    assert 'mesDispatchQueue: "MES 派工队列"' in script
+    assert 'mesDispatchQueue: "MES dispatch queue"' in script
+    assert 'SuggestQueueJump: "建议插队"' in script
+    assert 'NeedsReplan: "需要重排"' in script
 
 
 def _exception_center_test_store() -> WorkbenchStateStore:
@@ -3228,7 +3531,11 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
         "TemporaryShiftOverride",
         "ExclusionOrMaintenance",
     ]
-    assert data["CalendarConfiguration"]["Status"] == "EditableViaVersionedMasterData"
+    assert data["CalendarConfiguration"]["Status"] == "ConfigurableAndVersioned"
+    assert data["CalendarConfiguration"]["BaseCalendarApiStatus"] == "Available"
+    assert data["CalendarConfiguration"]["ResourceAssignmentApiStatus"] == "Available"
+    assert data["CalendarConfiguration"]["BaseCalendarCount"] == 0
+    assert data["CalendarConfiguration"]["ResourceCalendarAssignmentCount"] == 0
     assert data["CalendarConfiguration"]["TemporaryOverrideApiStatus"] == "Available"
     assert data["CalendarConfiguration"]["OverrideCount"] == 0
     assert data["ReleasePolicyConfiguration"]["Status"] == "Versioned"
@@ -3236,11 +3543,17 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
     assert data["SchedulingStrategyConfiguration"]["ActiveSolverBackendID"] == "ortools"
     assert "gurobi" in data["SchedulingStrategyConfiguration"]["PausedSolverBackendIDs"]
     assert (
+        data["SchedulingStrategyConfiguration"]["ObjectiveStrategies"][0]
+        == "v1_delivery_flow_bottleneck"
+    )
+    assert (
         data["SchedulingStrategyConfiguration"]["CustomWeightPersistenceStatus"]
         == "Available"
     )
     assert "Batching" in data["SchedulingStrategyConfiguration"]["DeferredBusinessRules"]
-    assert data["IntegrationContracts"]["Status"] == "ContractOnly"
+    assert data["IntegrationContracts"]["Status"] == "MockApiFirstVersion"
+    assert data["IntegrationContracts"]["FirstVersionIntegrationMode"] == "MockAPI"
+    assert data["IntegrationContracts"]["MesDispatchDeliveryMode"] == "RecommendationOnly"
     assert data["IntegrationContracts"]["ContractCount"] == 4
     assert data["RawJsonDebug"]["DefaultVisible"] is False
     assert data["Solvers"][0]["SolverID"] == "ortools"
@@ -3255,6 +3568,12 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
     assert next(item for item in data["Integrations"] if item["SystemID"] == "simio")[
         "Status"
     ] == "Paused"
+    assert next(item for item in data["Integrations"] if item["SystemID"] == "erp")[
+        "Status"
+    ] == "MockAPI"
+    assert next(item for item in data["Integrations"] if item["SystemID"] == "mes")[
+        "Status"
+    ] == "RecommendationOnly"
     assert data["StateStore"]["Status"] in {"Healthy", "Unhealthy"}
     assert data["WorkerQueue"]["TotalRuns"] >= 0
     assert "Resources" not in str(data.get("LatestMasterDataPreview", {}))
@@ -3318,6 +3637,398 @@ def test_be_data_010_ui_006_calendar_override_configuration_is_persisted(tmp_pat
     assert calendar_config["OverrideTypeCounts"]["ExclusionOrMaintenance"] == 1
     assert calendar_config["ConflictCheckStatus"] == "NotEnforced"
     assert admin["StateStore"]["Status"] == "Healthy"
+
+
+def test_be_data_010_base_calendar_configuration_is_persisted(tmp_path):
+    # BE-DATA-010 / BE-UI-006
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    database_path = tmp_path / "workbench.db"
+    client = TestClient(create_app(state_store=SQLiteWorkbenchStateStore(database_path)))
+
+    calendar = client.post(
+        "/planner/workbench/admin/base-calendars",
+        json={
+            "CalendarID": "CAL-BASE-DAY",
+            "DisplayName": "Standard day",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "Shifts": [{"Name": "Day", "Start": "08:00:00", "End": "12:00:00"}],
+            "Holidays": ["2026-06-18"],
+            "MaintenanceWindows": [
+                {
+                    "Start": "2026-06-17T10:00:00+00:00",
+                    "End": "2026-06-17T10:30:00+00:00",
+                }
+            ],
+            "CreatedAt": "2026-06-19T09:00:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    )
+    invalid = client.post(
+        "/planner/workbench/admin/base-calendars",
+        json={
+            "CalendarID": "CAL-BAD-SHIFT",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "Shifts": [{"Name": "Bad", "Start": "12:00:00", "End": "08:00:00"}],
+            "CreatedAt": "2026-06-19T09:00:00+00:00",
+            "CreatedBy": "planner-1",
+        },
+    )
+    assignment_one = client.post(
+        "/planner/workbench/admin/resource-calendar-assignments",
+        json={
+            "AssignmentID": "ASSIGN-CAL-001",
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-BASE-DAY",
+            "CreatedAt": "2026-06-19T09:05:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    )
+    assignment_two = client.post(
+        "/planner/workbench/admin/resource-calendar-assignments",
+        json={
+            "AssignmentID": "ASSIGN-CAL-002",
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-BASE-DAY",
+            "CreatedAt": "2026-06-19T09:10:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    )
+
+    assert calendar.status_code == 200
+    assert calendar.json()["Data"]["Calendar"]["CalendarID"] == "CAL-BASE-DAY"
+    assert invalid.status_code == 422
+    assert invalid.json()["Data"]["Status"] == "BaseCalendarInvalid"
+    assert assignment_one.status_code == 200
+    assert assignment_two.status_code == 200
+
+    recreated_client = TestClient(
+        create_app(state_store=SQLiteWorkbenchStateStore(database_path))
+    )
+    calendars = recreated_client.get("/planner/workbench/admin/base-calendars")
+    assignments = recreated_client.get(
+        "/planner/workbench/admin/resource-calendar-assignments"
+    )
+    admin = recreated_client.get("/planner/workbench/administration/workbench").json()[
+        "Data"
+    ]
+
+    assert calendars.status_code == 200
+    assert calendars.json()["Data"]["CalendarCount"] == 1
+    assert calendars.json()["Data"]["ActiveCalendarCount"] == 1
+    assert assignments.status_code == 200
+    assignment_rows = assignments.json()["Data"]["Assignments"]
+    assert assignments.json()["Data"]["AssignmentCount"] == 2
+    assert assignments.json()["Data"]["ActiveAssignmentCount"] == 1
+    assert {
+        item["AssignmentID"]: item["Status"] for item in assignment_rows
+    } == {
+        "ASSIGN-CAL-001": "Retired",
+        "ASSIGN-CAL-002": "Active",
+    }
+    calendar_config = admin["CalendarConfiguration"]
+    assert calendar_config["BaseCalendarApiStatus"] == "Available"
+    assert calendar_config["ResourceAssignmentApiStatus"] == "Available"
+    assert calendar_config["BaseCalendarCount"] == 1
+    assert calendar_config["ActiveResourceCalendarAssignmentCount"] == 1
+    assert calendar_config["CalendarScope"] == "ResourceOnly"
+    assert calendar_config["ApprovalFlowStatus"] == "StatusOnly"
+    assert calendar_config["SupportedStatuses"] == ["Draft", "Active", "Retired"]
+    assert calendar_config["ConflictPriority"] == [
+        "Maintenance",
+        "Holiday",
+        "TemporaryShiftOverride",
+        "Overtime",
+        "BaseShift",
+    ]
+
+
+def test_ui_calendar_001_calendar_preview_returns_elements_and_final_windows():
+    # BE-DATA-010 / BE-SOLVER-011 / UI-CALENDAR-001
+    client = TestClient(create_app())
+    master_data_payload = _master_data_import_calculate_payload()
+    master_data_payload.pop("ProblemID")
+    master_data_payload.pop("ScheduleStartAt")
+    master_data_payload["VersionID"] = "MDV-CALENDAR-PREVIEW"
+    master_data_payload["CapturedAt"] = "2026-06-16T05:30:00+00:00"
+    master_data_payload["SourceSystem"] = "ERP"
+    master_data_payload["CreatedBy"] = "planner-1"
+    master_data_payload["CalendarTimezone"] = "UTC"
+    assert client.post(
+        "/planner/workbench/master-data/versions",
+        json=master_data_payload,
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/base-calendars",
+        json={
+            "CalendarID": "CAL-PREVIEW",
+            "DisplayName": "Preview calendar",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "Shifts": [
+                {"Name": "AM", "Start": "08:00:00", "End": "12:00:00"},
+                {"Name": "PM", "Start": "13:00:00", "End": "17:00:00"},
+            ],
+            "Holidays": ["2026-06-17"],
+            "MaintenanceWindows": [
+                {
+                    "Start": "2026-06-16T10:00:00+00:00",
+                    "End": "2026-06-16T11:00:00+00:00",
+                }
+            ],
+            "CreatedAt": "2026-06-16T06:00:00+00:00",
+            "CreatedBy": "admin-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/resource-calendar-assignments",
+        json={
+            "AssignmentID": "CAL-ASG-PREVIEW",
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-PREVIEW",
+            "CreatedAt": "2026-06-16T06:05:00+00:00",
+            "CreatedBy": "admin-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-PREVIEW-TEMP",
+            "CalendarID": "CAL-PREVIEW",
+            "ResourceID": "WC-DRUM",
+            "OverrideType": "TemporaryShiftOverride",
+            "EffectiveStartAt": "2026-06-16T06:00:00+00:00",
+            "EffectiveEndAt": "2026-06-16T07:00:00+00:00",
+            "CreatedAt": "2026-06-16T06:10:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/calendar-overrides",
+        json={
+            "OverrideID": "CAL-OVR-PREVIEW-OT",
+            "CalendarID": "CAL-PREVIEW",
+            "ResourceID": "WC-DRUM",
+            "OverrideType": "Overtime",
+            "EffectiveStartAt": "2026-06-16T18:00:00+00:00",
+            "EffectiveEndAt": "2026-06-16T20:00:00+00:00",
+            "CapacityDeltaMinutes": 60,
+            "CreatedAt": "2026-06-16T06:15:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    resources_response = client.get(
+        "/planner/workbench/calendar/resources"
+        "?MasterDataVersionID=MDV-CALENDAR-PREVIEW"
+    )
+    assert resources_response.status_code == 200
+    resources = resources_response.json()["Data"]["Resources"]
+    assert any(item["ResourceID"] == "WC-DRUM" for item in resources)
+
+    response = client.get(
+        "/planner/workbench/calendar/preview"
+        "?MasterDataVersionID=MDV-CALENDAR-PREVIEW"
+        "&ResourceID=WC-DRUM"
+        "&StartDate=2026-06-16"
+        "&EndDate=2026-06-17"
+        "&Timezone=UTC"
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["PreviewMode"] == "CalendarPreviewV1"
+    assert data["ConflictPriority"] == [
+        "Maintenance",
+        "Holiday",
+        "TemporaryShiftOverride",
+        "Overtime",
+        "BaseShift",
+    ]
+    assert {
+        item["ElementID"] for item in data["RequiredElements"]
+    } >= {
+        "RESOURCE_CALENDAR_ASSIGNMENT",
+        "BASE_SHIFT",
+        "MAINTENANCE",
+        "OVERTIME",
+        "TEMPORARY_SHIFT_OVERRIDE",
+        "CROSS_SHIFT_PROCESSING_RULE",
+    }
+    resource = data["Resources"][0]
+    assert resource["CalendarID"] == "CAL-PREVIEW"
+    assert resource["MissingDailyCapacityDates"] == ["2026-06-17"]
+    element_types = {item["ElementType"] for item in resource["Elements"]}
+    assert {
+        "ResourceCalendarAssignment",
+        "BaseShift",
+        "Holiday",
+        "Maintenance",
+        "TemporaryShiftOverride",
+        "Overtime",
+    } <= element_types
+    windows = {
+        (item["Start"], item["End"], item["CapacityMinutes"])
+        for item in resource["FinalCapacityWindows"]
+    }
+    assert (
+        "2026-06-16T08:00:00+00:00",
+        "2026-06-16T10:00:00+00:00",
+        120,
+    ) in windows
+    assert (
+        "2026-06-16T11:00:00+00:00",
+        "2026-06-16T12:00:00+00:00",
+        60,
+    ) in windows
+    assert (
+        "2026-06-16T18:00:00+00:00",
+        "2026-06-16T20:00:00+00:00",
+        60,
+    ) in windows
+
+
+def test_be_data_010_base_calendar_assignments_freeze_and_drive_planning_run():
+    # BE-DATA-010 / BE-SOLVER-011 / BE-UI-006
+    client = TestClient(create_app())
+    master_data_payload = _master_data_import_calculate_payload()
+    master_data_payload.pop("ProblemID")
+    master_data_payload.pop("ScheduleStartAt")
+    master_data_payload["VersionID"] = "MDV-BASE-CAL"
+    master_data_payload["CapturedAt"] = "2026-06-16T05:30:00+00:00"
+    master_data_payload["SourceSystem"] = "ERP"
+    master_data_payload["CreatedBy"] = "planner-1"
+    master_data_payload["CalendarTimezone"] = "UTC"
+    master_data_payload["CalendarRows"] = []
+    assert client.post(
+        "/planner/workbench/master-data/versions",
+        json=master_data_payload,
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-BASE-CAL",
+            "CapturedAt": "2026-06-16T05:45:00+00:00",
+            "InventoryBuffers": master_data_payload["InventoryBufferRows"],
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/base-calendars",
+        json={
+            "CalendarID": "CAL-LATE-SHIFT",
+            "DisplayName": "Late shift",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "Shifts": [{"Name": "Late", "Start": "10:00:00", "End": "12:00:00"}],
+            "CreatedAt": "2026-06-16T05:40:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/resource-calendar-assignments",
+        json={
+            "AssignmentID": "ASSIGN-LATE-WC-DRUM",
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-LATE-SHIFT",
+            "CreatedAt": "2026-06-16T05:41:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    run_one = _create_and_execute_planning_run(
+        client,
+        run_id="RUN-BASE-CAL-1",
+        master_data_version_id="MDV-BASE-CAL",
+        snapshot_id="OPS-BASE-CAL",
+        problem_id="P-BASE-CAL-1",
+    )
+
+    first_bar = run_one["Schedule"]["GanttRows"][0]["Bars"][0]
+    assert first_bar["Start"] == "2026-06-16T10:00:00+00:00"
+    assert run_one["FrozenBaseCalendars"][0]["CalendarID"] == "CAL-LATE-SHIFT"
+    assert run_one["FrozenResourceCalendarAssignments"][0]["AssignmentID"] == (
+        "ASSIGN-LATE-WC-DRUM"
+    )
+    assert run_one["BaseCalendarSummary"]["AppliedAssignmentCount"] == 1
+    assert {
+        diagnostic["Code"] for diagnostic in run_one["Schedule"]["SolverDiagnostics"]
+    } >= {"BASE_CALENDARS_APPLIED"}
+
+    assert client.post(
+        "/planner/workbench/admin/base-calendars",
+        json={
+            "CalendarID": "CAL-EARLY-SHIFT",
+            "DisplayName": "Early shift",
+            "WorkingWeekdays": [0, 1, 2, 3, 4],
+            "Shifts": [{"Name": "Early", "Start": "06:00:00", "End": "08:00:00"}],
+            "CreatedAt": "2026-06-16T05:50:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/admin/resource-calendar-assignments",
+        json={
+            "AssignmentID": "ASSIGN-EARLY-WC-DRUM",
+            "ResourceID": "WC-DRUM",
+            "CalendarID": "CAL-EARLY-SHIFT",
+            "CreatedAt": "2026-06-16T05:51:00+00:00",
+            "CreatedBy": "planner-1",
+            "Status": "Active",
+        },
+    ).status_code == 200
+
+    detail = client.get("/planner/workbench/planning-runs/RUN-BASE-CAL-1/workbench")
+    assert detail.status_code == 200
+    assert detail.json()["Data"]["FrozenBaseCalendarSummary"] == {
+        "FrozenCalendarCount": 1,
+        "FrozenAssignmentCount": 1,
+        "AppliedAssignmentCount": 1,
+    }
+    run_two_create_payload = {
+        "RunID": "RUN-BASE-CAL-2",
+        "ProblemID": "P-BASE-CAL-2",
+        "MasterDataVersionID": "MDV-BASE-CAL",
+        "OperationalStateSnapshotID": "OPS-BASE-CAL",
+        "ScheduleStartAt": "2026-06-16T06:00:00+00:00",
+        "SolverBackendID": "ortools",
+        "RequestedBy": "planner-1",
+        "RequestedAt": "2026-06-16T05:56:00+00:00",
+    }
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=run_two_create_payload,
+    ).status_code == 200
+    run_two = client.post(
+        "/planner/workbench/planning-runs/RUN-BASE-CAL-2/execute",
+        json={
+            "ExecutedBy": "planner-1",
+            "StartedAt": "2026-06-16T05:57:00+00:00",
+            "CompletedAt": "2026-06-16T05:58:00+00:00",
+        },
+    ).json()["Data"]["PlanningRun"]
+
+    second_bar = run_two["Schedule"]["GanttRows"][0]["Bars"][0]
+    assert second_bar["Start"] == "2026-06-16T06:00:00+00:00"
+    assert run_two["FrozenResourceCalendarAssignments"][0]["AssignmentID"] == (
+        "ASSIGN-EARLY-WC-DRUM"
+    )
+    listed_assignments = client.get(
+        "/planner/workbench/admin/resource-calendar-assignments"
+    )
+    statuses = {
+        item["AssignmentID"]: item["SolverDriverStatus"]
+        for item in listed_assignments.json()["Data"]["Assignments"]
+    }
+    assert statuses["ASSIGN-LATE-WC-DRUM"] == "AppliedInRun"
+    assert statuses["ASSIGN-EARLY-WC-DRUM"] == "AppliedInRun"
 
 
 def test_be_data_010_calendar_overrides_freeze_and_drive_planning_run():
@@ -3508,6 +4219,8 @@ def test_be_solver_014_ui_006_scheduling_strategy_configuration_is_persisted(tmp
     strategy_config = admin["SchedulingStrategyConfiguration"]
     assert strategy_config["PersistedStrategyCount"] == 2
     assert strategy_config["ActiveStrategyID"] == "STRAT-FLOW-CUSTOM"
+    assert data["BuiltInStrategyIDs"][0] == "v1_delivery_flow_bottleneck"
+    assert strategy_config["ObjectiveStrategies"][0] == "v1_delivery_flow_bottleneck"
     assert "balanced" in strategy_config["ObjectiveStrategies"]
     assert "STRAT-FLOW-CUSTOM" in strategy_config["ObjectiveStrategies"]
     assert strategy_config["StrategyStatusCounts"] == {"Retired": 1, "Active": 1}
@@ -3527,16 +4240,21 @@ def test_ui_admin_001_002_workbench_exposes_bilingual_administration_workspace()
     assert 'id="admin-system-capabilities"' in html
     assert 'id="admin-cp-sat-assumptions"' in html
     assert 'id="admin-policy-groups"' in html
-    assert 'id="admin-calendar-override-form"' in html
-    assert 'id="admin-calendar-overrides"' in html
+    assert 'id="admin-calendar-title"' not in html
+    assert 'id="admin-base-calendars"' not in html
+    assert 'id="admin-resource-calendar-assignments"' not in html
+    assert 'id="admin-calendar-overrides"' not in html
+    assert 'id="admin-base-calendar-form"' not in html
+    assert 'id="admin-resource-calendar-assignment-form"' not in html
+    assert 'id="admin-calendar-override-form"' not in html
     assert 'id="admin-debug-json-toggle"' in html
     assert "/planner/workbench/administration/workbench" in script
     assert "/planner/workbench/admin/cp-sat/assumptions" in script
+    assert "/planner/workbench/admin/base-calendars" in script
+    assert "/planner/workbench/admin/resource-calendar-assignments" in script
     assert "/planner/workbench/admin/calendar-overrides" in script
     assert 'adminMasterDataTitle: "主数据后台"' in script
     assert 'adminMasterDataTitle: "Master Data Administration"' in script
-    assert 'calendarOverrideConfig: "日历临时覆盖配置"' in script
-    assert 'calendarOverrideConfig: "Calendar temporary override configuration"' in script
     assert 'partialEditable: "部分可配置"' in script
     assert 'partialEditable: "Partially configurable"' in script
     assert 'cpSatAssumptions: "CP-SAT 建模假设"' in script

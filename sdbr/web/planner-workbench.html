@@ -40,8 +40,11 @@
           <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navExceptions">异常中心</span>
           <span class="nav-badge" aria-label="0" data-i18n-aria-label="noUnreadExceptions">0</span>
         </a>
+        <a class="nav-item" href="#calendar" data-route="calendar">
+          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navCalendar">日历配置</span>
+        </a>
         <a class="nav-item" href="#administration" data-route="administration">
-          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navAdmin">管理后台</span>
+          <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navAdmin">管理后台</span>
         </a>
       </nav>
 
@@ -120,6 +123,7 @@
             </div>
             <div class="readiness-actions">
               <button id="refresh-case-acceptance" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+              <button id="reset-all-cases" class="button secondary" type="button" data-i18n="resetAllCases">复位全部案例</button>
             </div>
           </section>
           <div id="case-acceptance-error" class="persistent-error" role="alert" hidden>
@@ -360,6 +364,10 @@
             </div>
 
             <section id="schedule-panel-gantt" class="schedule-panel" data-schedule-panel="gantt">
+              <div class="load-view-toggle" role="tablist" aria-label="甘特图模式" data-i18n-aria-label="ganttMode">
+                <button class="schedule-tab is-active" type="button" data-gantt-mode="resource" data-i18n="resourceOccupationView">资源占用图</button>
+                <button class="schedule-tab" type="button" data-gantt-mode="order" data-i18n="workOrderFlowView">工单流程图</button>
+              </div>
               <div class="schedule-toolbar">
                 <label><span data-i18n="resource">资源</span><select id="gantt-resource-filter"></select></label>
                 <label><span data-i18n="workOrder">工单</span><select id="gantt-order-filter"></select></label>
@@ -493,6 +501,15 @@
           <section id="buffer-board-content" hidden>
             <div id="buffer-context-summary" class="buffer-context-summary"></div>
             <div id="buffer-board-matrix" class="buffer-board-matrix" aria-label="两阶段五区域缓冲矩阵" data-i18n-aria-label="bufferMatrix"></div>
+            <section id="mes-dispatch-priority-panel" class="dispatch-priority-panel" aria-labelledby="mes-dispatch-priority-title">
+              <div class="panel-heading compact-heading">
+                <div><span class="panel-kicker" data-i18n="mesDispatch">MES 派工</span><h2 id="mes-dispatch-priority-title" data-i18n="mesDispatchQueue">MES 派工队列</h2></div>
+                <span id="mes-dispatch-policy-chip" class="status-chip neutral">-</span>
+              </div>
+              <p class="inline-note" data-i18n="mesDispatchBoundary">此处只展示内部派工队列，不执行真实 MES 投递。</p>
+              <div id="mes-dispatch-summary" class="dispatch-summary"></div>
+              <div id="mes-dispatch-resources" class="dispatch-resource-list"></div>
+            </section>
           </section>
         </div>
 
@@ -507,6 +524,103 @@
           <section id="exception-center-content" hidden>
             <div class="exception-summary"><div><span data-i18n="totalExceptions">异常总数</span><strong data-exception-summary="TotalCount">0</strong></div><div><span data-i18n="criticalExceptions">严重</span><strong data-exception-summary="CriticalCount">0</strong></div><div><span data-i18n="warningExceptions">警告</span><strong data-exception-summary="WarningCount">0</strong></div><div><span data-i18n="openExceptions">未处理</span><strong data-exception-summary="OpenCount">0</strong></div></div>
             <div class="table-scroll"><table id="exception-center-table" class="data-table"><thead><tr><th data-i18n="severity">严重程度</th><th data-i18n="object">对象</th><th data-i18n="occurredAt">发生时间</th><th data-i18n="reasonCode">原因代码</th><th data-i18n="businessImpact">业务影响</th><th data-i18n="suggestedAction">建议动作</th><th data-i18n="owner">负责人</th><th data-i18n="actions">操作</th></tr></thead><tbody id="exception-center-table-body"></tbody></table></div>
+          </section>
+        </div>
+
+        <div id="calendar-view" class="calendar-view" hidden>
+          <section class="result-context-bar" aria-label="日历配置上下文" data-i18n-aria-label="calendarContext">
+            <button id="refresh-calendar-preview" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+            <label class="field inline-field"><span data-i18n="resource">资源</span><select id="calendar-preview-resource"></select></label>
+            <label class="field inline-field"><span data-i18n="fromDate">开始日期</span><input id="calendar-preview-start" type="date" value="2026-06-16"></label>
+            <label class="field inline-field"><span data-i18n="toDate">结束日期</span><input id="calendar-preview-end" type="date" value="2026-06-17"></label>
+            <span id="calendar-preview-chip" class="status-chip neutral">-</span>
+          </section>
+          <div id="calendar-preview-error" class="persistent-error" role="alert" hidden><strong data-i18n="calendarPreviewLoadFailed">无法读取日历预览</strong><span data-i18n="calendarPreviewRetryAdvice">请确认已有主数据版本和资源日历配置后重试。</span></div>
+          <section class="calendar-config-workspace" aria-labelledby="calendar-config-title">
+            <section class="admin-panel full-width" aria-labelledby="calendar-config-title">
+              <div class="panel-heading"><div><span class="panel-kicker" data-i18n="calendarOperation">日历操作</span><h2 id="calendar-config-title" data-i18n="calendarWorkbenchTitle">资源级日历配置</h2></div><span class="status-chip neutral" data-i18n="patternBased">Pattern Based</span></div>
+              <p class="inline-note" data-i18n="calendarWorkbenchDescription">参考工作周 + 日模式结构：管理员维护基础日历，计划员维护临时覆盖；新建 Planning Run 时冻结生效配置。</p>
+              <div class="calendar-config-grid">
+                <form id="calendar-base-calendar-form" class="calendar-config-card">
+                  <h3 data-i18n="workSchedules">工作周 / 基础日历</h3>
+                  <label class="field"><span data-i18n="calendarId">日历编号</span><input id="calendar-page-base-calendar-id" required readonly></label>
+                  <label class="field"><span data-i18n="displayName">显示名称</span><input id="calendar-page-base-calendar-name" value="标准工作周"></label>
+                  <label class="field"><span data-i18n="timezone">时区</span><input id="calendar-page-base-timezone" value="UTC"></label>
+                  <fieldset class="weekday-field"><legend data-i18n="workingWeekdays">工作日</legend>
+                    <label><input type="checkbox" data-calendar-weekday value="0" checked><span data-i18n="weekdayMonday">周一</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="1" checked><span data-i18n="weekdayTuesday">周二</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="2" checked><span data-i18n="weekdayWednesday">周三</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="3" checked><span data-i18n="weekdayThursday">周四</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="4" checked><span data-i18n="weekdayFriday">周五</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="5"><span data-i18n="weekdaySaturday">周六</span></label>
+                    <label><input type="checkbox" data-calendar-weekday value="6"><span data-i18n="weekdaySunday">周日</span></label>
+                  </fieldset>
+                  <label class="field"><span data-i18n="status">状态</span><select id="calendar-page-base-status"><option value="Active" data-i18n="Active">生效</option><option value="Draft" data-i18n="Draft">草案</option><option value="Retired" data-i18n="Retired">停用</option></select></label>
+                  <h4 data-i18n="dayPatterns">日模式 / 班次时段</h4>
+                  <div class="calendar-period-grid">
+                    <label class="field"><span data-i18n="shiftName">班次名称</span><input id="calendar-page-shift1-name" value="Standard AM"></label>
+                    <label class="field"><span data-i18n="shiftStart">开始</span><input id="calendar-page-shift1-start" type="time" value="08:00"></label>
+                    <label class="field"><span data-i18n="shiftEnd">结束</span><input id="calendar-page-shift1-end" type="time" value="12:00"></label>
+                    <label class="field"><span data-i18n="shiftName">班次名称</span><input id="calendar-page-shift2-name" value="Standard PM"></label>
+                    <label class="field"><span data-i18n="shiftStart">开始</span><input id="calendar-page-shift2-start" type="time" value="13:00"></label>
+                    <label class="field"><span data-i18n="shiftEnd">结束</span><input id="calendar-page-shift2-end" type="time" value="17:00"></label>
+                  </div>
+                  <h4 data-i18n="calendarExceptions">节假日与维护</h4>
+                  <label class="field"><span data-i18n="holidayDate">节假日日期</span><input id="calendar-page-holiday-date" type="date"></label>
+                  <label class="field"><span data-i18n="maintenanceStart">维护开始</span><input id="calendar-page-maintenance-start" type="datetime-local"></label>
+                  <label class="field"><span data-i18n="maintenanceEnd">维护结束</span><input id="calendar-page-maintenance-end" type="datetime-local"></label>
+                  <button class="button primary" type="submit" data-i18n="saveWorkSchedule">保存工作周</button>
+                </form>
+                <form id="calendar-assignment-form" class="calendar-config-card">
+                  <h3 data-i18n="resourceCalendarAssignment">资源日历分配</h3>
+                  <label class="field"><span data-i18n="assignmentId">分配编号</span><input id="calendar-page-assignment-id" required readonly></label>
+                  <label class="field"><span data-i18n="resource">资源</span><select id="calendar-page-assignment-resource-id" required></select></label>
+                  <label class="field"><span data-i18n="calendarId">日历编号</span><select id="calendar-page-assignment-calendar-id" required></select></label>
+                  <label class="field"><span data-i18n="status">状态</span><select id="calendar-page-assignment-status"><option value="Active" data-i18n="Active">生效</option><option value="Draft" data-i18n="Draft">草案</option><option value="Retired" data-i18n="Retired">停用</option></select></label>
+                  <button class="button secondary" type="submit" data-i18n="assignCalendar">分配日历</button>
+                  <div id="calendar-page-assignments" class="calendar-mini-list"></div>
+                </form>
+                <form id="calendar-override-form" class="calendar-config-card">
+                  <h3 data-i18n="workPeriodExceptions">加班 / 临时覆盖 / 停机</h3>
+                  <label class="field"><span data-i18n="overrideId">覆盖编号</span><input id="calendar-page-override-id" required readonly></label>
+                  <label class="field"><span data-i18n="calendarId">日历编号</span><select id="calendar-page-override-calendar-id" required></select></label>
+                  <label class="field"><span data-i18n="resource">资源</span><select id="calendar-page-override-resource-id"></select></label>
+                  <label class="field"><span data-i18n="overrideType">覆盖类型</span><select id="calendar-page-override-type"><option value="TemporaryShiftOverride" data-i18n="TemporaryShiftOverride">临时班次覆盖</option><option value="Overtime" data-i18n="Overtime">加班</option><option value="ExclusionOrMaintenance" data-i18n="ExclusionOrMaintenance">排除/维护修改</option></select></label>
+                  <label class="field"><span data-i18n="effectiveStart">生效开始</span><input id="calendar-page-override-start" type="datetime-local" required></label>
+                  <label class="field"><span data-i18n="effectiveEnd">生效结束</span><input id="calendar-page-override-end" type="datetime-local" required></label>
+                  <label class="field"><span data-i18n="capacityDelta">产能增减分钟</span><input id="calendar-page-override-capacity" type="number" value="0"></label>
+                  <label class="field"><span data-i18n="reason">原因</span><input id="calendar-page-override-reason" placeholder="加班、维护或临时排班"></label>
+                  <button class="button primary" type="submit" data-i18n="createOverride">创建覆盖</button>
+                  <div id="calendar-page-overrides" class="calendar-mini-list"></div>
+                </form>
+                <section class="calendar-config-card">
+                  <h3 data-i18n="calendarRules">固定规则</h3>
+                  <div class="calendar-rule-list">
+                    <div><strong data-i18n="conflictPriority">冲突优先级</strong><span data-i18n="calendarPriorityRule">维护 > 节假日 > 临时覆盖 > 加班 > 基础班次</span></div>
+                    <div><strong data-i18n="timezone">时区</strong><span data-i18n="timezoneRule">第一版按日历时区生成能力窗口，默认 UTC。</span></div>
+                    <div><strong data-i18n="crossShiftRule">跨班次加工规则</strong><span data-i18n="crossShiftRuleDescription">当前要求工序完整落入单个能力窗口，连续跨班次加工后续确认。</span></div>
+                  </div>
+                  <div id="calendar-page-base-calendars" class="calendar-mini-list"></div>
+                </section>
+              </div>
+            </section>
+          </section>
+          <section id="calendar-preview-content" hidden>
+            <div class="calendar-preview-layout">
+              <section class="admin-panel" aria-labelledby="calendar-elements-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="calendarElements">日历事项</span><h2 id="calendar-elements-title" data-i18n="calendarRequiredElements">事项要素检查</h2></div></div>
+                <div id="calendar-required-elements" class="calendar-element-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="calendar-final-windows-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="cpSatCapacityWindows">CP-SAT 能力窗口</span><h2 id="calendar-final-windows-title" data-i18n="finalCapacityWindows">最终可用窗口</h2></div></div>
+                <div id="calendar-preview-summary" class="case-summary compact-summary"></div>
+                <div id="calendar-final-windows" class="calendar-window-list"></div>
+              </section>
+              <section class="admin-panel full-width" aria-labelledby="calendar-source-elements-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="sourceRules">来源规则</span><h2 id="calendar-source-elements-title" data-i18n="appliedCalendarElements">已识别日历规则</h2></div></div>
+                <div id="calendar-source-elements" class="calendar-source-grid"></div>
+              </section>
+            </div>
           </section>
         </div>
 
@@ -545,29 +659,6 @@
                 <div id="admin-policy-groups" class="policy-group-list"></div>
               </section>
 
-              <section class="admin-panel full-width" aria-labelledby="admin-calendar-title">
-                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="calendar">日历</span><h2 id="admin-calendar-title" data-i18n="calendarLayers">资源日历四层</h2></div></div>
-                <div id="admin-calendar-layers" class="calendar-layer-list"></div>
-                <div class="calendar-config">
-                  <div class="panel-heading compact-heading">
-                    <div><span class="panel-kicker" data-i18n="calendarOverrides">临时覆盖</span><h3 data-i18n="calendarOverrideConfig">日历临时覆盖配置</h3></div>
-                  </div>
-                  <form id="admin-calendar-override-form" class="form-grid compact">
-                    <label class="field"><span data-i18n="overrideId">覆盖编号</span><input id="calendar-override-id" required value="CAL-OVR-001"></label>
-                    <label class="field"><span data-i18n="calendarId">日历编号</span><input id="calendar-id" required value="CAL-DRUM"></label>
-                    <label class="field"><span data-i18n="resource">资源</span><input id="calendar-resource-id" placeholder="TST-WC-DRUM"></label>
-                    <label class="field"><span data-i18n="overrideType">覆盖类型</span><select id="calendar-override-type"><option value="TemporaryShiftOverride" data-i18n="TemporaryShiftOverride">临时班次覆盖</option><option value="ExclusionOrMaintenance" data-i18n="ExclusionOrMaintenance">排除/维护修改</option><option value="Overtime" data-i18n="Overtime">加班</option></select></label>
-                    <label class="field"><span data-i18n="effectiveStart">生效开始</span><input id="calendar-effective-start" type="datetime-local" required></label>
-                    <label class="field"><span data-i18n="effectiveEnd">生效结束</span><input id="calendar-effective-end" type="datetime-local" required></label>
-                    <label class="field"><span data-i18n="capacityDelta">产能增减分钟</span><input id="calendar-capacity-delta" type="number" value="0"></label>
-                    <label class="field"><span data-i18n="shiftName">班次名称</span><input id="calendar-shift-name" placeholder="加班班次"></label>
-                    <label class="field"><span data-i18n="reason">原因</span><input id="calendar-reason" placeholder="维护、加班或节假日调整"></label>
-                    <button id="create-calendar-override" class="button primary" type="submit" data-i18n="createOverride">创建覆盖</button>
-                  </form>
-                  <p class="inline-note" data-i18n="calendarOverrideBoundary">当前仅支持临时覆盖台账；基础日历、班次模板和覆盖直接驱动 CP-SAT 仍待后续规则确认。</p>
-                  <div id="admin-calendar-overrides" class="calendar-override-list"></div>
-                </div>
-              </section>
             </div>
           </section>
         </div>
@@ -679,6 +770,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260620-ui-confirmation" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260622-release-queue-flow" defer></script>
 </body>
 </html>

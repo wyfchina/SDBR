@@ -325,6 +325,12 @@ def _frozen_input_summary(planning_run: dict[str, object]) -> dict[str, object]:
         "ReleasePolicyVersionID": planning_run.get("ReleasePolicyVersionID"),
         "ObjectiveStrategyID": planning_run.get("ObjectiveStrategyID", "balanced"),
         "FrozenSchedulingStrategy": planning_run.get("FrozenSchedulingStrategy"),
+        "FrozenBaseCalendarCount": len(
+            _dict_list(planning_run.get("FrozenBaseCalendars"))
+        ),
+        "FrozenResourceCalendarAssignmentCount": len(
+            _dict_list(planning_run.get("FrozenResourceCalendarAssignments"))
+        ),
         "FrozenCalendarOverrideCount": len(
             _dict_list(planning_run.get("FrozenCalendarOverrides"))
         ),

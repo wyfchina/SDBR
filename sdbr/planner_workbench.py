@@ -300,11 +300,61 @@ def _capacity_minutes_for(
 
 
 def _extra_capacity_minutes_for(resource: Resource, bucket_date: date) -> int:
+    if resource.calendar is not None:
+        if resource.calendar.holidays is not None and bucket_date in resource.calendar.holidays:
+            return 0
+        return sum(
+            _available_extra_capacity_minutes(
+                start=max(window.start, datetime.combine(bucket_date, time.min, tzinfo=window.start.tzinfo)),
+                end=min(
+                    window.end,
+                    datetime.combine(
+                        bucket_date + timedelta(days=1),
+                        time.min,
+                        tzinfo=window.end.tzinfo,
+                    ),
+                ),
+                capacity_minutes=window.capacity_minutes,
+                maintenance_windows=resource.calendar.maintenance_windows,
+            )
+            for window in resource.extra_capacity_windows
+            if window.start.date() <= bucket_date <= window.end.date()
+        )
     return sum(
         window.capacity_minutes
         for window in resource.extra_capacity_windows
         if window.start.date() == bucket_date
     )
+
+
+def _available_extra_capacity_minutes(
+    *,
+    start: datetime,
+    end: datetime,
+    capacity_minutes: int,
+    maintenance_windows: list[MaintenanceWindow],
+) -> int:
+    if start >= end or capacity_minutes <= 0:
+        return 0
+    available_segments = [(start, end)]
+    for maintenance in sorted(maintenance_windows, key=lambda item: (item.start, item.end)):
+        updated: list[tuple[datetime, datetime]] = []
+        for segment_start, segment_end in available_segments:
+            overlap_start = max(segment_start, maintenance.start)
+            overlap_end = min(segment_end, maintenance.end)
+            if overlap_start >= overlap_end:
+                updated.append((segment_start, segment_end))
+                continue
+            if segment_start < overlap_start:
+                updated.append((segment_start, overlap_start))
+            if overlap_end < segment_end:
+                updated.append((overlap_end, segment_end))
+        available_segments = updated
+    available_minutes = sum(
+        int((segment_end - segment_start).total_seconds() / 60)
+        for segment_start, segment_end in available_segments
+    )
+    return min(capacity_minutes, available_minutes)
 
 
 def calculate_suggested_release_date(

@@ -112,9 +112,11 @@ def integration_contract_catalog() -> list[IntegrationContract]:
                 "variance, alerts and replanning."
             ),
             message_types=[
+                "DispatchAccepted",
                 "ArrivedBuffer",
                 "StartedOperation",
                 "CompletedOperation",
+                "DispatchRejected",
                 "QuantityReported",
                 "ExceptionReported",
             ],
@@ -142,6 +144,7 @@ def integration_contract_catalog() -> list[IntegrationContract]:
                 "operator and equipment execution details."
             ),
             message_types=[
+                "DispatchQueueIssued",
                 "DispatchPackageIssued",
                 "DispatchPackageRevoked",
                 "ReleaseHoldChanged",
@@ -165,17 +168,58 @@ def integration_contract_catalog() -> list[IntegrationContract]:
 def integration_contracts_payload() -> dict[str, object]:
     contracts = [contract.to_dict() for contract in integration_contract_catalog()]
     return {
-        "Status": "ContractOnly",
+        "Status": "MockApiFirstVersion",
+        "FirstVersionIntegrationMode": "MockAPI",
+        "MesDispatchDeliveryMode": "RecommendationOnly",
+        "AdapterStrategy": integration_adapter_status_payload(),
         "Contracts": contracts,
         "Summary": {
             "ContractCount": len(contracts),
             "ExternalConnectionsConfigured": 0,
+            "MockApiEnabled": True,
             "ContractStubCount": sum(
                 1 for contract in contracts if contract["Status"] == "ContractStub"
             ),
             "ContractOnlyCount": sum(
                 1 for contract in contracts if contract["Status"] == "ContractOnly"
             ),
+        },
+    }
+
+
+def integration_adapter_status_payload() -> dict[str, object]:
+    return {
+        "ActiveAdapterID": "mock_api",
+        "ActiveAdapterName": "Mock API",
+        "CoreBoundary": (
+            "Planning, release, dispatch priority and publication use canonical "
+            "messages. The adapter can be replaced later by Direct ERP/MES or UNS "
+            "without changing core business modules."
+        ),
+        "Adapters": [
+            {
+                "AdapterID": "mock_api",
+                "DisplayName": "Mock API",
+                "Status": "EnabledForV1",
+                "Purpose": "First-version verification and repeatable acceptance data.",
+            },
+            {
+                "AdapterID": "direct_erp_mes",
+                "DisplayName": "Direct ERP/MES Adapter",
+                "Status": "Deferred",
+                "Purpose": "Future direct connection to selected ERP/MES APIs.",
+            },
+            {
+                "AdapterID": "uns_mqtt",
+                "DisplayName": "UNS MQTT Adapter",
+                "Status": "Deferred",
+                "Purpose": "Future topic-based integration through a UNS architecture.",
+            },
+        ],
+        "OutboundMesPolicy": {
+            "DeliveryMode": "RecommendationOnly",
+            "SendsToMes": False,
+            "Description": "V1 generates dispatch recommendations only and does not issue commands to MES.",
         },
     }
 

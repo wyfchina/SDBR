@@ -6,13 +6,13 @@ const I18N = {
     primaryNavigation: "主导航", planningContext: "计划上下文", toggleNavigation: "切换导航",
     productName: "需求驱动计划员工作台", navOverview: "计划总览", navData: "数据就绪",
     navRuns: "排程任务", navResults: "排程结果", navRelease: "释放管理", navBuffer: "缓冲执行",
-    navExceptions: "异常中心", navAdmin: "管理后台", noUnreadExceptions: "无未读异常",
+    navExceptions: "异常中心", navCalendar: "日历配置", navAdmin: "管理后台", noUnreadExceptions: "无未读异常",
     apiConnected: "本地服务已连接", planningScope: "计划范围", defaultFactory: "默认工厂",
     masterDataVersionLabel: "主数据版本", snapshotLabel: "运行快照", systemHealthLabel: "系统健康",
     notSelected: "未选择", checking: "检查中", healthy: "健康", unavailable: "不可用",
     language: "语言", planner: "计划员", workspaceEyebrow: "计划员工作台",
     pageOverview: "计划总览", pageData: "数据就绪", pageRuns: "排程任务",
-    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageExceptions: "异常中心", pageAdmin: "管理后台",
+    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
     descriptionOverview: "集中查看排程上下文、异常和下一步工作。",
     descriptionData: "检查主数据版本与运行状态快照。",
     descriptionRuns: "创建、跟踪和恢复排程任务。",
@@ -20,6 +20,7 @@ const I18N = {
     descriptionRelease: "依据绳长、物料、WIP 和缓冲管理工单释放。",
     descriptionBuffer: "按约束缓冲阶段和时间区域协同工单接收与开工。",
     descriptionExceptions: "集中处理失败、死信和执行偏差。",
+    descriptionCalendar: "检查日历事项、冲突优先级和 CP-SAT 最终可用窗口。",
     descriptionAdmin: "管理主数据、求解器、集成和权限配置。",
     frameworkReady: "页面框架已就绪", emptyTitle: "此功能将在对应验收单元中启用",
     emptyDescription: "当前阶段只建立应用导航、计划上下文和双语基础，不展示模拟生产数据。",
@@ -53,6 +54,10 @@ const I18N = {
     totalCases: "案例总数", passedCases: "已通过", needsExecutionCases: "待执行", failedCases: "未通过",
     acceptancePassed: "通过", acceptanceNeedsExecution: "待执行", acceptanceFailed: "未通过",
     purpose: "验证目的", releaseReadyCount: "可释放数", blockingCodes: "阻塞代码", openScheduleResult: "打开排程结果",
+    scheduleNotCompleted: "排程未完成", executeCaseFirst: "需要先执行并完成该案例的 Planning Run，才能打开排程结果。",
+    resetCase: "复位案例", resetAllCases: "复位全部案例", caseResetCompleted: "案例已复位。", caseResetFailed: "案例复位失败。",
+    PLANNING_RUN_NOT_COMPLETED: "Planning Run 尚未完成。", PLANNING_RUN_DEAD_LETTER: "Planning Run 已进入死信，不能打开排程结果。",
+    PLANNING_RUN_NOT_EXECUTED: "Planning Run 尚未执行。",
     runMetrics: "排程任务状态摘要", allRuns: "全部任务", queued: "排队中", running: "运行中", completed: "已完成",
     deadLetter: "死信", pending: "待处理", failed: "失败", cancelled: "已取消", allStatuses: "全部状态",
     status: "状态", requester: "请求人", filterRequester: "筛选请求人", exceptionsOnly: "仅看异常",
@@ -66,11 +71,14 @@ const I18N = {
     timeBuffer: "时间缓冲（分钟）", timeLimit: "求解时间限制（秒）", maxAttempts: "最大尝试次数",
     retryDelay: "重试延迟（秒）", pausedUnavailable: "已暂停，暂不可用", enableSimio: "启用 Simio 验证",
     back: "上一步", next: "下一步", submitRun: "提交排程任务", available: "可用", unavailable: "不可用",
-    enqueue: "入队", execute: "直接执行", cancel: "取消", recover: "人工恢复", openResults: "查看结果", view: "查看",
+    enqueue: "入队", execute: "直接执行", processQueue: "处理队列", cancel: "取消", recover: "人工恢复", openResults: "查看结果", view: "查看",
     seconds: "秒", notStarted: "未开始", frozenInputs: "冻结输入", solverParameters: "求解参数", workerLease: "Worker 与租约",
     timeline: "状态时间线", diagnostics: "求解诊断", auditEvents: "审计事件", noWorker: "尚未分配 Worker",
     dataUpdated: "数据已更新，请重新加载后再操作。", runCreated: "排程任务已创建", submissionFailed: "排程任务创建失败",
     confirmEnqueue: "确认将此排程任务加入队列？", confirmExecute: "确认立即调用 OR-Tools CP-SAT 执行此排程任务？",
+    confirmProcessQueue: "确认由交互式 Worker 领取并计算此排程任务？", queueProcessed: "队列任务已处理。",
+    replanCreatedQueued: "重排任务已创建并入队，请在排程任务中处理队列。",
+    confirmReplan: "确认基于当前计划创建新版重排任务并入队？",
     cancelReasonPrompt: "请输入取消原因。", recoverReasonPrompt: "请输入人工恢复原因。",
     actionFailed: "操作失败，请重新加载后重试。", solverUnavailable: "当前求解器不可用。",
     confirmAction: "确认操作", confirm: "确认", notifySuccess: "操作已完成", notifyError: "操作失败",
@@ -79,6 +87,7 @@ const I18N = {
     completeRunFirst: "请先完成一项排程任务。", scheduleKpis: "排程结果指标", onTimeOrders: "准时工单",
     lateOrders: "延迟工单", overloadMinutes: "超载分钟", redBuffers: "红区缓冲", peakLoad: "峰值负荷",
     scheduleResultViews: "排程结果视图", ganttChart: "甘特图", resourceLoad: "资源负荷", orderDelivery: "订单交期",
+    ganttMode: "甘特图模式", resourceOccupationView: "资源占用图", workOrderFlowView: "工单流程图",
     resource: "资源", workOrder: "工单", barType: "条带类型", bufferZone: "缓冲区", fromDate: "开始日期",
     toDate: "结束日期", zoom: "缩放", ganttLegend: "甘特图图例", processing: "加工",
     greenBuffer: "绿色时间缓冲", yellowBuffer: "黄色时间缓冲", redBuffer: "红色时间缓冲",
@@ -120,7 +129,8 @@ const I18N = {
     previousPage: "上一页", nextPage: "下一页", rowsPerPage: "每页", viewNamePrompt: "请输入视图名称。",
     priorityPrompt: "请输入优先级（1-999）。", selectedCount: "已选择 {count} 个工单", planCurrent: "当前计划",
     planStale: "已有更新计划", workOrderDetail: "工单详情", operations: "工序", auditHistory: "审计历史",
-    releaseContext: "释放评估上下文", evaluatedAt: "评估时间", reevaluate: "重新评估", releaseLoadFailed: "无法读取释放评估",
+    releaseContext: "释放评估上下文", evaluatedAt: "评估时间", reevaluate: "重新评估",
+    releaseSnapshotRefreshed: "Mock 运行快照已刷新，释放门控已重新评估。", releaseLoadFailed: "无法读取释放评估",
     releaseRetryAdvice: "请检查已完成计划和运行状态快照。", noReleaseRuns: "没有可评估的已完成计划",
     totalOrders: "工单总数", readyToRelease: "可释放", blocked: "已阻塞", authorized: "已授权",
     penetration: "渗透率", ropeReleaseTime: "绳长释放时间", materialStatus: "物料状态", wipStatus: "WIP 状态",
@@ -128,6 +138,7 @@ const I18N = {
     authorizeRelease: "授权释放", viewDispatch: "查看调度包", viewReason: "查看原因", noBlockReason: "当前没有阻塞原因。",
     snapshotStatus: "快照状态", freshSnapshot: "运行状态快照新鲜", staleSnapshot: "运行状态快照已过期，禁止授权释放",
     futureSnapshot: "运行状态快照时间异常，禁止授权释放", clear: "通过", early: "未到时间", notReleased: "未释放",
+    snapshotRefreshAdvice: "请同步或生成新的资源/物料/WIP 快照后重新评估；仅快照过期不要求重新排程。",
     releasePolicyVersion: "释放策略版本", policyEvidence: "策略证据", reasonDetails: "触发参数", stabilityDecision: "稳定性判断",
     ropeBufferMinutes: "策略绳长分钟", materialCheckWindowMinutes: "物料检查窗口分钟", materialLookaheadMinutes: "物料检查窗口分钟",
     maxWipCount: "策略 WIP 上限", policyMaxWipCount: "策略 WIP 上限", snapshotMaxWipCount: "快照 WIP 上限",
@@ -138,12 +149,23 @@ const I18N = {
     reason_ROPE_TIME_NOT_REACHED: "尚未到达绳长释放时间。", reason_MATERIAL_SHORTAGE: "可用物料不足。",
     reason_MATERIAL_INBOUND_PENDING: "物料仍在途中。", reason_WIP_LIMIT_EXCEEDED: "释放后将超过 WIP 上限。",
     reason_OPERATIONAL_SNAPSHOT_STALE: "运行状态快照已过期。", reason_OPERATIONAL_SNAPSHOT_FUTURE: "运行状态快照时间晚于评估时间。",
+    action_RefreshOperationalSnapshotAndReevaluate: "同步/生成新运行快照后重新评估释放",
+    action_CorrectEvaluationTimeOrSnapshot: "修正评估时间或选择正确快照",
     authorizeImpact: "确认授权释放该工单？系统将记录门控快照并生成调度包。", releaseAuthorized: "工单已授权释放。",
     commandRecorded: "工单命令已记录。", pageOf: "第 {page} / {pages} 页",
     bufferContext: "约束缓冲上下文", bufferMatrix: "两阶段五区域缓冲矩阵", bufferLoadFailed: "无法读取缓冲执行看板",
     bufferRetryAdvice: "请选择包含已授权工单的已完成计划。", noBufferRuns: "没有可用的已完成计划", bufferOwner: "缓冲负责人",
     dailyLoad: "当日总负荷", lastScheduled: "最近排程时间", hours: "小时", yetToBeReceived: "待接收", received: "已接收",
     Early: "提前", Green: "绿区", Yellow: "黄区", Red: "红区", Late: "逾期", orderCount: "工单数", totalLoad: "总负荷",
+    mesDispatch: "MES 派工", mesDispatchQueue: "MES 派工队列", mesDispatchBoundary: "此处只展示内部派工队列，不执行真实 MES 投递。",
+    dispatchableOperations: "可正式派工工序", candidateWarnings: "候选/预警", queueJumpSuggestions: "插队建议", plannerConfirmations: "需调度员确认",
+    replanSuggestions: "重排建议", dispatchRank: "派工顺序", planSequence: "计划顺序", conflictResult: "冲突结果",
+    plannerConfirmation: "调度员确认", mesDispatchUnavailable: "MES 派工队列暂不可用", noDispatchRows: "当前没有可正式派工工序。",
+    noDispatchWarnings: "当前没有候选/预警。", Dispatchable: "可派工", CandidateOnly: "候选/预警", FollowPlan: "按计划执行",
+    SuggestQueueJump: "建议插队", NeedsReplan: "需要重排", Clear: "通过", ReleaseNotAuthorized: "未授权释放",
+    LatestOperationalStateBlocked: "最新状态阻塞", LatestOperationalStateNotReady: "最新状态未就绪",
+    required: "需要", ConstraintResourceSetupOrIdleRisk: "约束资源可能增加换型或产生空闲风险",
+    RedZoneCanOverrideSetupLossOnlyAfterPlannerConfirmation: "红区可压倒换型损失，但需要调度员确认",
     bufferOrderDetail: "缓冲工单详情", customer: "客户", currentReason: "当前原因", receiveStatus: "接收状态",
     executionTransaction: "执行事务", eventType: "事件类型", arrivedBuffer: "到达缓冲", startedOperation: "开始加工", eventAt: "事件时间",
     measureType: "记录方式", measureValue: "记录值", reasonCode: "原因码", selectReason: "请选择原因码", recordTransaction: "记录事务",
@@ -159,6 +181,23 @@ const I18N = {
     action_ReviewExecutionAlert: "处理执行预警", action_ReviewReplanRequest: "审核重排建议", viewDetail: "查看详情", relatedObjects: "关联对象", resolutionActions: "处理动作",
     auditTrail: "审计历史", noAuditTrail: "没有审计记录", type_PlanningRunDeadLetter: "排程死信", type_PlanningRunFailed: "排程失败", type_ConstraintBufferRisk: "约束缓冲风险",
     type_ExecutionAlert: "执行预警", type_ReplanSuggestion: "重排建议",
+    calendarContext: "日历配置上下文", calendarPreviewLoadFailed: "无法读取日历预览", calendarPreviewRetryAdvice: "请确认已有主数据版本和资源日历配置后重试。",
+    calendarElements: "日历事项", calendarRequiredElements: "事项要素检查", cpSatCapacityWindows: "CP-SAT 能力窗口", finalCapacityWindows: "最终可用窗口",
+    sourceRules: "来源规则", appliedCalendarElements: "已识别日历规则", cpSatNeedReason: "CP-SAT 需求原因", missingImpactDomain: "缺失影响域",
+    previewMode: "预览模式", finalWindowCount: "最终窗口数", missingDailyCapacityDates: "缺失日能力日期", noCalendarWindows: "当前范围没有最终可用窗口。",
+    noCalendarElements: "当前资源没有识别到日历规则。", elementType: "事项类型", sourceId: "来源编号", start: "开始", end: "结束",
+    calendarOperation: "日历操作", calendarWorkbenchTitle: "资源级日历配置", patternBased: "模式驱动",
+    calendarWorkbenchDescription: "参考工作周 + 日模式结构：管理员维护基础日历，计划员维护临时覆盖；新建 Planning Run 时冻结生效配置。",
+    workSchedules: "工作周 / 基础日历", dayPatterns: "日模式 / 班次时段", calendarExceptions: "节假日与维护",
+    holidayDate: "节假日日期", maintenanceStart: "维护开始", maintenanceEnd: "维护结束", saveWorkSchedule: "保存工作周",
+    weekdayMonday: "周一", weekdayTuesday: "周二", weekdayWednesday: "周三", weekdayThursday: "周四",
+    weekdayFriday: "周五", weekdaySaturday: "周六", weekdaySunday: "周日",
+    resourceCalendarAssignment: "资源日历分配", workPeriodExceptions: "加班 / 临时覆盖 / 停机", calendarRules: "固定规则",
+    calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次", timezone: "时区",
+    timezoneRule: "第一版按日历时区生成能力窗口，默认 UTC。", crossShiftRule: "跨班次加工规则",
+    crossShiftRuleDescription: "当前要求工序完整落入单个能力窗口，连续跨班次加工后续确认。",
+    noCalendarConfigRows: "尚无配置记录。", adminCalendarMoved: "日历配置已移到独立页面；管理后台只保留能力摘要和当前配置清单。",
+    openCalendarConfiguration: "打开日历配置", baseCalendarSummary: "基础日历摘要", calendarOverrideSummary: "日历临时覆盖摘要",
     administrationContext: "管理后台上下文", sensitiveSettingsReadOnly: "敏感连接参数当前只读。", administrationLoadFailed: "无法读取管理后台",
     administrationRetryAdvice: "请确认本地服务可用后重试。", adminMasterDataTitle: "主数据后台", importPreview: "导入预览",
     importPreviewDescription: "选择对象后先查看结构化预览和预校验结果，再生成主数据版本。", importFile: "导入文件", preValidate: "预校验",
@@ -169,10 +208,17 @@ const I18N = {
     preValidationRequired: "导入前预校验", versionAfterImport: "导入后生成版本", capabilityStatus: "能力状态", lastSync: "最近同步",
     workerQueue: "Worker 队列", stateStore: "状态存储", DayDefinition: "日定义", WeekDefinition: "周定义", TemporaryShiftOverride: "临时班次覆盖",
     ExclusionOrMaintenance: "排除/维护修改", Overtime: "加班", calendarOverrides: "临时覆盖", calendarOverrideConfig: "日历临时覆盖配置",
+    baseCalendars: "基础日历", baseCalendarConfig: "基础日历配置", displayName: "显示名称", workingWeekdays: "工作日",
+    shiftStart: "班次开始", shiftEnd: "班次结束", createBaseCalendar: "创建基础日历", baseCalendarCreated: "基础日历已创建。",
+    baseCalendarFailed: "基础日历创建失败。", baseCalendarBoundary: "Active 基础日历和资源分配会冻结到新建 Planning Run，并驱动 CP-SAT 能力桶；复杂冲突审批后续补齐。",
+    assignmentId: "分配编号", assignCalendar: "分配日历", calendarAssignment: "日历分配", calendarAssignmentCreated: "资源日历分配已创建。",
+    calendarAssignmentFailed: "资源日历分配创建失败。", noBaseCalendars: "尚无基础日历。", noCalendarAssignments: "尚无资源日历分配。",
     overrideId: "覆盖编号", calendarId: "日历编号", overrideType: "覆盖类型", effectiveStart: "生效开始", effectiveEnd: "生效结束",
     capacityDelta: "产能增减分钟", shiftName: "班次名称", reason: "原因", createOverride: "创建覆盖", calendarOverride: "日历覆盖",
     noCalendarOverrides: "尚无临时日历覆盖。", calendarOverrideCreated: "日历覆盖已创建。", calendarOverrideFailed: "日历覆盖创建失败。",
-    calendarOverrideBoundary: "Active 临时覆盖会驱动新建 Planning Run；基础日历、班次模板、冲突规则和审批流仍待后续规则确认。",
+    calendarOverrideBoundary: "生效的临时覆盖会驱动新建 Planning Run；维护 > 节假日 > 临时覆盖 > 加班 > 基础班次，审批流暂不做。",
+    calendarScope: "日历范围", ResourceOnly: "仅资源级", conflictPriority: "冲突优先级", ApprovalFlowStatus: "审批流",
+    StatusOnly: "仅状态字段", Maintenance: "维护", Holiday: "节假日", BaseShift: "基础班次", Draft: "草案", Active: "生效", Retired: "停用",
     RateInterpretation: "速率解释方式", Units: "单位", SchedulingWindow: "排程窗口",
     BufferBoundaries: "缓冲区边界比例", PiecesPerHour: "件/小时", HoursPerPiece: "小时/件", MinutesPerPiece: "分钟/件",
     BufferMinutes: "缓冲分钟", SetupMinutes: "换型分钟", DurationMinutes: "持续分钟", FixedOffsetMinutes: "固定偏移分钟",
@@ -185,13 +231,13 @@ const I18N = {
     primaryNavigation: "Primary navigation", planningContext: "Planning context", toggleNavigation: "Toggle navigation",
     productName: "Demand-Driven Planner Workbench", navOverview: "Planning Overview", navData: "Data Readiness",
     navRuns: "Planning Runs", navResults: "Schedule Results", navRelease: "Release Management", navBuffer: "Buffer Execution",
-    navExceptions: "Exceptions", navAdmin: "Administration", noUnreadExceptions: "No unread exceptions",
+    navExceptions: "Exceptions", navCalendar: "Calendar Configuration", navAdmin: "Administration", noUnreadExceptions: "No unread exceptions",
     apiConnected: "Local service connected", planningScope: "Planning scope", defaultFactory: "Default factory",
     masterDataVersionLabel: "Master data version", snapshotLabel: "Operational snapshot", systemHealthLabel: "System health",
     notSelected: "Not selected", checking: "Checking", healthy: "Healthy", unavailable: "Unavailable",
     language: "Language", planner: "Planner", workspaceEyebrow: "Planner Workbench",
     pageOverview: "Planning Overview", pageData: "Data Readiness", pageRuns: "Planning Runs",
-    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageExceptions: "Exceptions", pageAdmin: "Administration",
+    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageExceptions: "Exceptions", pageCalendar: "Calendar Configuration", pageAdmin: "Administration",
     descriptionOverview: "Review planning context, exceptions, and the next work to perform.",
     descriptionData: "Check master data versions and operational snapshots.",
     descriptionRuns: "Create, track, and recover planning runs.",
@@ -199,6 +245,7 @@ const I18N = {
     descriptionRelease: "Control release using rope time, material, WIP, and buffers.",
     descriptionBuffer: "Coordinate order receipt and start by constraint-buffer stage and time zone.",
     descriptionExceptions: "Handle failures, dead letters, and execution variance.",
+    descriptionCalendar: "Review calendar elements, conflict priority, and final CP-SAT availability windows.",
     descriptionAdmin: "Manage master data, solvers, integrations, and access.",
     frameworkReady: "Page framework ready", emptyTitle: "This capability will open in its acceptance unit",
     emptyDescription: "This phase establishes navigation, planning context, and bilingual foundations without fabricated production data.",
@@ -232,6 +279,10 @@ const I18N = {
     totalCases: "Total cases", passedCases: "Passed", needsExecutionCases: "Needs execution", failedCases: "Failed",
     acceptancePassed: "Passed", acceptanceNeedsExecution: "Needs execution", acceptanceFailed: "Failed",
     purpose: "Purpose", releaseReadyCount: "Ready releases", blockingCodes: "Blocking codes", openScheduleResult: "Open schedule result",
+    scheduleNotCompleted: "Schedule not completed", executeCaseFirst: "Execute and complete this case's Planning Run before opening the schedule result.",
+    resetCase: "Reset case", resetAllCases: "Reset all cases", caseResetCompleted: "Case reset completed.", caseResetFailed: "Case reset failed.",
+    PLANNING_RUN_NOT_COMPLETED: "Planning Run is not completed.", PLANNING_RUN_DEAD_LETTER: "Planning Run is dead-lettered and has no schedule result.",
+    PLANNING_RUN_NOT_EXECUTED: "Planning Run has not been executed.",
     runMetrics: "Planning run status summary", allRuns: "All runs", queued: "Queued", running: "Running", completed: "Completed",
     deadLetter: "Dead letter", pending: "Pending", failed: "Failed", cancelled: "Cancelled", allStatuses: "All statuses",
     status: "Status", requester: "Requester", filterRequester: "Filter requester", exceptionsOnly: "Exceptions only",
@@ -245,11 +296,14 @@ const I18N = {
     timeBuffer: "Time buffer (minutes)", timeLimit: "Solver time limit (seconds)", maxAttempts: "Maximum attempts",
     retryDelay: "Retry delay (seconds)", pausedUnavailable: "Paused and unavailable", enableSimio: "Enable Simio validation",
     back: "Back", next: "Next", submitRun: "Submit planning run", available: "Available", unavailable: "Unavailable",
-    enqueue: "Enqueue", execute: "Execute now", cancel: "Cancel", recover: "Recover", openResults: "Open results", view: "View",
+    enqueue: "Enqueue", execute: "Execute now", processQueue: "Process queue", cancel: "Cancel", recover: "Recover", openResults: "Open results", view: "View",
     seconds: "sec", notStarted: "Not started", frozenInputs: "Frozen inputs", solverParameters: "Solver parameters", workerLease: "Worker and lease",
     timeline: "Status timeline", diagnostics: "Solver diagnostics", auditEvents: "Audit events", noWorker: "No worker assigned",
     dataUpdated: "Data was updated. Reload before trying again.", runCreated: "Planning run created", submissionFailed: "Planning run creation failed",
     confirmEnqueue: "Enqueue this planning run?", confirmExecute: "Run this planning task with OR-Tools CP-SAT now?",
+    confirmProcessQueue: "Let the interactive worker claim and calculate this planning run?", queueProcessed: "Queued planning run processed.",
+    replanCreatedQueued: "Replan run created and queued. Process it in Planning Runs.",
+    confirmReplan: "Create and enqueue a new replan run from the current schedule?",
     cancelReasonPrompt: "Enter a cancellation reason.", recoverReasonPrompt: "Enter a recovery reason.",
     actionFailed: "The operation failed. Reload and try again.", solverUnavailable: "The selected solver is unavailable.",
     confirmAction: "Confirm action", confirm: "Confirm", notifySuccess: "Action completed", notifyError: "Action failed",
@@ -258,6 +312,7 @@ const I18N = {
     completeRunFirst: "Complete a planning run first.", scheduleKpis: "Schedule result metrics", onTimeOrders: "On-time orders",
     lateOrders: "Late orders", overloadMinutes: "Overload minutes", redBuffers: "Red buffers", peakLoad: "Peak load",
     scheduleResultViews: "Schedule result views", ganttChart: "Gantt chart", resourceLoad: "Resource load", orderDelivery: "Order delivery",
+    ganttMode: "Gantt mode", resourceOccupationView: "Resource occupation", workOrderFlowView: "Work-order flow",
     resource: "Resource", workOrder: "Work order", barType: "Bar type", bufferZone: "Buffer zone", fromDate: "From date",
     toDate: "To date", zoom: "Zoom", ganttLegend: "Gantt legend", processing: "Processing",
     greenBuffer: "Green time buffer", yellowBuffer: "Yellow time buffer", redBuffer: "Red time buffer",
@@ -299,7 +354,8 @@ const I18N = {
     previousPage: "Previous", nextPage: "Next", rowsPerPage: "Rows per page", viewNamePrompt: "Enter a view name.",
     priorityPrompt: "Enter a priority from 1 to 999.", selectedCount: "{count} orders selected", planCurrent: "Current plan",
     planStale: "Newer plan available", workOrderDetail: "Work order detail", operations: "Operations", auditHistory: "Audit history",
-    releaseContext: "Release evaluation context", evaluatedAt: "Evaluated at", reevaluate: "Re-evaluate", releaseLoadFailed: "Release evaluation could not be loaded",
+    releaseContext: "Release evaluation context", evaluatedAt: "Evaluated at", reevaluate: "Re-evaluate",
+    releaseSnapshotRefreshed: "Mock operational snapshot refreshed and release gate re-evaluated.", releaseLoadFailed: "Release evaluation could not be loaded",
     releaseRetryAdvice: "Check the completed plan and operational snapshot.", noReleaseRuns: "No completed plan is available for evaluation",
     totalOrders: "Total orders", readyToRelease: "Ready", blocked: "Blocked", authorized: "Authorized",
     penetration: "Penetration", ropeReleaseTime: "Rope release time", materialStatus: "Material status", wipStatus: "WIP status",
@@ -307,6 +363,7 @@ const I18N = {
     authorizeRelease: "Authorize release", viewDispatch: "View dispatch", viewReason: "View reason", noBlockReason: "No blocking reasons.",
     snapshotStatus: "Snapshot status", freshSnapshot: "Operational snapshot is fresh", staleSnapshot: "Operational snapshot is stale; authorization is blocked",
     futureSnapshot: "Operational snapshot is from the future; authorization is blocked", clear: "Clear", early: "Early", notReleased: "Not released",
+    snapshotRefreshAdvice: "Sync or create a fresh resource/material/WIP snapshot, then re-evaluate release. A stale snapshot alone does not require rescheduling.",
     releasePolicyVersion: "Release policy version", policyEvidence: "Policy evidence", reasonDetails: "Trigger parameters", stabilityDecision: "Stability decision",
     ropeBufferMinutes: "Policy rope minutes", materialCheckWindowMinutes: "Material check window minutes", materialLookaheadMinutes: "Material check window minutes",
     maxWipCount: "Policy WIP limit", policyMaxWipCount: "Policy WIP limit", snapshotMaxWipCount: "Snapshot WIP limit",
@@ -317,12 +374,23 @@ const I18N = {
     reason_ROPE_TIME_NOT_REACHED: "Rope release time has not been reached.", reason_MATERIAL_SHORTAGE: "Available material is insufficient.",
     reason_MATERIAL_INBOUND_PENDING: "Required material is still inbound.", reason_WIP_LIMIT_EXCEEDED: "Release would exceed the WIP limit.",
     reason_OPERATIONAL_SNAPSHOT_STALE: "The operational snapshot is stale.", reason_OPERATIONAL_SNAPSHOT_FUTURE: "The operational snapshot is later than the evaluation time.",
+    action_RefreshOperationalSnapshotAndReevaluate: "Sync/create a fresh operational snapshot and re-evaluate release",
+    action_CorrectEvaluationTimeOrSnapshot: "Correct the evaluation time or selected snapshot",
     authorizeImpact: "Authorize this work order? The gate snapshot will be audited and a dispatch package generated.", releaseAuthorized: "Work order release authorized.",
     commandRecorded: "Work order command recorded.", pageOf: "Page {page} of {pages}",
     bufferContext: "Constraint buffer context", bufferMatrix: "Two-stage five-zone buffer matrix", bufferLoadFailed: "Buffer execution board could not be loaded",
     bufferRetryAdvice: "Select a completed plan containing authorized orders.", noBufferRuns: "No completed plan is available", bufferOwner: "Buffer owner",
     dailyLoad: "Daily load", lastScheduled: "Last scheduled", hours: "hours", yetToBeReceived: "Yet to be received", received: "Received",
     Early: "Early", Green: "Green", Yellow: "Yellow", Red: "Red", Late: "Late", orderCount: "Orders", totalLoad: "Total load",
+    mesDispatch: "MES dispatch", mesDispatchQueue: "MES dispatch queue", mesDispatchBoundary: "This area shows the internal dispatch queue only; it does not send to MES.",
+    dispatchableOperations: "Dispatchable operations", candidateWarnings: "Candidates / warnings", queueJumpSuggestions: "Queue-jump suggestions", plannerConfirmations: "Planner confirmations",
+    replanSuggestions: "Replan suggestions", dispatchRank: "Dispatch rank", planSequence: "Plan sequence", conflictResult: "Conflict result",
+    plannerConfirmation: "Planner confirmation", mesDispatchUnavailable: "MES dispatch queue unavailable", noDispatchRows: "No dispatchable operations.",
+    noDispatchWarnings: "No candidates or warnings.", Dispatchable: "Dispatchable", CandidateOnly: "Candidate / warning", FollowPlan: "Follow plan",
+    SuggestQueueJump: "Suggest queue jump", NeedsReplan: "Needs replan", Clear: "Clear", ReleaseNotAuthorized: "Release not authorized",
+    LatestOperationalStateBlocked: "Latest state blocked", LatestOperationalStateNotReady: "Latest state not ready",
+    required: "Required", ConstraintResourceSetupOrIdleRisk: "Constraint resource may incur setup or idle risk",
+    RedZoneCanOverrideSetupLossOnlyAfterPlannerConfirmation: "Red zone may override setup loss only after planner confirmation",
     bufferOrderDetail: "Buffer order detail", customer: "Customer", currentReason: "Current reason", receiveStatus: "Receipt status",
     executionTransaction: "Execution transaction", eventType: "Event type", arrivedBuffer: "Arrived at buffer", startedOperation: "Started operation", eventAt: "Event time",
     measureType: "Measure type", measureValue: "Measure value", reasonCode: "Reason code", selectReason: "Select a reason code", recordTransaction: "Record transaction",
@@ -338,6 +406,23 @@ const I18N = {
     action_ReviewExecutionAlert: "Handle execution alert", action_ReviewReplanRequest: "Review replan request", viewDetail: "View detail", relatedObjects: "Related objects", resolutionActions: "Resolution actions",
     auditTrail: "Audit trail", noAuditTrail: "No audit trail", type_PlanningRunDeadLetter: "Planning run dead letter", type_PlanningRunFailed: "Planning run failed", type_ConstraintBufferRisk: "Constraint buffer risk",
     type_ExecutionAlert: "Execution alert", type_ReplanSuggestion: "Replan suggestion",
+    calendarContext: "Calendar configuration context", calendarPreviewLoadFailed: "Calendar preview could not be loaded", calendarPreviewRetryAdvice: "Check that master data and resource calendars are available, then retry.",
+    calendarElements: "Calendar elements", calendarRequiredElements: "Required element check", cpSatCapacityWindows: "CP-SAT capacity windows", finalCapacityWindows: "Final availability windows",
+    sourceRules: "Source rules", appliedCalendarElements: "Recognized calendar rules", cpSatNeedReason: "Why CP-SAT needs it", missingImpactDomain: "Impact if missing",
+    previewMode: "Preview mode", finalWindowCount: "Final windows", missingDailyCapacityDates: "Missing daily capacity dates", noCalendarWindows: "No final availability windows in this range.",
+    noCalendarElements: "No calendar rules were recognized for this resource.", elementType: "Element type", sourceId: "Source ID", start: "Start", end: "End",
+    calendarOperation: "Calendar operations", calendarWorkbenchTitle: "Resource-level calendar configuration", patternBased: "Pattern based",
+    calendarWorkbenchDescription: "Uses a work-week plus day-pattern structure: administrators maintain base calendars, planners maintain temporary overrides, and active settings are frozen into new Planning Runs.",
+    workSchedules: "Work schedules / Base calendar", dayPatterns: "Day patterns / Work periods", calendarExceptions: "Holidays and maintenance",
+    holidayDate: "Holiday date", maintenanceStart: "Maintenance start", maintenanceEnd: "Maintenance end", saveWorkSchedule: "Save work schedule",
+    weekdayMonday: "Monday", weekdayTuesday: "Tuesday", weekdayWednesday: "Wednesday", weekdayThursday: "Thursday",
+    weekdayFriday: "Friday", weekdaySaturday: "Saturday", weekdaySunday: "Sunday",
+    resourceCalendarAssignment: "Resource calendar assignment", workPeriodExceptions: "Overtime / Temporary overrides / Downtime", calendarRules: "Fixed rules",
+    calendarPriorityRule: "Maintenance > holiday > temporary override > overtime > base shift", timezone: "Timezone",
+    timezoneRule: "Version 1 generates capacity windows in the calendar timezone; UTC is the default.", crossShiftRule: "Cross-shift processing rule",
+    crossShiftRuleDescription: "Operations must currently fit inside one availability window; continuous cross-shift processing needs later confirmation.",
+    noCalendarConfigRows: "No configuration records yet.", adminCalendarMoved: "Calendar configuration has moved to the dedicated page; administration keeps only capability summaries and current records.",
+    openCalendarConfiguration: "Open calendar configuration", baseCalendarSummary: "Base calendar summary", calendarOverrideSummary: "Temporary override summary",
     administrationContext: "Administration context", sensitiveSettingsReadOnly: "Sensitive connection parameters are read-only.", administrationLoadFailed: "Administration could not be loaded",
     administrationRetryAdvice: "Check the local service and retry.", adminMasterDataTitle: "Master Data Administration", importPreview: "Import preview",
     importPreviewDescription: "Select an object, review structured preview and pre-validation, then generate a master data version.", importFile: "Import file", preValidate: "Pre-validate",
@@ -348,10 +433,17 @@ const I18N = {
     preValidationRequired: "Pre-validation before import", versionAfterImport: "Version after import", capabilityStatus: "Capability status", lastSync: "Last sync",
     workerQueue: "Worker queue", stateStore: "State store", DayDefinition: "Day definition", WeekDefinition: "Week definition", TemporaryShiftOverride: "Temporary shift override",
     ExclusionOrMaintenance: "Exclusion or maintenance change", Overtime: "Overtime", calendarOverrides: "Temporary overrides", calendarOverrideConfig: "Calendar temporary override configuration",
+    baseCalendars: "Base calendars", baseCalendarConfig: "Base calendar configuration", displayName: "Display name", workingWeekdays: "Working weekdays",
+    shiftStart: "Shift start", shiftEnd: "Shift end", createBaseCalendar: "Create base calendar", baseCalendarCreated: "Base calendar created.",
+    baseCalendarFailed: "Base calendar creation failed.", baseCalendarBoundary: "Active base calendars and resource assignments are frozen into new Planning Runs and drive CP-SAT capacity buckets; complex conflict approval remains later.",
+    assignmentId: "Assignment ID", assignCalendar: "Assign calendar", calendarAssignment: "Calendar assignment", calendarAssignmentCreated: "Resource calendar assignment created.",
+    calendarAssignmentFailed: "Resource calendar assignment creation failed.", noBaseCalendars: "No base calendars.", noCalendarAssignments: "No resource calendar assignments.",
     overrideId: "Override ID", calendarId: "Calendar ID", overrideType: "Override type", effectiveStart: "Effective start", effectiveEnd: "Effective end",
     capacityDelta: "Capacity delta minutes", shiftName: "Shift name", reason: "Reason", createOverride: "Create override", calendarOverride: "Calendar override",
     noCalendarOverrides: "No temporary calendar overrides.", calendarOverrideCreated: "Calendar override created.", calendarOverrideFailed: "Calendar override creation failed.",
-    calendarOverrideBoundary: "Active temporary overrides drive new Planning Runs; base calendars, shift templates, conflict rules, and approval flow remain pending business rules.",
+    calendarOverrideBoundary: "Active temporary overrides drive new Planning Runs; maintenance > holiday > temporary override > overtime > base shift. Approval flow is status-only for now.",
+    calendarScope: "Calendar scope", ResourceOnly: "Resource only", conflictPriority: "Conflict priority", ApprovalFlowStatus: "Approval flow",
+    StatusOnly: "Status fields only", Maintenance: "Maintenance", Holiday: "Holiday", BaseShift: "Base shift", Draft: "Draft", Active: "Active", Retired: "Retired",
     RateInterpretation: "Rate interpretation", Units: "Units", SchedulingWindow: "Scheduling window",
     BufferBoundaries: "Buffer boundary ratios", PiecesPerHour: "Pieces/hour", HoursPerPiece: "Hours/piece", MinutesPerPiece: "Minutes/piece",
     BufferMinutes: "Buffer minutes", SetupMinutes: "Setup minutes", DurationMinutes: "Duration minutes", FixedOffsetMinutes: "Fixed offset minutes",
@@ -370,6 +462,7 @@ const ROUTES = {
   "release-management": ["pageRelease", "descriptionRelease"],
   "buffer-board": ["pageBuffer", "descriptionBuffer"],
   exceptions: ["pageExceptions", "descriptionExceptions"],
+  calendar: ["pageCalendar", "descriptionCalendar"],
   administration: ["pageAdmin", "descriptionAdmin"]
 };
 
@@ -385,6 +478,7 @@ let planPublicationData = null;
 let scheduleOutputGovernanceData = null;
 let scheduleOutputPackageData = null;
 let activeScheduleTab = "gantt";
+let activeGanttMode = "resource";
 let scheduledOrdersData = null;
 let scheduledOrdersPage = 1;
 let scheduledOrdersSort = { key: "PlannedStartAt", direction: "asc" };
@@ -394,11 +488,16 @@ let releaseManagementData = null;
 let selectedReleaseRunID = null;
 let releaseManagementUsesLatestOperationalState = false;
 let bufferBoardData = null;
+let dispatchPriorityData = null;
 let selectedBufferRunID = null;
 let selectedBufferOrder = null;
 let exceptionCenterData = null;
+let calendarPreviewData = null;
 let administrationData = null;
+let baseCalendarsData = [];
+let resourceCalendarAssignmentsData = [];
 let calendarOverridesData = [];
+let calendarResourcesData = [];
 
 function translate(key) {
   return I18N[currentLanguage][key] || I18N.en[key] || key;
@@ -464,8 +563,9 @@ function renderRoute(focusWorkspace = false) {
   const isReleaseManagement = route === "release-management";
   const isBufferBoard = route === "buffer-board";
   const isExceptions = route === "exceptions";
+  const isCalendar = route === "calendar";
   const isAdministration = route === "administration";
-  document.getElementById("generic-workspace").hidden = isOverview || isDataReadiness || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isExceptions || isAdministration;
+  document.getElementById("generic-workspace").hidden = isOverview || isDataReadiness || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isExceptions || isCalendar || isAdministration;
   document.getElementById("overview-view").hidden = !isOverview;
   document.getElementById("data-readiness-view").hidden = !isDataReadiness;
   document.getElementById("planning-runs-view").hidden = !isPlanningRuns;
@@ -473,6 +573,7 @@ function renderRoute(focusWorkspace = false) {
   document.getElementById("release-management-view").hidden = !isReleaseManagement;
   document.getElementById("buffer-board-view").hidden = !isBufferBoard;
   document.getElementById("exceptions-view").hidden = !isExceptions;
+  document.getElementById("calendar-view").hidden = !isCalendar;
   document.getElementById("administration-view").hidden = !isAdministration;
   if (isOverview) loadCaseAcceptance();
   if (isDataReadiness) loadDataReadiness();
@@ -481,6 +582,7 @@ function renderRoute(focusWorkspace = false) {
   if (isReleaseManagement) loadReleaseManagementRuns();
   if (isBufferBoard) loadBufferBoardRuns();
   if (isExceptions) loadExceptionCenter();
+  if (isCalendar) loadCalendarWorkspace();
   if (isAdministration) loadAdministration();
   closeMobileNavigation();
   if (focusWorkspace) {
@@ -637,16 +739,43 @@ function renderCaseAcceptance() {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "button secondary";
-    open.textContent = translate("openScheduleResult");
-    open.disabled = actual.PlanningRunStatus !== "Completed";
+    const openable = caseItem.ScheduleResultOpenable === true;
+    open.textContent = openable ? translate("openScheduleResult") : translate("scheduleNotCompleted");
+    open.disabled = !openable;
+    if (open.disabled) open.title = translate(caseItem.ScheduleResultUnavailableReason) || translate("executeCaseFirst");
     open.addEventListener("click", () => {
       selectedScheduleRunID = caseItem.PlanningRunID;
       window.location.hash = "schedule-results";
     });
-    actions.append(open);
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "button secondary";
+    reset.textContent = translate("resetCase");
+    reset.addEventListener("click", () => resetAcceptanceCase(caseItem.CaseID));
+    actions.append(open, reset);
     card.append(heading, purpose, meta, actions);
     container.append(card);
   });
+}
+
+async function resetAcceptanceCase(caseId) {
+  const response = await fetch(`/planner/workbench/test-data/acceptance/${encodeURIComponent(caseId)}/reset`, { method: "POST" });
+  if (!response.ok) {
+    showNotification(translate("caseResetFailed"), "error");
+    return;
+  }
+  showNotification(translate("caseResetCompleted"), "success");
+  await loadCaseAcceptance();
+}
+
+async function resetAllAcceptanceCases() {
+  const response = await fetch("/planner/workbench/test-data/acceptance/reset", { method: "POST" });
+  if (!response.ok) {
+    showNotification(translate("caseResetFailed"), "error");
+    return;
+  }
+  showNotification(translate("caseResetCompleted"), "success");
+  await loadCaseAcceptance();
 }
 
 function readinessStatusCopy(status) {
@@ -807,7 +936,7 @@ function statusClass(status) {
 
 function actionLabel(action) {
   return translate({
-    Enqueue: "enqueue", Execute: "execute", Cancel: "cancel", Recover: "recover", OpenResults: "openResults"
+    Enqueue: "enqueue", Execute: "execute", ProcessQueue: "processQueue", Cancel: "cancel", Recover: "recover", OpenResults: "openResults"
   }[action] || "view");
 }
 
@@ -1113,6 +1242,10 @@ async function performRunAction(run, action) {
     if (!(await confirmAction({ message: translate("confirmExecute"), context: `${translate("runId")}: ${run.RunID}` }))) return;
     endpoint = `/planner/workbench/planning-runs/${encodeURIComponent(run.RunID)}/execute`;
     payload = { ExecutedBy: "planner", StartedAt: now, TimeLimitSeconds: run.TimeLimitSeconds || 300 };
+  } else if (action === "ProcessQueue") {
+    if (!(await confirmAction({ message: translate("confirmProcessQueue"), context: `${translate("runId")}: ${run.RunID}` }))) return;
+    endpoint = `/planner/workbench/planning-runs/${encodeURIComponent(run.RunID)}/process-queued`;
+    payload = { WorkerID: "interactive-worker", ProcessedAt: now, TimeLimitSeconds: run.TimeLimitSeconds || 300 };
   } else if (action === "Cancel") {
     const reason = window.prompt(translate("cancelReasonPrompt"), "");
     if (reason === null) return;
@@ -1134,7 +1267,7 @@ async function performRunAction(run, action) {
     showNotification(response.status === 409 ? translate("dataUpdated") : translate("notifyError"), "error");
     return;
   }
-  showNotification(translate("notifySuccess"), "success");
+  showNotification(translate(action === "ProcessQueue" ? "queueProcessed" : "notifySuccess"), "success");
   await loadPlanningRuns();
 }
 
@@ -1265,6 +1398,16 @@ function setScheduleTab(tabName) {
   document.querySelectorAll("[data-schedule-panel]").forEach((panel) => { panel.hidden = panel.dataset.schedulePanel !== tabName; });
 }
 
+function setGanttMode(modeName) {
+  activeGanttMode = modeName === "order" ? "order" : "resource";
+  document.querySelectorAll("[data-gantt-mode]").forEach((button) => {
+    const active = button.dataset.ganttMode === activeGanttMode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  renderGanttBoard();
+}
+
 function ganttBarTypeLabel(bar) {
   if (bar.BarType === "Processing") return translate("processing");
   if (bar.BarType === "Maintenance") return translate("maintenance");
@@ -1289,7 +1432,7 @@ function renderGanttBoard() {
   axis.className = "gantt-axis";
   const axisLabel = document.createElement("div");
   axisLabel.className = "gantt-axis-label";
-  axisLabel.textContent = translate("resource");
+  axisLabel.textContent = activeGanttMode === "order" ? translate("workOrder") : translate("resource");
   const axisTrack = document.createElement("div");
   axisTrack.className = "gantt-axis-track";
   for (let index = 0; index <= 4; index += 1) {
@@ -1301,10 +1444,14 @@ function renderGanttBoard() {
   }
   axis.append(axisLabel, axisTrack);
   board.append(axis);
+  const sourceRows = activeGanttMode === "order"
+    ? ganttRowsByOrder(scheduleResultData.Gantt.Rows)
+    : scheduleResultData.Gantt.Rows;
   let visibleRows = 0;
-  scheduleResultData.Gantt.Rows.forEach((rowData) => {
-    if (resourceFilter && rowData.ResourceID !== resourceFilter) return;
+  sourceRows.forEach((rowData) => {
+    if (resourceFilter && activeGanttMode !== "order" && rowData.ResourceID !== resourceFilter) return;
     const bars = rowData.Bars.filter((bar) => {
+      if (resourceFilter && activeGanttMode === "order" && bar.ResourceID !== resourceFilter) return false;
       if (orderFilter && bar.OrderID !== orderFilter) return false;
       if (typeFilter && bar.BarType !== typeFilter) return false;
       if (zoneFilter && bar.BufferZone !== zoneFilter) return false;
@@ -1316,7 +1463,9 @@ function renderGanttBoard() {
     row.className = `gantt-row${rowData.IsConstraint ? " is-constraint" : ""}`;
     const label = document.createElement("div");
     label.className = "gantt-resource-label";
-    label.textContent = `${rowData.ResourceName}${rowData.IsConstraint ? ` · ${translate("constraint")}` : ""}`;
+    label.textContent = activeGanttMode === "order"
+      ? rowData.OrderID
+      : `${rowData.ResourceName}${rowData.IsConstraint ? ` · ${translate("constraint")}` : ""}`;
     const track = document.createElement("div");
     track.className = "gantt-track";
     bars.forEach((bar) => {
@@ -1331,7 +1480,7 @@ function renderGanttBoard() {
       element.textContent = bar.BarType === "Processing"
         ? `${bar.OrderID} · ${bar.OperationID}`
         : (bar.BarType === "TimeBuffer" ? bar.OrderID : ganttBarTypeLabel(bar));
-      element.title = `${ganttBarTypeLabel(bar)}\n${translate("workOrder")}: ${bar.OrderID || "-"}\n${translate("resource")}: ${rowData.ResourceName}\n${translate("startedAt")}: ${formatDate(bar.Start)}\n${translate("plannedCompletion")}: ${formatDate(bar.End)}`;
+      element.title = `${ganttBarTypeLabel(bar)}\n${translate("workOrder")}: ${bar.OrderID || "-"}\n${translate("resource")}: ${bar.ResourceName || rowData.ResourceName}\n${translate("startedAt")}: ${formatDate(bar.Start)}\n${translate("plannedCompletion")}: ${formatDate(bar.End)}`;
       track.append(element);
     });
     row.append(label, track);
@@ -1343,6 +1492,38 @@ function renderGanttBoard() {
     empty.textContent = translate("noGanttRows");
     board.append(empty);
   }
+}
+
+function ganttRowsByOrder(resourceRows) {
+  const byOrder = new Map();
+  resourceRows.forEach((resourceRow) => {
+    (resourceRow.Bars || []).forEach((bar) => {
+      if (!bar.OrderID || bar.BarType !== "Processing") return;
+      const existing = byOrder.get(bar.OrderID) || {
+        OrderID: bar.OrderID,
+        ResourceID: "",
+        ResourceName: bar.OrderID,
+        IsConstraint: false,
+        Bars: []
+      };
+      existing.Bars.push({
+        ...bar,
+        ResourceID: resourceRow.ResourceID,
+        ResourceName: resourceRow.ResourceName
+      });
+      byOrder.set(bar.OrderID, existing);
+    });
+  });
+  return [...byOrder.values()]
+    .map((row) => ({
+      ...row,
+      Bars: row.Bars.sort((left, right) => new Date(left.Start) - new Date(right.Start))
+    }))
+    .sort((left, right) => {
+      const leftStart = left.Bars[0]?.Start || "";
+      const rightStart = right.Bars[0]?.Start || "";
+      return new Date(leftStart) - new Date(rightStart);
+    });
 }
 
 function filteredSystemLoadRows() {
@@ -1888,6 +2069,50 @@ async function executeScheduledOrderCommand(command) {
   }
 }
 
+async function createReplanRunFromCurrentSchedule() {
+  if (!selectedScheduleRunID || !scheduleResultData?.Context) return;
+  if (!(await confirmAction({ message: translate("confirmReplan"), context: `${translate("planningRun")}: ${selectedScheduleRunID}` }))) return;
+  const context = scheduleResultData.Context;
+  const now = new Date();
+  const runId = `RPL-RUN-${now.toISOString().replace(/\D/g, "").slice(0, 14)}`;
+  const payload = {
+    RunID: runId,
+    ProblemID: context.ProblemID,
+    MasterDataVersionID: context.MasterDataVersionID,
+    OperationalStateSnapshotID: context.OperationalStateSnapshotID,
+    SourceRunID: selectedScheduleRunID,
+    ReleasePolicyVersionID: context.ReleasePolicyVersionID || null,
+    ScheduleStartAt: now.toISOString(),
+    TimeBufferMinutes: 0,
+    FreezeWindowMinutes: 0,
+    ObjectiveStrategyID: "v1_delivery_flow_bottleneck",
+    SolverBackendID: "ortools",
+    TimeLimitSeconds: 300,
+    MaxAttempts: 3,
+    RetryDelaySeconds: 60,
+    RequestedBy: "planner",
+    RequestedAt: now.toISOString()
+  };
+  const createResponse = await fetch("/planner/workbench/planning-runs", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  });
+  if (!createResponse.ok) {
+    showNotification(translate("notifyError"), "error");
+    return;
+  }
+  const enqueueResponse = await fetch(`/planner/workbench/planning-runs/${encodeURIComponent(runId)}/enqueue`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ EnqueuedBy: "planner", EnqueuedAt: new Date().toISOString(), MaxAttempts: 3, RetryDelaySeconds: 60 })
+  });
+  if (!enqueueResponse.ok) {
+    showNotification(translate("notifyError"), "error");
+    return;
+  }
+  showNotification(translate("replanCreatedQueued"), "success");
+  setText("route-status", translate("replanCreatedQueued"));
+  window.location.hash = "planning-runs";
+}
+
 async function openScheduledOrderDetail(orderId) {
   const response = await fetch(`/planner/workbench/schedule-results/runs/${encodeURIComponent(selectedScheduleRunID)}/work-orders/${encodeURIComponent(orderId)}/workbench`);
   if (!response.ok) return;
@@ -2008,9 +2233,26 @@ async function loadReleaseManagement() {
   }
 }
 
-function reevaluateReleaseManagementWithLatestState() {
+async function reevaluateReleaseManagementWithLatestState() {
+  const runId = document.getElementById("release-run-select").value;
+  const evaluatedValue = document.getElementById("release-evaluated-at").value;
+  if (!runId || !evaluatedValue) return;
+  try {
+    const response = await fetch(`/planner/workbench/release-management/runs/${encodeURIComponent(runId)}/mock-operational-state-refresh`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        EvaluatedAt: new Date(evaluatedValue).toISOString(),
+        SourceSnapshotID: releaseManagementData?.OperationalStateSnapshotID,
+        ActorID: "planner"
+      })
+    });
+    if (!response.ok && response.status !== 409) throw new Error(String(response.status));
+  } catch (_error) {
+    showNotification(translate("notifyError"), "error");
+  }
   releaseManagementUsesLatestOperationalState = true;
-  return loadReleaseManagement();
+  await loadReleaseManagement();
+  showNotification(translate("releaseSnapshotRefreshed"), "success");
 }
 
 function gateStatusLabel(value) {
@@ -2021,7 +2263,10 @@ function renderReleaseManagement() {
   document.querySelectorAll("[data-release-summary]").forEach((element) => { element.textContent = releaseManagementData.Summary[element.dataset.releaseSummary] ?? 0; });
   const snapshot = document.getElementById("release-snapshot-status");
   const policyVersion = releaseManagementData.ReleasePolicyVersionID || releaseManagementData.PolicyEvidence?.VersionID || "-";
-  snapshot.textContent = `${translate("snapshotStatus")}: ${translate({ Fresh: "freshSnapshot", Stale: "staleSnapshot", Future: "futureSnapshot" }[releaseManagementData.OperationalStateStatus])} · ${releaseManagementData.OperationalStateSnapshotID} · ${formatDate(releaseManagementData.OperationalStateCapturedAt)} · ${translate("releasePolicyVersion")}: ${policyVersion}`;
+  const snapshotMessage = `${translate("snapshotStatus")}: ${translate({ Fresh: "freshSnapshot", Stale: "staleSnapshot", Future: "futureSnapshot" }[releaseManagementData.OperationalStateStatus])} · ${releaseManagementData.OperationalStateSnapshotID} · ${formatDate(releaseManagementData.OperationalStateCapturedAt)} · ${translate("releasePolicyVersion")}: ${policyVersion}`;
+  snapshot.textContent = releaseManagementData.OperationalStateStatus === "Stale"
+    ? `${snapshotMessage} · ${translate("snapshotRefreshAdvice")}`
+    : snapshotMessage;
   const body = document.getElementById("release-candidate-table-body");
   body.replaceChildren();
   releaseManagementData.Candidates.forEach((candidate) => {
@@ -2106,7 +2351,11 @@ function openReleaseReasons(candidate) {
       code.className = "issue-meta";
       code.textContent = reason.Code;
       item.append(title, code);
-      const details = detailSection("reasonDetails", detailRowsFromObject(reason.Details || {}));
+      const reasonDetails = { ...(reason.Details || {}) };
+      if (reasonDetails.RecommendedAction) {
+        reasonDetails.RecommendedAction = translate(`action_${reasonDetails.RecommendedAction}`);
+      }
+      const details = detailSection("reasonDetails", detailRowsFromObject(reasonDetails));
       item.append(details);
       content.append(item);
     });
@@ -2185,6 +2434,7 @@ async function loadBufferBoard() {
     if (!response.ok) throw new Error(String(response.status));
     bufferBoardData = (await response.json()).Data;
     renderBufferBoard();
+    await loadMesDispatchPriority(runId, evaluatedValue);
     document.getElementById("buffer-board-content").hidden = false;
     document.getElementById("buffer-board-error").hidden = true;
   } catch (_error) {
@@ -2222,6 +2472,118 @@ function renderBufferBoard() {
     matrix.append(stage);
     row.Cells.forEach((cell) => matrix.append(bufferMatrixCell(cell)));
   });
+}
+
+async function loadMesDispatchPriority(runId, evaluatedValue) {
+  try {
+    const query = new URLSearchParams({ evaluated_at: new Date(evaluatedValue).toISOString() });
+    const response = await fetch(`/planner/workbench/dispatch-priority/runs/${encodeURIComponent(runId)}/workbench?${query}`);
+    if (!response.ok) throw new Error(String(response.status));
+    dispatchPriorityData = (await response.json()).Data;
+  } catch (_error) {
+    dispatchPriorityData = null;
+  }
+  renderMesDispatchPriority();
+}
+
+function renderMesDispatchPriority() {
+  const summary = document.getElementById("mes-dispatch-summary");
+  const resources = document.getElementById("mes-dispatch-resources");
+  const chip = document.getElementById("mes-dispatch-policy-chip");
+  summary.replaceChildren();
+  resources.replaceChildren();
+  if (!dispatchPriorityData) {
+    chip.className = "status-chip neutral";
+    chip.textContent = translate("mesDispatchUnavailable");
+    resources.append(emptyDispatchMessage("mesDispatchUnavailable"));
+    return;
+  }
+  chip.className = "status-chip is-valid";
+  chip.textContent = `${translate("snapshotLabel")}: ${displayValue(dispatchPriorityData.OperationalStateSnapshotID)}`;
+  [
+    ["resource", dispatchPriorityData.Summary.ResourceCount],
+    ["dispatchableOperations", dispatchPriorityData.Summary.DispatchableOperationCount],
+    ["candidateWarnings", dispatchPriorityData.Summary.CandidateWarningCount],
+    ["queueJumpSuggestions", dispatchPriorityData.Summary.QueueJumpSuggestionCount],
+    ["plannerConfirmations", dispatchPriorityData.Summary.PlannerConfirmationCount],
+    ["replanSuggestions", dispatchPriorityData.Summary.ReplanSuggestionCount]
+  ].forEach(([labelKey, value]) => summary.append(detailMetric(labelKey, value)));
+  (dispatchPriorityData.Resources || []).forEach((resource) => {
+    const section = document.createElement("section");
+    section.className = "dispatch-resource-card";
+    const heading = document.createElement("div");
+    heading.className = "dispatch-resource-heading";
+    const title = document.createElement("strong");
+    title.textContent = `${resource.ResourceName || resource.ResourceID} · ${resource.WorkCenterID}`;
+    const counts = document.createElement("span");
+    counts.className = "status-chip neutral";
+    counts.textContent = `${translate("dispatchableOperations")} ${resource.QueueCount} · ${translate("candidateWarnings")} ${resource.CandidateWarningCount}`;
+    heading.append(title, counts);
+    section.append(heading);
+    section.append(dispatchQueueGroup("dispatchableOperations", resource.Queue || [], false));
+    section.append(dispatchQueueGroup("candidateWarnings", resource.CandidateWarnings || [], true));
+    resources.append(section);
+  });
+}
+
+function dispatchQueueGroup(titleKey, rows, isWarning) {
+  const group = document.createElement("div");
+  group.className = "dispatch-queue-group";
+  const title = document.createElement("h3");
+  title.textContent = translate(titleKey);
+  group.append(title);
+  if (!rows.length) {
+    group.append(emptyDispatchMessage(isWarning ? "noDispatchWarnings" : "noDispatchRows"));
+    return group;
+  }
+  rows.forEach((row) => group.append(dispatchOperationCard(row, isWarning)));
+  return group;
+}
+
+function dispatchOperationCard(row, isWarning) {
+  const card = document.createElement("article");
+  card.className = `dispatch-operation-card zone-${row.BufferZone || "Early"}${isWarning ? " is-warning" : ""}`;
+  const title = document.createElement("div");
+  title.className = "dispatch-operation-title";
+  const order = document.createElement("strong");
+  order.textContent = `${row.OrderID} · ${row.OperationID}`;
+  const status = document.createElement("span");
+  status.className = `status-chip ${row.DispatchEligibility === "Dispatchable" ? "is-valid" : "neutral"}`;
+  status.textContent = translate(row.DispatchEligibility) || row.DispatchEligibility;
+  title.append(order, status);
+  const details = document.createElement("div");
+  details.className = "dispatch-operation-details";
+  [
+    ["dispatchRank", row.DispatchRank || "-"],
+    ["planSequence", row.PlanSequence],
+    ["bufferZone", translate(row.BufferZone)],
+    ["penetration", `${Number(row.BufferPenetrationPercent || 0).toFixed(1)}%`],
+    ["plannedStart", formatDate(row.ScheduledStart)],
+    ["conflictResult", row.ConflictResultLabelZh || translate(row.ConflictResult)],
+    ["releaseGate", translate(row.LatestGateStatus) || row.LatestGateStatus],
+    ["plannerConfirmation", row.RequiresPlannerConfirmation ? translate("required") : translate("notProvided")]
+  ].forEach(([labelKey, value]) => details.append(detailMetric(labelKey, value)));
+  card.append(title, details);
+  if ((row.PlannerConfirmationReasons || []).length) {
+    const note = document.createElement("p");
+    note.className = "inline-warning";
+    note.textContent = row.PlannerConfirmationReasons.map((reason) => translate(reason) || reason).join(" / ");
+    card.append(note);
+  }
+  if ((row.LatestGateBlockingReasons || []).length) {
+    const note = document.createElement("p");
+    note.className = "inline-warning";
+    note.textContent = row.LatestGateBlockingReasons.map((reason) => translate(`reason_${reason.Code}`) || reason.Code).join(" / ");
+    card.append(note);
+  }
+  return card;
+}
+
+function emptyDispatchMessage(key) {
+  const empty = document.createElement("div");
+  empty.className = "table-empty";
+  empty.textContent = translate(key);
+  return empty;
 }
 
 function detailMetric(labelKey, value) {
@@ -2429,20 +2791,266 @@ async function openExceptionDetail(exceptionId) {
   openSideDrawer("exception-detail");
 }
 
+async function loadCalendarPreview() {
+  const resourceId = document.getElementById("calendar-preview-resource").value.trim();
+  const startDate = document.getElementById("calendar-preview-start").value;
+  const endDate = document.getElementById("calendar-preview-end").value;
+  try {
+    const query = new URLSearchParams({ StartDate: startDate, EndDate: endDate, Timezone: "UTC" });
+    if (resourceId) query.set("ResourceID", resourceId);
+    const response = await fetch(`/planner/workbench/calendar/preview?${query}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    calendarPreviewData = (await response.json()).Data;
+    renderCalendarPreview();
+    document.getElementById("calendar-preview-error").hidden = true;
+    document.getElementById("calendar-preview-content").hidden = false;
+  } catch (_error) {
+    calendarPreviewData = null;
+    document.getElementById("calendar-preview-error").hidden = false;
+    document.getElementById("calendar-preview-content").hidden = true;
+    setText("calendar-preview-chip", translate("unavailable"));
+  }
+}
+
+async function loadCalendarWorkspace() {
+  await loadCalendarConfiguration();
+  await loadCalendarPreview();
+}
+
+async function loadCalendarConfiguration() {
+  const [resourcesResponse, baseCalendarsResponse, calendarAssignmentsResponse, calendarOverridesResponse] = await Promise.all([
+    fetch("/planner/workbench/calendar/resources", { headers: { Accept: "application/json" } }),
+    fetch("/planner/workbench/admin/base-calendars", { headers: { Accept: "application/json" } }),
+    fetch("/planner/workbench/admin/resource-calendar-assignments", { headers: { Accept: "application/json" } }),
+    fetch("/planner/workbench/admin/calendar-overrides", { headers: { Accept: "application/json" } })
+  ]);
+  if (!resourcesResponse.ok) throw new Error(`HTTP ${resourcesResponse.status}`);
+  if (!baseCalendarsResponse.ok) throw new Error(`HTTP ${baseCalendarsResponse.status}`);
+  if (!calendarAssignmentsResponse.ok) throw new Error(`HTTP ${calendarAssignmentsResponse.status}`);
+  if (!calendarOverridesResponse.ok) throw new Error(`HTTP ${calendarOverridesResponse.status}`);
+  const resourcesPayload = await resourcesResponse.json();
+  const baseCalendarsPayload = await baseCalendarsResponse.json();
+  const calendarAssignmentsPayload = await calendarAssignmentsResponse.json();
+  const calendarOverridesPayload = await calendarOverridesResponse.json();
+  calendarResourcesData = resourcesPayload.Data?.Resources || [];
+  baseCalendarsData = baseCalendarsPayload.Data?.Calendars || [];
+  resourceCalendarAssignmentsData = calendarAssignmentsPayload.Data?.Assignments || [];
+  calendarOverridesData = calendarOverridesPayload.Data?.Overrides || [];
+  renderCalendarConfiguration();
+}
+
+function renderCalendarConfiguration() {
+  updateCalendarGeneratedIds();
+  renderCalendarSelects();
+  renderCalendarMiniList("calendar-page-base-calendars", baseCalendarsData, (item) => [
+    item.CalendarID,
+    item.DisplayName || translate("notProvided"),
+    `${translate("status")}: ${translate(item.Status) || item.Status}`,
+    `${translate("workingWeekdays")}: ${(item.WorkingWeekdays || []).join(", ")}`,
+    `${translate("shiftName")}: ${(item.Shifts || []).map((shift) => `${shift.Name} ${shift.Start}-${shift.End}`).join(" / ") || "-"}`
+  ]);
+  renderCalendarMiniList("calendar-page-assignments", resourceCalendarAssignmentsData, (item) => [
+    item.AssignmentID,
+    `${translate("resource")}: ${item.ResourceID}`,
+    `${translate("calendarId")}: ${item.CalendarID}`,
+    `${translate("status")}: ${translate(item.Status) || item.Status}`
+  ]);
+  renderCalendarMiniList("calendar-page-overrides", calendarOverridesData, (item) => [
+    item.OverrideID,
+    `${translate("overrideType")}: ${translate(item.OverrideType) || item.OverrideType}`,
+    `${translate("resource")}: ${item.ResourceID || translate("notProvided")}`,
+    `${formatDate(item.EffectiveStartAt)} - ${formatDate(item.EffectiveEndAt)}`
+  ]);
+}
+
+function updateCalendarGeneratedIds(force = false) {
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
+  const idFields = [
+    ["calendar-page-base-calendar-id", `CAL-${stamp}`],
+    ["calendar-page-assignment-id", `CAL-ASG-${stamp}`],
+    ["calendar-page-override-id", `CAL-OVR-${stamp}`]
+  ];
+  idFields.forEach(([id, value]) => {
+    const input = document.getElementById(id);
+    if (input && (force || !input.value)) input.value = value;
+  });
+}
+
+function renderCalendarSelects() {
+  const resources = calendarResourcesData.map((item) => ({
+    ResourceID: item.ResourceID,
+    ResourceName: item.ResourceName || item.ResourceID
+  }));
+  const calendars = baseCalendarsData.map((item) => ({
+    CalendarID: item.CalendarID,
+    DisplayName: item.DisplayName || item.CalendarID
+  }));
+  replaceSelectOptions(document.getElementById("calendar-preview-resource"), resources, { valueKey: "ResourceID", labelKey: "ResourceName" });
+  replaceSelectOptions(document.getElementById("calendar-page-assignment-resource-id"), resources, { valueKey: "ResourceID", labelKey: "ResourceName" });
+  replaceSelectOptions(document.getElementById("calendar-page-override-resource-id"), resources, { allKey: "notSelected", valueKey: "ResourceID", labelKey: "ResourceName" });
+  replaceSelectOptions(document.getElementById("calendar-page-assignment-calendar-id"), calendars, { valueKey: "CalendarID", labelKey: "DisplayName" });
+  replaceSelectOptions(document.getElementById("calendar-page-override-calendar-id"), calendars, { valueKey: "CalendarID", labelKey: "DisplayName" });
+}
+
+function renderCalendarMiniList(containerId, rows, rowTextFactory) {
+  const container = document.getElementById(containerId);
+  container.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "inline-note";
+    empty.textContent = translate("noCalendarConfigRows");
+    container.append(empty);
+    return;
+  }
+  rows.slice(0, 4).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "calendar-mini-row";
+    rowTextFactory(item).forEach((text, index) => {
+      const value = document.createElement(index === 0 ? "strong" : "span");
+      value.textContent = displayValue(text);
+      row.append(value);
+    });
+    container.append(row);
+  });
+}
+
+function renderCalendarPreview() {
+  if (!calendarPreviewData) return;
+  setText("calendar-preview-chip", `${calendarPreviewData.MasterDataVersionID || "-"} · ${calendarPreviewData.Timezone || "UTC"}`);
+  renderCalendarRequiredElements();
+  renderCalendarSummary();
+  renderCalendarFinalWindows();
+  renderCalendarSourceElements();
+}
+
+function renderCalendarRequiredElements() {
+  const container = document.getElementById("calendar-required-elements");
+  container.replaceChildren();
+  (calendarPreviewData.RequiredElements || []).forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "calendar-element-card";
+    const title = document.createElement("h3");
+    title.textContent = item.Element || item.ElementID;
+    const reason = document.createElement("p");
+    reason.innerHTML = `<strong>${translate("cpSatNeedReason")}:</strong> ${displayValue(item.CpSatNeedReason)}`;
+    const impact = document.createElement("p");
+    impact.innerHTML = `<strong>${translate("missingImpactDomain")}:</strong> ${displayValue(item.MissingImpactDomain)}`;
+    card.append(title, reason, impact);
+    container.append(card);
+  });
+}
+
+function renderCalendarSummary() {
+  const container = document.getElementById("calendar-preview-summary");
+  container.replaceChildren();
+  const summary = calendarPreviewData.Summary || {};
+  [
+    ["resources", summary.ResourceCount],
+    ["baseCalendars", summary.ActiveBaseCalendarCount],
+    ["calendarAssignment", summary.ActiveAssignmentCount],
+    ["calendarOverrides", summary.ActiveOverrideCount],
+    ["finalWindowCount", summary.FinalWindowCount],
+    ["missingDailyCapacityDates", summary.MissingDailyCapacityDateCount]
+  ].forEach(([labelKey, value]) => {
+    const item = document.createElement("div");
+    item.innerHTML = `<span>${translate(labelKey)}</span><strong>${displayValue(value)}</strong>`;
+    container.append(item);
+  });
+}
+
+function renderCalendarFinalWindows() {
+  const container = document.getElementById("calendar-final-windows");
+  container.replaceChildren();
+  const rows = (calendarPreviewData.Resources || []).flatMap((resource) =>
+    (resource.FinalCapacityWindows || []).map((window) => ({ ...window, ResourceID: resource.ResourceID }))
+  );
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = translate("noCalendarWindows");
+    container.append(empty);
+    return;
+  }
+  rows.forEach((window) => {
+    const card = document.createElement("article");
+    card.className = "calendar-window-card";
+    card.append(detailSection("finalCapacityWindows", [
+      ["resource", window.ResourceID],
+      ["start", formatDate(window.Start)],
+      ["end", formatDate(window.End)],
+      ["availableCapacity", `${window.CapacityMinutes} ${translate("minutes")}`]
+    ]));
+    container.append(card);
+  });
+}
+
+function renderCalendarSourceElements() {
+  const container = document.getElementById("calendar-source-elements");
+  container.replaceChildren();
+  const resources = calendarPreviewData.Resources || [];
+  if (!resources.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = translate("noCalendarElements");
+    container.append(empty);
+    return;
+  }
+  resources.forEach((resource) => {
+    const card = document.createElement("article");
+    card.className = "calendar-source-card";
+    const heading = document.createElement("div");
+    heading.className = "calendar-override-heading";
+    heading.innerHTML = `<strong>${resource.ResourceID}</strong><span class="status-chip neutral">${displayValue(resource.CalendarID)}</span>`;
+    const missingNote = document.createElement("p");
+    missingNote.className = "inline-note";
+    missingNote.textContent = resource.MissingDailyCapacityDates?.length
+      ? `${translate("missingDailyCapacityDates")}: ${resource.MissingDailyCapacityDates.join(", ")}`
+      : `${translate("missingDailyCapacityDates")}: 0`;
+    card.append(heading, missingNote);
+    (resource.Elements || []).forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "calendar-source-row";
+      row.append(detailSection("appliedCalendarElements", [
+        ["elementType", translate(String(item.ElementType || ""))],
+        ["sourceId", item.SourceID || item.CalendarID || "-"],
+        ["status", translate(String(item.Status || (item.Applied ? "Applied" : "NotApplied")))],
+        ["start", item.Start ? formatDate(item.Start) : displayValue(item.Date || item.ShiftName)],
+        ["end", item.End ? formatDate(item.End) : displayValue(item.CapacityMinutes || item.CapacityDeltaMinutes)]
+      ]));
+      card.append(row);
+    });
+    if (!(resource.Elements || []).length) {
+      const empty = document.createElement("p");
+      empty.className = "inline-note";
+      empty.textContent = translate("noCalendarElements");
+      card.append(empty);
+    }
+    container.append(card);
+  });
+}
+
 async function loadAdministration() {
   try {
-    const [administrationResponse, cpSatResponse, calendarOverridesResponse] = await Promise.all([
+    const [administrationResponse, cpSatResponse, baseCalendarsResponse, calendarAssignmentsResponse, calendarOverridesResponse] = await Promise.all([
       fetch("/planner/workbench/administration/workbench", { headers: { Accept: "application/json" } }),
       fetch("/planner/workbench/admin/cp-sat/assumptions", { headers: { Accept: "application/json" } }),
+      fetch("/planner/workbench/admin/base-calendars", { headers: { Accept: "application/json" } }),
+      fetch("/planner/workbench/admin/resource-calendar-assignments", { headers: { Accept: "application/json" } }),
       fetch("/planner/workbench/admin/calendar-overrides", { headers: { Accept: "application/json" } })
     ]);
     if (!administrationResponse.ok) throw new Error(`HTTP ${administrationResponse.status}`);
     if (!cpSatResponse.ok) throw new Error(`HTTP ${cpSatResponse.status}`);
+    if (!baseCalendarsResponse.ok) throw new Error(`HTTP ${baseCalendarsResponse.status}`);
+    if (!calendarAssignmentsResponse.ok) throw new Error(`HTTP ${calendarAssignmentsResponse.status}`);
     if (!calendarOverridesResponse.ok) throw new Error(`HTTP ${calendarOverridesResponse.status}`);
     const administrationPayload = await administrationResponse.json();
     const cpSatPayload = await cpSatResponse.json();
+    const baseCalendarsPayload = await baseCalendarsResponse.json();
+    const calendarAssignmentsPayload = await calendarAssignmentsResponse.json();
     const calendarOverridesPayload = await calendarOverridesResponse.json();
     administrationData = { ...administrationPayload.Data, CpSatAssumptions: cpSatPayload.Data };
+    baseCalendarsData = baseCalendarsPayload.Data?.Calendars || [];
+    resourceCalendarAssignmentsData = calendarAssignmentsPayload.Data?.Assignments || [];
     calendarOverridesData = calendarOverridesPayload.Data?.Overrides || [];
     renderAdministration();
     document.getElementById("administration-error").hidden = true;
@@ -2460,8 +3068,6 @@ function renderAdministration() {
   renderAdminCapabilities(administrationData);
   renderAdminCpSatAssumptions(administrationData.CpSatAssumptions);
   renderAdminPolicyGroups(administrationData.PolicyGroups || []);
-  renderAdminCalendarLayers(administrationData.CalendarLayers || []);
-  renderCalendarOverrides();
 }
 
 function renderAdminObjects(objects) {
@@ -2587,6 +3193,83 @@ function renderAdminCalendarLayers(layers) {
     item.append(order, label);
     container.append(item);
   });
+  const config = administrationData?.CalendarConfiguration || {};
+  const ruleRows = [
+    ["calendarScope", translate(config.CalendarScope || "ResourceOnly")],
+    ["conflictPriority", (config.ConflictPriority || []).map((item) => translate(item) || item).join(" > ")],
+    ["ApprovalFlowStatus", translate(config.ApprovalFlowStatus || "StatusOnly")]
+  ];
+  ruleRows.forEach(([labelKey, value]) => {
+    const item = document.createElement("div");
+    item.className = "calendar-layer";
+    const label = document.createElement("strong");
+    label.textContent = translate(labelKey);
+    const detail = document.createElement("span");
+    detail.textContent = value || "-";
+    item.append(label, detail);
+    container.append(item);
+  });
+}
+
+function renderBaseCalendars() {
+  const container = document.getElementById("admin-base-calendars");
+  container.replaceChildren();
+  if (!baseCalendarsData.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = translate("noBaseCalendars");
+    container.append(empty);
+    return;
+  }
+  baseCalendarsData.forEach((item) => {
+    const card = document.createElement("section");
+    card.className = "calendar-override-card";
+    const heading = document.createElement("div");
+    heading.className = "calendar-override-heading";
+    const title = document.createElement("strong");
+    title.textContent = `${item.CalendarID}${item.DisplayName ? ` · ${item.DisplayName}` : ""}`;
+    const status = document.createElement("span");
+    status.className = `status-chip ${item.Status === "Active" ? "is-valid" : "neutral"}`;
+    status.textContent = `${translate(item.Status) || item.Status} · ${translate(item.SolverDriverStatus) || item.SolverDriverStatus}`;
+    heading.append(title, status);
+    card.append(heading, detailSection("baseCalendars", [
+      ["workingWeekdays", (item.WorkingWeekdays || []).join(", ")],
+      ["shiftName", (item.Shifts || []).map((shift) => `${shift.Name} ${shift.Start}-${shift.End}`).join(" / ") || "-"],
+      ["maintenance", (item.MaintenanceWindows || []).length],
+      ["createdBy", item.CreatedBy || translate("notProvided")]
+    ]));
+    container.append(card);
+  });
+}
+
+function renderResourceCalendarAssignments() {
+  const container = document.getElementById("admin-resource-calendar-assignments");
+  container.replaceChildren();
+  if (!resourceCalendarAssignmentsData.length) {
+    const empty = document.createElement("div");
+    empty.className = "table-empty";
+    empty.textContent = translate("noCalendarAssignments");
+    container.append(empty);
+    return;
+  }
+  resourceCalendarAssignmentsData.forEach((item) => {
+    const card = document.createElement("section");
+    card.className = "calendar-override-card";
+    const heading = document.createElement("div");
+    heading.className = "calendar-override-heading";
+    const title = document.createElement("strong");
+    title.textContent = item.AssignmentID;
+    const status = document.createElement("span");
+    status.className = `status-chip ${item.Status === "Active" ? "is-valid" : "neutral"}`;
+    status.textContent = `${translate(item.Status) || item.Status} · ${translate(item.SolverDriverStatus) || item.SolverDriverStatus}`;
+    heading.append(title, status);
+    card.append(heading, detailSection("calendarAssignment", [
+      ["resource", item.ResourceID],
+      ["calendarId", item.CalendarID],
+      ["createdBy", item.CreatedBy || translate("notProvided")]
+    ]));
+    container.append(card);
+  });
 }
 
 function renderCalendarOverrides() {
@@ -2623,9 +3306,180 @@ function renderCalendarOverrides() {
   });
 }
 
+function weekdaysFromInput(id) {
+  return document.getElementById(id).value
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+}
+
+function weekdaysFromCalendarCheckboxes() {
+  return [...document.querySelectorAll("[data-calendar-weekday]:checked")]
+    .map((item) => Number(item.value))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
+}
+
+function shiftPayloadFromInputs(nameId, startId, endId) {
+  const name = document.getElementById(nameId).value.trim();
+  const start = document.getElementById(startId).value;
+  const end = document.getElementById(endId).value;
+  if (!start || !end) return null;
+  return { Name: name || "Shift", Start: `${start}:00`, End: `${end}:00` };
+}
+
+function localInputValueToIso(id) {
+  const value = document.getElementById(id).value;
+  return value ? new Date(value).toISOString() : null;
+}
+
+async function submitCalendarPageBaseCalendar(event) {
+  event.preventDefault();
+  const shifts = [
+    shiftPayloadFromInputs("calendar-page-shift1-name", "calendar-page-shift1-start", "calendar-page-shift1-end"),
+    shiftPayloadFromInputs("calendar-page-shift2-name", "calendar-page-shift2-start", "calendar-page-shift2-end")
+  ].filter(Boolean);
+  const maintenanceStart = localInputValueToIso("calendar-page-maintenance-start");
+  const maintenanceEnd = localInputValueToIso("calendar-page-maintenance-end");
+  const holidayDate = document.getElementById("calendar-page-holiday-date").value;
+  const payload = {
+    CalendarID: document.getElementById("calendar-page-base-calendar-id").value.trim(),
+    DisplayName: document.getElementById("calendar-page-base-calendar-name").value.trim() || null,
+    WorkingWeekdays: weekdaysFromCalendarCheckboxes(),
+    Shifts: shifts,
+    MaintenanceWindows: maintenanceStart && maintenanceEnd ? [{ Start: maintenanceStart, End: maintenanceEnd }] : [],
+    Holidays: holidayDate ? [holidayDate] : [],
+    Timezone: document.getElementById("calendar-page-base-timezone").value.trim() || "UTC",
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: document.getElementById("calendar-page-base-status").value
+  };
+  const response = await fetch("/planner/workbench/admin/base-calendars", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("baseCalendarFailed"), "error");
+    return;
+  }
+  showNotification(translate("baseCalendarCreated"), "success");
+  updateCalendarGeneratedIds(true);
+  await loadCalendarWorkspace();
+}
+
+async function submitCalendarPageAssignment(event) {
+  event.preventDefault();
+  const payload = {
+    AssignmentID: document.getElementById("calendar-page-assignment-id").value.trim(),
+    ResourceID: document.getElementById("calendar-page-assignment-resource-id").value.trim(),
+    CalendarID: document.getElementById("calendar-page-assignment-calendar-id").value.trim(),
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: document.getElementById("calendar-page-assignment-status").value
+  };
+  const response = await fetch("/planner/workbench/admin/resource-calendar-assignments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("calendarAssignmentFailed"), "error");
+    return;
+  }
+  showNotification(translate("calendarAssignmentCreated"), "success");
+  document.getElementById("calendar-preview-resource").value = payload.ResourceID;
+  updateCalendarGeneratedIds(true);
+  await loadCalendarWorkspace();
+}
+
+async function submitBaseCalendar(event) {
+  event.preventDefault();
+  const payload = {
+    CalendarID: document.getElementById("base-calendar-id").value.trim(),
+    DisplayName: document.getElementById("base-calendar-name").value.trim() || null,
+    WorkingWeekdays: weekdaysFromInput("base-calendar-weekdays"),
+    Shifts: [{
+      Name: document.getElementById("base-calendar-shift-name").value.trim() || "Day",
+      Start: `${document.getElementById("base-calendar-shift-start").value}:00`,
+      End: `${document.getElementById("base-calendar-shift-end").value}:00`
+    }],
+    MaintenanceWindows: [],
+    Holidays: [],
+    Timezone: "UTC",
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: "Active"
+  };
+  const response = await fetch("/planner/workbench/admin/base-calendars", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("baseCalendarFailed"), "error");
+    return;
+  }
+  showNotification(translate("baseCalendarCreated"), "success");
+  await loadAdministration();
+}
+
+async function submitResourceCalendarAssignment(event) {
+  event.preventDefault();
+  const payload = {
+    AssignmentID: document.getElementById("calendar-assignment-id").value.trim(),
+    ResourceID: document.getElementById("calendar-assignment-resource-id").value.trim(),
+    CalendarID: document.getElementById("calendar-assignment-calendar-id").value.trim(),
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: "Active"
+  };
+  const response = await fetch("/planner/workbench/admin/resource-calendar-assignments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("calendarAssignmentFailed"), "error");
+    return;
+  }
+  showNotification(translate("calendarAssignmentCreated"), "success");
+  await loadAdministration();
+}
+
 function localInputToIso(id) {
   const value = document.getElementById(id).value;
   return value ? new Date(value).toISOString() : null;
+}
+
+async function submitCalendarPageOverride(event) {
+  event.preventDefault();
+  const payload = {
+    OverrideID: document.getElementById("calendar-page-override-id").value.trim(),
+    CalendarID: document.getElementById("calendar-page-override-calendar-id").value.trim(),
+    ResourceID: document.getElementById("calendar-page-override-resource-id").value.trim() || null,
+    OverrideType: document.getElementById("calendar-page-override-type").value,
+    EffectiveStartAt: localInputValueToIso("calendar-page-override-start"),
+    EffectiveEndAt: localInputValueToIso("calendar-page-override-end"),
+    CapacityDeltaMinutes: Number(document.getElementById("calendar-page-override-capacity").value || 0),
+    ShiftName: null,
+    Reason: document.getElementById("calendar-page-override-reason").value.trim() || null,
+    CreatedAt: new Date().toISOString(),
+    CreatedBy: "planner",
+    Status: "Active"
+  };
+  const response = await fetch("/planner/workbench/admin/calendar-overrides", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    showNotification(translate("calendarOverrideFailed"), "error");
+    return;
+  }
+  showNotification(translate("calendarOverrideCreated"), "success");
+  if (payload.ResourceID) document.getElementById("calendar-preview-resource").value = payload.ResourceID;
+  updateCalendarGeneratedIds(true);
+  await loadCalendarWorkspace();
 }
 
 async function submitCalendarOverride(event) {
@@ -2734,6 +3588,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("navigation-toggle").addEventListener("click", toggleNavigation);
   document.getElementById("navigation-backdrop").addEventListener("click", closeMobileNavigation);
   document.getElementById("refresh-case-acceptance").addEventListener("click", loadCaseAcceptance);
+  document.getElementById("reset-all-cases").addEventListener("click", resetAllAcceptanceCases);
   document.getElementById("refresh-data-readiness").addEventListener("click", loadDataReadiness);
   document.getElementById("view-readiness-issues").addEventListener("click", openIssuesDrawer);
   document.getElementById("close-issues-drawer").addEventListener("click", closeIssuesDrawer);
@@ -2758,6 +3613,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("schedule-result-run-select").addEventListener("change", (event) => loadScheduleResult(event.target.value));
   document.getElementById("refresh-schedule-result").addEventListener("click", () => loadScheduleResult(selectedScheduleRunID));
   document.querySelectorAll("[data-schedule-tab]").forEach((button) => button.addEventListener("click", () => setScheduleTab(button.dataset.scheduleTab)));
+  document.querySelectorAll("[data-gantt-mode]").forEach((button) => button.addEventListener("click", () => setGanttMode(button.dataset.ganttMode)));
   ["gantt-resource-filter", "gantt-order-filter", "gantt-type-filter", "gantt-zone-filter", "gantt-from-date", "gantt-to-date", "gantt-zoom"].forEach((id) => document.getElementById(id).addEventListener("change", renderGanttBoard));
   document.querySelectorAll("[data-load-view]").forEach((button) => button.addEventListener("click", () => setLoadView(button.dataset.loadView)));
   ["load-type-filter", "load-location-filter", "load-owner-filter", "load-category-filter"].forEach((id) => document.getElementById(id).addEventListener("change", renderSystemLoad));
@@ -2780,7 +3636,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("unlock-scheduled-orders").addEventListener("click", () => executeScheduledOrderCommand("Unlock"));
   document.getElementById("priority-scheduled-orders").addEventListener("click", () => executeScheduledOrderCommand("SetPriority"));
   document.getElementById("evaluate-scheduled-orders-release").addEventListener("click", () => { selectedReleaseRunID = selectedScheduleRunID; window.location.hash = "release-management"; });
-  document.getElementById("replan-scheduled-orders").addEventListener("click", () => { window.location.hash = "planning-runs"; });
+  document.getElementById("replan-scheduled-orders").addEventListener("click", createReplanRunFromCurrentSchedule);
   document.getElementById("save-scheduled-order-view").addEventListener("click", saveScheduledOrderView);
   document.getElementById("scheduled-order-saved-view").addEventListener("change", (event) => applyScheduledOrderView(event.target.value));
   document.getElementById("close-scheduled-order-detail").addEventListener("click", () => closeSideDrawer("scheduled-order-detail"));
@@ -2801,8 +3657,17 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("exception-severity-filter").addEventListener("change", renderExceptionCenter);
   document.getElementById("exception-source-filter").addEventListener("change", renderExceptionCenter);
   document.getElementById("close-exception-detail").addEventListener("click", () => closeSideDrawer("exception-detail"));
+  document.getElementById("refresh-calendar-preview").addEventListener("click", loadCalendarPreview);
+  document.getElementById("calendar-preview-resource").addEventListener("change", loadCalendarPreview);
+  document.getElementById("calendar-preview-start").addEventListener("change", loadCalendarPreview);
+  document.getElementById("calendar-preview-end").addEventListener("change", loadCalendarPreview);
+  document.getElementById("calendar-base-calendar-form").addEventListener("submit", submitCalendarPageBaseCalendar);
+  document.getElementById("calendar-assignment-form").addEventListener("submit", submitCalendarPageAssignment);
+  document.getElementById("calendar-override-form").addEventListener("submit", submitCalendarPageOverride);
   document.getElementById("refresh-administration").addEventListener("click", loadAdministration);
-  document.getElementById("admin-calendar-override-form").addEventListener("submit", submitCalendarOverride);
+  document.getElementById("admin-base-calendar-form")?.addEventListener("submit", submitBaseCalendar);
+  document.getElementById("admin-resource-calendar-assignment-form")?.addEventListener("submit", submitResourceCalendarAssignment);
+  document.getElementById("admin-calendar-override-form")?.addEventListener("submit", submitCalendarOverride);
   document.getElementById("admin-routings-import").addEventListener("click", () => {
     const routingObject = (administrationData?.MasterDataObjects || []).find((item) => item.ObjectKey === "Routings");
     if (routingObject) selectAdminImportObject(routingObject);

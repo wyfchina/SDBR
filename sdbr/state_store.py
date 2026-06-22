@@ -40,6 +40,8 @@ class WorkbenchStateStore:
         default_factory=dict
     )
     dbr_release_policies: dict[str, dict[str, object]] = field(default_factory=dict)
+    base_calendars: dict[str, dict[str, object]] = field(default_factory=dict)
+    resource_calendar_assignments: dict[str, dict[str, object]] = field(default_factory=dict)
     calendar_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
     scheduling_strategy_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     integration_messages: list[dict[str, object]] = field(default_factory=list)
@@ -109,6 +111,8 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             ],
             "release_decision_packages": self.release_decision_packages,
             "dbr_release_policies": self.dbr_release_policies,
+            "base_calendars": self.base_calendars,
+            "resource_calendar_assignments": self.resource_calendar_assignments,
             "calendar_overrides": self.calendar_overrides,
             "scheduling_strategy_versions": self.scheduling_strategy_versions,
             "integration_messages": self.integration_messages,
@@ -279,6 +283,10 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             payloads.get("release_decision_packages", {})
         )
         self.dbr_release_policies.update(payloads.get("dbr_release_policies", {}))
+        self.base_calendars.update(payloads.get("base_calendars", {}))
+        self.resource_calendar_assignments.update(
+            payloads.get("resource_calendar_assignments", {})
+        )
         self.calendar_overrides.update(payloads.get("calendar_overrides", {}))
         self.scheduling_strategy_versions.update(
             payloads.get("scheduling_strategy_versions", {})
@@ -309,6 +317,8 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.operational_state_snapshots.clear()
         self.release_decision_packages.clear()
         self.dbr_release_policies.clear()
+        self.base_calendars.clear()
+        self.resource_calendar_assignments.clear()
         self.calendar_overrides.clear()
         self.scheduling_strategy_versions.clear()
         self.integration_messages.clear()
@@ -337,6 +347,8 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "OperationalStateSnapshots": len(store.operational_state_snapshots),
         "ReleaseDecisionPackages": len(store.release_decision_packages),
         "DbrReleasePolicies": len(store.dbr_release_policies),
+        "BaseCalendars": len(store.base_calendars),
+        "ResourceCalendarAssignments": len(store.resource_calendar_assignments),
         "CalendarOverrides": len(store.calendar_overrides),
         "SchedulingStrategyVersions": len(store.scheduling_strategy_versions),
         "IntegrationMessages": len(store.integration_messages),

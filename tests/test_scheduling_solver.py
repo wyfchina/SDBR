@@ -4,6 +4,7 @@ import pytest
 
 from sdbr.calendar_overrides import apply_calendar_overrides
 from sdbr.planner_workbench import (
+    ExtraCapacityWindow,
     MaintenanceWindow,
     Operation,
     Resource,
@@ -1332,6 +1333,89 @@ def test_calendar_override_reports_not_applied_when_no_resource_matches():
     assert application.applied_overrides == []
     assert application.diagnostics[0].code == "CALENDAR_OVERRIDE_NOT_APPLIED"
     assert application.diagnostics[0].entity_id == "CAL-OVR-NOMATCH"
+
+
+def test_resource_calendar_conflict_priority_filters_extra_capacity_windows():
+    # BE-DATA-010 / BE-SOLVER-011
+    resource = Resource(
+        resource_id="WC-DRUM",
+        name="Constraint Cutter",
+        is_constraint=True,
+        daily_capacity_minutes={
+            date(2026, 6, 16): 999,
+            date(2026, 6, 17): 999,
+        },
+        calendar=WorkCalendar(
+            calendar_id="CAL-DRUM",
+            working_weekdays={0, 1, 2, 3, 4},
+            shifts=[
+                Shift(
+                    name="Day",
+                    start=datetime.strptime("08:00", "%H:%M").time(),
+                    end=datetime.strptime("12:00", "%H:%M").time(),
+                )
+            ],
+            maintenance_windows=[
+                MaintenanceWindow(
+                    start=datetime(2026, 6, 16, 6, 30, tzinfo=timezone.utc),
+                    end=datetime(2026, 6, 16, 7, 0, tzinfo=timezone.utc),
+                ),
+                MaintenanceWindow(
+                    start=datetime(2026, 6, 16, 14, 0, tzinfo=timezone.utc),
+                    end=datetime(2026, 6, 16, 14, 30, tzinfo=timezone.utc),
+                ),
+            ],
+            holidays={date(2026, 6, 17)},
+        ),
+        extra_capacity_windows=[
+            ExtraCapacityWindow(
+                start=datetime(2026, 6, 16, 6, tzinfo=timezone.utc),
+                end=datetime(2026, 6, 16, 8, tzinfo=timezone.utc),
+                capacity_minutes=120,
+                source_id="OT-1",
+            ),
+            ExtraCapacityWindow(
+                start=datetime(2026, 6, 16, 13, tzinfo=timezone.utc),
+                end=datetime(2026, 6, 16, 15, tzinfo=timezone.utc),
+                capacity_minutes=120,
+                source_id="TEMP-1",
+            ),
+            ExtraCapacityWindow(
+                start=datetime(2026, 6, 17, 6, tzinfo=timezone.utc),
+                end=datetime(2026, 6, 17, 8, tzinfo=timezone.utc),
+                capacity_minutes=120,
+                source_id="HOLIDAY-OT",
+            ),
+        ],
+    )
+
+    buckets = build_capacity_buckets_from_resources([resource], tzinfo=timezone.utc)
+
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 6, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 6, 30, tzinfo=timezone.utc),
+        capacity_minutes=30,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 7, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 8, tzinfo=timezone.utc),
+        capacity_minutes=60,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 13, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 14, tzinfo=timezone.utc),
+        capacity_minutes=60,
+    ) in buckets
+    assert CapacityBucket(
+        resource_id="WC-DRUM",
+        bucket_start=datetime(2026, 6, 16, 14, 30, tzinfo=timezone.utc),
+        bucket_end=datetime(2026, 6, 16, 15, tzinfo=timezone.utc),
+        capacity_minutes=30,
+    ) in buckets
+    assert all(bucket.bucket_start.date() != date(2026, 6, 17) for bucket in buckets)
 
 
 def test_baseline_finite_scheduler_serializes_operations_on_same_resource():

@@ -280,6 +280,15 @@ def test_cp_sat_business_cases_execute_and_explain_solver_behavior():
         "CPSATBusinessCases"
     }
     assert {case["AcceptanceStatus"] for case in cp_cases.values()} == {"Passed"}
+    assert all(
+        case["ScheduleResultOpenable"] is True
+        for case in cp_cases.values()
+        if case["Actual"]["PlanningRunStatus"] == "Completed"
+    )
+    assert cp_cases["TST-CP-INFEASIBLE-WINDOW"]["ScheduleResultOpenable"] is False
+    assert cp_cases["TST-CP-INFEASIBLE-WINDOW"][
+        "ScheduleResultUnavailableReason"
+    ] == "PLANNING_RUN_DEAD_LETTER"
     assert {
         "FINITE_RESOURCE_NO_OVERLAP",
         "ALL_ORDERS_SCHEDULED",
@@ -304,6 +313,45 @@ def test_cp_sat_business_cases_execute_and_explain_solver_behavior():
     assert "INFEASIBLE_DIAGNOSTIC_REPORTED" in _passed_assertions(
         cp_cases["TST-CP-INFEASIBLE-WINDOW"]
     )
+
+
+def test_all_completed_acceptance_cases_expose_openable_schedule_results():
+    # BE-DATA-014 / BE-OUT-002
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    for run_id in [
+        "TST-RUN-BASELINE-001",
+        "TST-RUN-MATERIAL-SHORTAGE-001",
+        "TST-RUN-WIP-LIMIT-001",
+        "TST-CP-RUN-FINITE-001",
+        "TST-CP-RUN-ALTERNATE-001",
+        "TST-CP-RUN-CALENDAR-001",
+        "TST-CP-RUN-EFFICIENCY-001",
+        "TST-CP-RUN-SETUP-001",
+        "TST-CP-RUN-INFEASIBLE-001",
+    ]:
+        _enqueue_claim_and_execute(client, run_id, max_attempts=1)
+
+    cases = client.get("/planner/workbench/test-data/acceptance").json()["Data"][
+        "Cases"
+    ]
+
+    for case in cases:
+        status = case["Actual"]["PlanningRunStatus"]
+        if status == "Completed":
+            assert case["ScheduleResultOpenable"] is True, case["CaseID"]
+            assert client.get(
+                f"/planner/workbench/schedule-results/runs/{case['PlanningRunID']}/workbench"
+            ).status_code == 200
+        else:
+            assert case["ScheduleResultOpenable"] is False, case["CaseID"]
+            assert case["ScheduleResultUnavailableReason"] in {
+                "PLANNING_RUN_DEAD_LETTER",
+                "PLANNING_RUN_NOT_COMPLETED",
+                "PLANNING_RUN_NOT_EXECUTED",
+            }
 
 
 def test_test_case_acceptance_records_human_confirmation_and_audit():
@@ -350,6 +398,59 @@ def test_test_case_acceptance_records_human_confirmation_and_audit():
     )
     assert audit.status_code == 200
     assert audit.json()["Data"]["AuditEvents"][0]["Action"] == "TestCaseAcceptanceDecision"
+
+
+def test_test_case_acceptance_reset_restores_replayable_case_state():
+    # BE-DATA-014
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+    _enqueue_claim_and_execute(client, "TST-CP-RUN-CALENDAR-001", max_attempts=1)
+
+    passed = client.get("/planner/workbench/test-data/acceptance").json()["Data"]
+    calendar_case = next(
+        case for case in passed["Cases"] if case["CaseID"] == "TST-CP-CALENDAR-OVERTIME"
+    )
+    assert calendar_case["AcceptanceStatus"] == "Passed"
+    assert calendar_case["ScheduleResultOpenable"] is True
+
+    reset = client.post(
+        "/planner/workbench/test-data/acceptance/TST-CP-CALENDAR-OVERTIME/reset"
+    )
+
+    assert reset.status_code == 200
+    assert reset.json()["Data"]["PlanningRunID"] == "TST-CP-RUN-CALENDAR-001"
+    workbench = client.get("/planner/workbench/test-data/acceptance").json()["Data"]
+    cases = {case["CaseID"]: case for case in workbench["Cases"]}
+    reset_case = cases["TST-CP-CALENDAR-OVERTIME"]
+    assert reset_case["AcceptanceStatus"] == "NeedsExecution"
+    assert reset_case["ScheduleResultOpenable"] is False
+    assert reset_case["ScheduleResultUnavailableReason"] == "PLANNING_RUN_NOT_COMPLETED"
+    run = client.get(
+        "/planner/workbench/planning-runs/TST-CP-RUN-CALENDAR-001/workbench"
+    ).json()["Data"]
+    assert run["Status"] == "Pending"
+    assert store.planning_runs["TST-CP-RUN-CALENDAR-001"]["Schedule"] is None
+
+
+def test_test_case_acceptance_reset_all_rebuilds_initial_case_state():
+    # BE-DATA-014
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+    _enqueue_claim_and_execute(client, "TST-RUN-BASELINE-001")
+
+    assert client.get("/planner/workbench/test-data/acceptance").json()["Data"][
+        "Summary"
+    ]["PassedCount"] == 1
+
+    response = client.post("/planner/workbench/test-data/acceptance/reset")
+
+    assert response.status_code == 200
+    data = client.get("/planner/workbench/test-data/acceptance").json()["Data"]
+    assert data["Summary"]["PassedCount"] == 0
+    assert data["Summary"]["NeedsExecutionCount"] == data["Summary"]["CaseCount"]
+    assert store.planning_runs["TST-RUN-BASELINE-001"]["Status"] == "Pending"
 
 
 def test_test_case_acceptance_rejects_confirmation_before_case_passes():

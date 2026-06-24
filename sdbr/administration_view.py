@@ -65,7 +65,7 @@ def build_administration_workbench(
         "Integrations": [
             _integration("erp", "ERP", "MockAPI"),
             _integration("mes", "MES", "RecommendationOnly"),
-            _integration("simio", "Simio", "Paused"),
+            _integration("simio", "Simio", "Available"),
         ],
         "IntegrationContracts": {
             "Status": "MockApiFirstVersion",

@@ -1841,6 +1841,9 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'data-route="calendar"' in html
     assert 'data-route="exceptions"' in html
     assert 'data-route="administration"' in html
+    assert html.count("data-nav-help") == 9
+    assert 'id="nav-business-tooltip"' in html
+    assert 'role="tooltip"' in html
     assert 'id="master-data-version"' in html
     assert 'id="snapshot-freshness"' in html
     assert 'id="system-health"' in html
@@ -1853,6 +1856,9 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert "/mock-operational-state-refresh" in script
     assert "/process-queued" in script
     assert "createReplanRunFromCurrentSchedule" in script
+    assert "showNavigationHelp" in script
+    assert "refreshNavigationHelp" in script
+    assert "descriptionData" in script
     assert 'processQueue: "处理队列"' in script
 
 
@@ -1901,7 +1907,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260622-release-queue-flow"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260624-friendly-feedback"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -1921,8 +1927,11 @@ def test_planner_workbench_page_exposes_data_readiness_workspace_without_raw_jso
     assert 'id="issues-drawer" class="issues-drawer"' in html
     assert 'aria-hidden="true" hidden' in html
     assert 'id="select-planning-inputs"' in html
+    assert 'id="generate-operational-snapshot"' in html
     assert 'id="create-master-data-version"' in html
     assert "/planner/workbench/data-readiness" in script
+    assert "/planner/workbench/operational-state/snapshots/" in script
+    assert "generateOperationalSnapshotFromLatest" in script
     assert "loadDataReadiness" in script
     assert "renderReadinessIssues" in script
     assert "readiness-issue-group" in script
@@ -1985,7 +1994,9 @@ def test_planning_run_workbench_endpoint_returns_safe_rows_and_capabilities():
     ]
     assert data["Capabilities"]["Solvers"][0]["Available"] is True
     assert data["Capabilities"]["Solvers"][1]["Status"] == "Paused"
-    assert data["Capabilities"]["Simio"]["Available"] is False
+    assert data["Capabilities"]["Simio"]["Available"] is True
+    assert data["Capabilities"]["Simio"]["Status"] == "Available"
+    assert data["Capabilities"]["Simio"]["Mode"] == "OptionalValidation"
 
 
 def test_worker_does_not_claim_queued_run_for_paused_gurobi_backend():
@@ -2155,7 +2166,25 @@ def test_planner_workbench_page_exposes_planning_run_center_and_wizard():
     assert 'id="solver-gurobi" type="radio" name="solver" value="gurobi" disabled' in html
     assert "OR-Tools CP-SAT" in html
     assert 'id="simio-validation"' in html
+    assert 'id="time-buffer-calculator-heading"' in html
+    assert 'id="wizard-olt-minutes"' in html
+    assert 'id="wizard-variability-profile"' in html
+    assert 'id="wizard-capacity-flex-profile"' in html
+    assert 'id="apply-time-buffer-recommendation"' in html
+    assert 'data-i18n-title="variabilityHelp"' in html
+    assert 'data-i18n-title="capacityFlexHelp"' in html
+    assert 'id="schedule-tab-simulation"' in html
+    assert 'id="run-simio-validation"' in html
     assert "/planner/workbench/planning-runs/workbench" in script
+    assert "/planner/workbench/simio/validation-runs" in script
+    assert "renderSimulationResults" in script
+    assert "TemplateID" in script
+    assert "TemplateVersion" in script
+    assert "TemplateFrozenSnapshot" in script
+    assert "TIME_BUFFER_MULTIPLIERS" in script
+    assert "renderTimeBufferRecommendation" in script
+    assert 'variabilityHelp: "上游波动来自设备故障' in script
+    assert 'capacityFlexHelp: "产能弹性表示上游非约束资源' in script
     assert "loadPlanningRuns" in script
     assert "renderPlanningRunDetail" in script
     assert "submitPlanningRun" in script
@@ -2423,6 +2452,11 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert "/planner/workbench/schedule-results/compare" in script
     assert "/governance`" in script
     assert "/output-package`" in script
+    assert "simioValidation" in script
+    assert "simioSourceLabel" in script
+    assert "externalDeliveryOwnedByIntegrations" in script
+    assert "Partial simulation result parsed" in script
+    assert "来自工单输出记录" in script
     assert "ganttRowsByOrder" in script
     assert 'resourceOccupationView: "资源占用图"' in script
     assert 'workOrderFlowView: "工单流程图"' in script
@@ -2625,6 +2659,69 @@ def test_be_int_005_mes_dispatch_priority_queue_uses_latest_release_gate():
     assert warning["DispatchEligibility"] == "CandidateOnly"
     assert warning["LatestGateStatus"] == "LatestOperationalStateBlocked"
     assert warning["LatestGateBlockingReasons"][0]["Code"] == "WIP_LIMIT_EXCEEDED"
+
+
+def test_be_int_005_mes_dispatch_suggestions_package_and_mock_issue():
+    # BE-INT-005 / BE-REL-011
+    store = _schedule_result_test_store()
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client, current_wip=0)
+    store.release_authorizations.append(
+        create_release_authorization(
+            request_id="RUN-RESULT",
+            candidate={
+                "OrderID": "WO-1",
+                "ScheduledStart": "2026-06-19T08:00:00+00:00",
+                "ScheduledEnd": "2026-06-19T10:00:00+00:00",
+                "SuggestedReleaseAt": "2026-06-19T06:00:00+00:00",
+                "RecommendedAction": "ReadyForRelease",
+            },
+            released_by="planner-1",
+            released_at=datetime(2026, 6, 19, 7, 30, tzinfo=timezone.utc),
+            operational_state_snapshot_id="OPS-RESULT",
+        )
+    )
+    store.execution_events.append(
+        {
+            "EventID": "EVT-ARRIVE-WO-1",
+            "EventType": "ArrivedBuffer",
+            "OrderID": "WO-1",
+            "OperationID": "CUT",
+            "ResourceID": "WC-DRUM",
+            "EventAt": "2026-06-19T07:45:00+00:00",
+        }
+    )
+
+    package_response = client.get(
+        "/planner/workbench/mes/dispatch-suggestions/runs/RUN-RESULT",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    )
+
+    assert package_response.status_code == 200
+    package = package_response.json()["Data"]["DispatchSuggestionPackage"]
+    assert package["PackageID"].startswith("MES-DISPATCH-RUN-RESULT-")
+    assert package["MessageType"] == "DispatchQueueIssued"
+    assert package["DeliveryMode"] == "MockAPIRecommendationOnly"
+    assert package["SendsToMes"] is False
+    queue = package["ResourceQueues"][0]["Queue"]
+    assert queue[0]["OrderID"] == "WO-1"
+    assert queue[0]["ArrivalStatus"] == "Arrived"
+    assert queue[0]["Recommendation"] == "FollowPlan"
+
+    issue_response = client.post(
+        "/planner/workbench/mes/dispatch-suggestions/runs/RUN-RESULT/issue",
+        params={
+            "evaluated_at": "2026-06-19T07:50:00+00:00",
+            "issued_by": "planner-1",
+        },
+    )
+
+    assert issue_response.status_code == 200
+    issued = issue_response.json()["Data"]
+    assert issued["Status"] == "MockDispatchSuggestionIssued"
+    assert issued["IntegrationMessage"]["Status"] in {"Accepted", "Duplicate"}
+    assert store.integration_messages[-1]["MessageType"] == "DispatchQueueIssued"
+    assert store.integration_messages[-1]["ContractID"] == "MES-OUTBOUND-V1"
 
 
 def test_be_out_010_output_package_rejects_incomplete_or_unscoped_runs():
@@ -3175,6 +3272,10 @@ def test_planner_workbench_page_exposes_scheduled_orders_and_release_management(
     assert "/work-orders/workbench" in script
     assert "/release-management/runs/" in script
     assert "/authorize`" in script
+    assert "recommendedAction" in script
+    assert "requiresReschedule" in script
+    assert "偏差已达到重排阈值" in script
+    assert "businessValue" in script
 
 
 def _buffer_board_test_store() -> WorkbenchStateStore:
@@ -3324,16 +3425,24 @@ def test_ui_buffer_001_workbench_exposes_bilingual_buffer_execution_board():
     assert 'id="buffer-board-matrix"' in html
     assert 'id="mes-dispatch-priority-panel"' in html
     assert 'id="mes-dispatch-resources"' in html
+    assert 'id="issue-mes-dispatch-suggestions"' in html
     assert 'id="buffer-order-detail"' in html
     assert 'id="buffer-transaction-dialog"' in html
     assert 'navBuffer: "缓冲执行"' in script
     assert 'navBuffer: "Buffer Execution"' in script
     assert "/planner/workbench/buffer-board/runs/" in script
     assert "/planner/workbench/dispatch-priority/runs/" in script
+    assert "/planner/workbench/mes/dispatch-suggestions/runs/" in script
+    assert "issueMesDispatchSuggestions" in script
     assert 'mesDispatchQueue: "MES 派工队列"' in script
     assert 'mesDispatchQueue: "MES dispatch queue"' in script
+    assert 'issueDispatchSuggestions: "生成 MES 派工建议包"' in script
+    assert 'issueDispatchSuggestions: "Generate MES dispatch package"' in script
     assert 'SuggestQueueJump: "建议插队"' in script
     assert 'NeedsReplan: "需要重排"' in script
+    assert 'Hold: "暂不派工"' in script
+    assert 'QueueJump: "建议插队"' in script
+    assert 'ReviewAndReplan: "复核并考虑重排"' in script
 
 
 def _exception_center_test_store() -> WorkbenchStateStore:
@@ -3567,7 +3676,7 @@ def test_be_ui_006_administration_workbench_returns_safe_configuration_model():
     ] == "Available"
     assert next(item for item in data["Integrations"] if item["SystemID"] == "simio")[
         "Status"
-    ] == "Paused"
+    ] == "Available"
     assert next(item for item in data["Integrations"] if item["SystemID"] == "erp")[
         "Status"
     ] == "MockAPI"
@@ -4238,6 +4347,7 @@ def test_ui_admin_001_002_workbench_exposes_bilingual_administration_workspace()
     assert 'id="admin-import-preview"' in html
     assert 'id="admin-routings-import"' in html
     assert 'id="admin-system-capabilities"' in html
+    assert 'id="admin-simio-templates"' in html
     assert 'id="admin-cp-sat-assumptions"' in html
     assert 'id="admin-policy-groups"' in html
     assert 'id="admin-calendar-title"' not in html
@@ -4253,12 +4363,15 @@ def test_ui_admin_001_002_workbench_exposes_bilingual_administration_workspace()
     assert "/planner/workbench/admin/base-calendars" in script
     assert "/planner/workbench/admin/resource-calendar-assignments" in script
     assert "/planner/workbench/admin/calendar-overrides" in script
+    assert "/planner/workbench/simio/templates" in script
     assert 'adminMasterDataTitle: "主数据后台"' in script
     assert 'adminMasterDataTitle: "Master Data Administration"' in script
     assert 'partialEditable: "部分可配置"' in script
     assert 'partialEditable: "Partially configurable"' in script
     assert 'cpSatAssumptions: "CP-SAT 建模假设"' in script
     assert 'cpSatAssumptions: "CP-SAT Modeling Assumptions"' in script
+    assert 'simioTemplateRegistry: "Simio 仿真模板"' in script
+    assert 'simioTemplateRegistry: "Simio simulation templates"' in script
     assert 'problem: "计划场景"' in script
     assert 'problem: "Planning scenario"' in script
     assert 'rawJsonHidden: "原始 JSON 默认隐藏，仅管理员调试模式可查看。"' in script
@@ -4311,6 +4424,9 @@ def test_planner_workbench_styles_define_restrained_and_responsive_layout():
     assert "grid-template-columns: var(--nav-width) minmax(0, 1fr)" in css
     assert "@media (max-width: 900px)" in css
     assert ".navigation.is-open" in css
+    assert ".nav-business-tooltip" in css
+    assert ".time-buffer-calculator" in css
+    assert ".field-help" in css
     assert "overflow-x: auto" in css
     assert "gradient(" not in css
 

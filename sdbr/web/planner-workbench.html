@@ -18,35 +18,40 @@
       </div>
 
       <nav class="nav-list">
-        <a class="nav-item" href="#overview" data-route="overview">
+        <a class="nav-item" href="#overview" data-route="overview" data-nav-help>
           <span class="nav-index" aria-hidden="true">01</span><span data-i18n="navOverview">计划总览</span>
         </a>
-        <a class="nav-item" href="#data-readiness" data-route="data-readiness">
+        <a class="nav-item" href="#data-readiness" data-route="data-readiness" data-nav-help>
           <span class="nav-index" aria-hidden="true">02</span><span data-i18n="navData">数据就绪</span>
         </a>
-        <a class="nav-item" href="#planning-runs" data-route="planning-runs">
+        <a class="nav-item" href="#planning-runs" data-route="planning-runs" data-nav-help>
           <span class="nav-index" aria-hidden="true">03</span><span data-i18n="navRuns">排程任务</span>
         </a>
-        <a class="nav-item" href="#schedule-results" data-route="schedule-results">
+        <a class="nav-item" href="#schedule-results" data-route="schedule-results" data-nav-help>
           <span class="nav-index" aria-hidden="true">04</span><span data-i18n="navResults">排程结果</span>
         </a>
-        <a class="nav-item" href="#release-management" data-route="release-management">
+        <a class="nav-item" href="#release-management" data-route="release-management" data-nav-help>
           <span class="nav-index" aria-hidden="true">05</span><span data-i18n="navRelease">释放管理</span>
         </a>
-        <a class="nav-item" href="#buffer-board" data-route="buffer-board">
+        <a class="nav-item" href="#buffer-board" data-route="buffer-board" data-nav-help>
           <span class="nav-index" aria-hidden="true">06</span><span data-i18n="navBuffer">缓冲执行</span>
         </a>
-        <a class="nav-item" href="#exceptions" data-route="exceptions">
+        <a class="nav-item" href="#exceptions" data-route="exceptions" data-nav-help>
           <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navExceptions">异常中心</span>
           <span class="nav-badge" aria-label="0" data-i18n-aria-label="noUnreadExceptions">0</span>
         </a>
-        <a class="nav-item" href="#calendar" data-route="calendar">
+        <a class="nav-item" href="#calendar" data-route="calendar" data-nav-help>
           <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navCalendar">日历配置</span>
         </a>
-        <a class="nav-item" href="#administration" data-route="administration">
+        <a class="nav-item" href="#administration" data-route="administration" data-nav-help>
           <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navAdmin">管理后台</span>
         </a>
       </nav>
+
+      <div id="nav-business-tooltip" class="nav-business-tooltip" role="tooltip" aria-hidden="true" hidden>
+        <strong id="nav-business-tooltip-title">-</strong>
+        <span id="nav-business-tooltip-description">-</span>
+      </div>
 
       <div class="navigation-footer">
         <span class="service-dot" aria-hidden="true"></span>
@@ -150,6 +155,7 @@
             </div>
             <div class="readiness-actions">
               <button id="refresh-data-readiness" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+              <button id="generate-operational-snapshot" class="button secondary" type="button" disabled data-i18n="generateOperationalSnapshot">生成运行快照</button>
               <button id="select-planning-inputs" class="button primary" type="button" disabled data-i18n="selectPlanningInputs">选作本次排程输入</button>
             </div>
           </section>
@@ -304,7 +310,7 @@
         </div>
 
         <div id="schedule-results-view" class="schedule-results-view" hidden>
-          <section class="result-context-bar" aria-label="排程结果上下文" data-i18n-aria-label="resultContext">
+          <section class="result-context-bar" aria-label="排程结果范围" data-i18n-aria-label="resultContext">
             <label>
               <span data-i18n="planningRun">排程任务</span>
               <select id="schedule-result-run-select"></select>
@@ -360,6 +366,7 @@
               <button id="schedule-tab-load" class="schedule-tab" type="button" role="tab" aria-selected="false" data-schedule-tab="load" data-i18n="resourceLoad">资源负荷</button>
               <button id="schedule-tab-delivery" class="schedule-tab" type="button" role="tab" aria-selected="false" data-schedule-tab="delivery" data-i18n="orderDelivery">订单交期</button>
               <button id="schedule-tab-diagnostics" class="schedule-tab" type="button" role="tab" aria-selected="false" data-schedule-tab="diagnostics" data-i18n="diagnostics">求解诊断</button>
+              <button id="schedule-tab-simulation" class="schedule-tab" type="button" role="tab" aria-selected="false" data-schedule-tab="simulation" data-i18n="simulationResults">仿真结果</button>
               <button id="schedule-tab-orders" class="schedule-tab" type="button" role="tab" aria-selected="false" data-schedule-tab="orders" data-i18n="scheduledOrders">已排程工单</button>
             </div>
 
@@ -419,6 +426,18 @@
               <div id="schedule-diagnostics" class="diagnostics-list"></div>
             </section>
 
+            <section id="schedule-panel-simulation" class="schedule-panel" data-schedule-panel="simulation" hidden>
+              <div class="schedule-toolbar compact-toolbar">
+                <label><span data-i18n="simioRunnerMode">运行模式</span><select id="simio-runner-mode"><option value="auto" data-i18n="simioRunnerAuto">自动</option><option value="mock" data-i18n="simioRunnerMock">Mock</option><option value="local" data-i18n="simioRunnerLocal">本机 Headless</option></select></label>
+                <button id="run-simio-validation" class="button primary" type="button" data-i18n="runSimioValidation">运行仿真验证</button>
+                <button id="refresh-simio-validation" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+              </div>
+              <div id="simio-result-summary" class="publication-summary"></div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th data-i18n="resource">资源</th><th data-i18n="utilization">利用率</th><th data-i18n="busyMinutes">忙碌分钟</th><th data-i18n="starvedMinutes">饥饿分钟</th><th data-i18n="evidence">证据</th></tr></thead><tbody id="simio-resource-utilization-body"></tbody></table></div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th data-i18n="workOrder">工单</th><th data-i18n="actualStart">实际开始</th><th data-i18n="actualEnd">实际结束</th><th data-i18n="queueWaitMinutes">队列等待</th><th data-i18n="wipAfterStart">开工后 WIP</th><th data-i18n="wipAfterEnd">完工后 WIP</th><th data-i18n="eventStatus">事件状态</th></tr></thead><tbody id="simio-adherence-body"></tbody></table></div>
+              <div id="simio-result-issues" class="diagnostics-list"></div>
+            </section>
+
             <section id="scheduled-orders-panel" class="schedule-panel" data-schedule-panel="orders" hidden>
               <div class="orders-meta-line"><span id="scheduled-orders-generated-at">-</span><span id="scheduled-orders-freshness" class="status-chip neutral">-</span></div>
               <div class="orders-toolbar">
@@ -476,7 +495,7 @@
         </div>
 
         <div id="release-management-view" class="release-management-view" hidden>
-          <section class="result-context-bar" aria-label="释放评估上下文" data-i18n-aria-label="releaseContext">
+          <section class="result-context-bar" aria-label="释放评估" data-i18n-aria-label="releaseContext">
             <label><span data-i18n="planningRun">排程任务</span><select id="release-run-select"></select></label>
             <label><span data-i18n="evaluatedAt">评估时间</span><input id="release-evaluated-at" type="datetime-local"></label>
             <button id="refresh-release-management" class="button secondary" type="button" data-i18n="reevaluate">重新评估</button>
@@ -491,7 +510,7 @@
         </div>
 
         <div id="buffer-board-view" class="buffer-board-view" hidden>
-          <section class="result-context-bar" aria-label="约束缓冲上下文" data-i18n-aria-label="bufferContext">
+          <section class="result-context-bar" aria-label="约束缓冲" data-i18n-aria-label="bufferContext">
             <label><span data-i18n="planningRun">排程任务</span><select id="buffer-run-select"></select></label>
             <label><span data-i18n="evaluatedAt">评估时间</span><input id="buffer-evaluated-at" type="datetime-local"></label>
             <button id="refresh-buffer-board" class="button secondary" type="button" data-i18n="refresh">刷新</button>
@@ -507,6 +526,10 @@
                 <span id="mes-dispatch-policy-chip" class="status-chip neutral">-</span>
               </div>
               <p class="inline-note" data-i18n="mesDispatchBoundary">此处只展示内部派工队列，不执行真实 MES 投递。</p>
+              <div class="dispatch-toolbar">
+                <button id="issue-mes-dispatch-suggestions" class="button secondary" type="button" data-i18n="issueDispatchSuggestions">生成 MES 派工建议包</button>
+                <span id="mes-dispatch-issue-status" class="inline-note" data-i18n="dispatchSuggestionNotIssued">尚未生成派工建议包。</span>
+              </div>
               <div id="mes-dispatch-summary" class="dispatch-summary"></div>
               <div id="mes-dispatch-resources" class="dispatch-resource-list"></div>
             </section>
@@ -514,7 +537,7 @@
         </div>
 
         <div id="exceptions-view" class="exceptions-view" hidden>
-          <section class="result-context-bar" aria-label="异常中心上下文" data-i18n-aria-label="exceptionContext">
+          <section class="result-context-bar" aria-label="异常中心" data-i18n-aria-label="exceptionContext">
             <label><span data-i18n="evaluatedAt">评估时间</span><input id="exception-evaluated-at" type="datetime-local"></label>
             <label><span data-i18n="severity">严重程度</span><select id="exception-severity-filter"></select></label>
             <label><span data-i18n="source">来源</span><select id="exception-source-filter"></select></label>
@@ -528,7 +551,7 @@
         </div>
 
         <div id="calendar-view" class="calendar-view" hidden>
-          <section class="result-context-bar" aria-label="日历配置上下文" data-i18n-aria-label="calendarContext">
+          <section class="result-context-bar" aria-label="日历配置" data-i18n-aria-label="calendarContext">
             <button id="refresh-calendar-preview" class="button secondary" type="button" data-i18n="refresh">刷新</button>
             <label class="field inline-field"><span data-i18n="resource">资源</span><select id="calendar-preview-resource"></select></label>
             <label class="field inline-field"><span data-i18n="fromDate">开始日期</span><input id="calendar-preview-start" type="date" value="2026-06-16"></label>
@@ -625,7 +648,7 @@
         </div>
 
         <div id="administration-view" class="administration-view" hidden>
-          <section class="result-context-bar" aria-label="管理后台上下文" data-i18n-aria-label="administrationContext">
+          <section class="result-context-bar" aria-label="管理后台" data-i18n-aria-label="administrationContext">
             <button id="refresh-administration" class="button secondary" type="button" data-i18n="refresh">刷新</button>
             <span id="admin-mode-chip" class="status-chip neutral">-</span>
             <span class="inline-note" data-i18n="sensitiveSettingsReadOnly">敏感连接参数当前只读。</span>
@@ -653,6 +676,8 @@
               <section class="admin-panel" aria-labelledby="admin-system-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="systemHealthLabel">系统健康</span><h2 id="admin-system-title" data-i18n="adminSystemTitle">集成与求解器设置</h2></div></div>
                 <div id="admin-system-capabilities" class="capability-grid"></div>
+                <h3 data-i18n="simioTemplateRegistry">Simio 仿真模板</h3>
+                <div id="admin-simio-templates" class="policy-group-list"></div>
                 <h3 data-i18n="cpSatAssumptions">CP-SAT 建模假设</h3>
                 <div id="admin-cp-sat-assumptions" class="policy-group-list"></div>
                 <h3 data-i18n="policyConfiguration">排程策略配置</h3>
@@ -703,6 +728,24 @@
           <p id="wizard-input-warning" class="inline-warning" hidden data-i18n="selectInputsFirst">请先在数据就绪中心选择有效输入。</p>
         </section>
         <section data-wizard-step="2" hidden>
+          <section class="time-buffer-calculator" aria-labelledby="time-buffer-calculator-heading">
+            <div>
+              <span class="panel-kicker" data-i18n="timeBufferProfile">时间缓冲参数</span>
+              <h3 id="time-buffer-calculator-heading" data-i18n="timeBufferCalculator">时间缓冲计算器</h3>
+              <p data-i18n="timeBufferFormula">时间缓冲 = OLT × (1 + 变异与弹性综合系数)</p>
+            </div>
+            <div class="form-grid compact">
+              <label><span data-i18n="operatingLeadTime">运营提前期 OLT（分钟）</span><input id="wizard-olt-minutes" type="number" min="0" value="120"></label>
+              <label><span><span data-i18n="variabilityProfile">上游波动程度</span><button class="field-help" type="button" data-i18n-title="variabilityHelp" data-i18n-aria-label="variabilityHelp">?</button></span><select id="wizard-variability-profile"><option value="Low" data-i18n="variabilityLow">低</option><option value="Medium" selected data-i18n="variabilityMedium">中</option><option value="High" data-i18n="variabilityHigh">高</option></select></label>
+              <label><span><span data-i18n="capacityFlexProfile">产能弹性</span><button class="field-help" type="button" data-i18n-title="capacityFlexHelp" data-i18n-aria-label="capacityFlexHelp">?</button></span><select id="wizard-capacity-flex-profile"><option value="High" data-i18n="capacityFlexHigh">高弹性</option><option value="Medium" selected data-i18n="capacityFlexMedium">中弹性</option><option value="Low" data-i18n="capacityFlexLow">低弹性</option></select></label>
+              <label><span data-i18n="timeBufferMultiplier">推荐倍数</span><input id="wizard-time-buffer-multiplier" readonly value="1.50×"></label>
+            </div>
+            <div class="time-buffer-recommendation">
+              <span data-i18n="recommendedTimeBuffer">推荐时间缓冲</span>
+              <strong id="wizard-time-buffer-recommendation">180 分钟</strong>
+              <button id="apply-time-buffer-recommendation" class="button secondary" type="button" data-i18n="useRecommendedBuffer">采用推荐值</button>
+            </div>
+          </section>
           <div class="form-grid compact">
             <label><span data-i18n="timeBuffer">时间缓冲（分钟）</span><input id="wizard-time-buffer" type="number" min="0" value="120"></label>
             <label><span data-i18n="timeLimit">求解时间限制（秒）</span><input id="wizard-time-limit" type="number" min="1" max="3600" value="300"></label>
@@ -714,7 +757,7 @@
             <label><input id="solver-ortools" type="radio" name="solver" value="ortools" checked><span>OR-Tools CP-SAT</span><small id="solver-ortools-status"></small></label>
             <label class="is-disabled"><input id="solver-gurobi" type="radio" name="solver" value="gurobi" disabled><span>Gurobi</span><small data-i18n="pausedUnavailable">已暂停，暂不可用</small></label>
           </fieldset>
-          <label class="capability-toggle is-disabled"><input id="simio-validation" type="checkbox" disabled><span data-i18n="enableSimio">启用 Simio 验证</span><small data-i18n="pausedUnavailable">已暂停，暂不可用</small></label>
+          <label class="capability-toggle"><input id="simio-validation" type="checkbox"><span data-i18n="enableSimio">启用 Simio 验证</span><small data-i18n="simioOptionalValidation">计划完成后可在仿真结果页运行</small></label>
         </section>
         <section data-wizard-step="3" hidden>
           <div id="wizard-review" class="review-list"></div>
@@ -770,6 +813,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260622-release-queue-flow" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260624-friendly-feedback" defer></script>
 </body>
 </html>

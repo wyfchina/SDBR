@@ -26,7 +26,10 @@ def test_mes_dispatch_priority_allows_red_zone_queue_jump_with_constraint_confir
         master_data_version=master_data,
         release_workbench=release_workbench,
         authorizations=authorizations,
-        execution_events=[],
+        execution_events=[
+            _event("ArrivedBuffer", "WO-A", "OP-A"),
+            _event("ArrivedBuffer", "WO-B", "OP-B"),
+        ],
         evaluated_at=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
     )
 
@@ -61,7 +64,7 @@ def test_mes_dispatch_priority_keeps_unreleased_or_blocked_orders_as_warnings():
         master_data_version=master_data,
         release_workbench=release_workbench,
         authorizations=[_authorization("AUTH-A", "WO-A"), _authorization("AUTH-B", "WO-B")],
-        execution_events=[],
+        execution_events=[_event("ArrivedBuffer", "WO-A", "OP-A")],
         evaluated_at=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
     )
 
@@ -72,6 +75,34 @@ def test_mes_dispatch_priority_keeps_unreleased_or_blocked_orders_as_warnings():
     assert warnings["WO-B"]["LatestGateBlockingReasons"][0]["Code"] == "WIP_LIMIT_EXCEEDED"
     assert warnings["WO-C"]["LatestGateStatus"] == "ReleaseNotAuthorized"
     assert queue["Summary"]["CandidateWarningCount"] == 2
+
+
+def test_mes_dispatch_priority_requires_arrival_confirmation_for_formal_queue():
+    queue = build_mes_dispatch_priority_queue(
+        planning_run=_planning_run(),
+        master_data_version=_master_data(),
+        release_workbench={
+            "OperationalStateSnapshotID": "OPS-LATEST",
+            "Candidates": [
+                _candidate("WO-A", "Red", 90),
+                _candidate("WO-B", "Yellow", 60),
+            ],
+        },
+        authorizations=[
+            _authorization("AUTH-A", "WO-A"),
+            _authorization("AUTH-B", "WO-B"),
+        ],
+        execution_events=[],
+        evaluated_at=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
+    )
+
+    resource = queue["Resources"][0]
+    assert resource["Queue"] == []
+    assert [row["LatestGateStatus"] for row in resource["CandidateWarnings"]] == [
+        "ArrivalNotConfirmed",
+        "ArrivalNotConfirmed",
+    ]
+    assert resource["CandidateWarnings"][0]["RecommendationReason"] == "缺少现场到达确认，作为候选预警"
 
 
 def test_mes_dispatch_priority_recommends_replan_after_repeated_queue_jumps():
@@ -89,6 +120,8 @@ def test_mes_dispatch_priority_recommends_replan_after_repeated_queue_jumps():
             _authorization("AUTH-B", "WO-B"),
         ],
         execution_events=[
+            _event("ArrivedBuffer", "WO-A", "OP-A"),
+            _event("ArrivedBuffer", "WO-B", "OP-B"),
             {
                 "EventType": "DispatchAccepted",
                 "OrderID": "WO-X1",
@@ -216,4 +249,14 @@ def _candidate(
             if blocking_code
             else []
         ),
+    }
+
+
+def _event(event_type: str, order_id: str, operation_id: str) -> dict[str, object]:
+    return {
+        "EventType": event_type,
+        "OrderID": order_id,
+        "OperationID": operation_id,
+        "ResourceID": "WC-DRUM",
+        "EventAt": "2026-06-16T08:05:00+00:00",
     }

@@ -8,6 +8,7 @@ from sdbr.schedule_output import (
     scheduled_order_rows_from_schedule,
     scheduled_work_order_rows_from_schedule,
 )
+from sdbr.simio_validation import summarize_simio_validation
 
 
 def build_schedule_output_governance(
@@ -17,6 +18,7 @@ def build_schedule_output_governance(
     operational_state_snapshot: object | None,
     release_authorizations: list[ReleaseAuthorization],
     audit_events: list[dict[str, object]],
+    simio_validation_runs: dict[str, dict[str, object]] | None = None,
     superseded_by_run_id: str | None = None,
 ) -> dict[str, object]:
     publication = build_plan_publication_view(
@@ -57,6 +59,10 @@ def build_schedule_output_governance(
             schedule=schedule,
             release_authorizations=scoped_authorizations,
         ),
+        "SimioValidation": summarize_simio_validation(
+            simio_validation_runs=simio_validation_runs or {},
+            run_id=str(planning_run.get("RunID")),
+        ),
         "Audit": _audit_governance(audit_events),
         "FrozenInputs": _frozen_input_summary(planning_run),
     }
@@ -70,6 +76,7 @@ def build_schedule_output_package(
     operational_state_snapshot: object | None,
     release_authorizations: list[ReleaseAuthorization],
     audit_events: list[dict[str, object]],
+    simio_validation_runs: dict[str, dict[str, object]] | None = None,
     generated_at: datetime | None = None,
     superseded_by_run_id: str | None = None,
 ) -> dict[str, object]:
@@ -79,6 +86,7 @@ def build_schedule_output_package(
         operational_state_snapshot=operational_state_snapshot,
         release_authorizations=release_authorizations,
         audit_events=audit_events,
+        simio_validation_runs=simio_validation_runs,
         superseded_by_run_id=superseded_by_run_id,
     )
     if not governance["Completeness"]["IsOutputAvailable"]:
@@ -121,6 +129,7 @@ def build_schedule_output_package(
             },
         },
         "Governance": governance,
+        "SimioValidation": governance["SimioValidation"],
         "ExternalDelivery": {
             "Status": "NotSent",
             "Reason": "External ERP/MES delivery is owned by BE-INT-* integrations.",

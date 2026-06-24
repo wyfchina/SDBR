@@ -33,7 +33,10 @@ from sdbr.calendar_overrides import (
 )
 from sdbr.calendar_preview import build_calendar_preview
 from sdbr.data_readiness import build_data_readiness
-from sdbr.dispatch_priority import build_mes_dispatch_priority_queue
+from sdbr.dispatch_priority import (
+    build_mes_dispatch_priority_queue,
+    build_mes_dispatch_suggestion_package,
+)
 from sdbr.buffer_execution_view import (
     build_buffer_execution_workbench,
     build_buffer_order_detail,
@@ -160,6 +163,13 @@ from sdbr.scheduling_solver import (
     build_scheduling_problem,
     create_solver_engine,
 )
+from sdbr.simio_validation import (
+    SimioValidationError,
+    create_simio_validation_run,
+    default_simio_template_registry,
+    resolve_simio_template,
+    summarize_simio_validation,
+)
 from sdbr.scenario_comparison import compare_scenarios
 from sdbr.shop_floor_execution import (
     ExecutionEvent,
@@ -252,6 +262,14 @@ class OrderPayload(BaseModel):
     Quantity: float
     DueDate: datetime
     TargetStartDate: date
+
+
+class SimioValidationRunPayload(BaseModel):
+    RunID: str
+    RunnerMode: Literal["auto", "mock", "local"] = "auto"
+    TemplateID: str | None = None
+    RequestedBy: str = "planner-1"
+    RequestedAt: datetime | None = None
 
 
 class InventoryBufferPayload(BaseModel):
@@ -913,9 +931,14 @@ def create_app(
     scheduling_strategy_versions = active_store.scheduling_strategy_versions
     integration_messages = active_store.integration_messages
     test_case_acceptance_decisions = active_store.test_case_acceptance_decisions
+    simio_validation_runs = active_store.simio_validation_runs
+    simio_template_registry = active_store.simio_template_registry
     master_data_versions = active_store.master_data_versions
     planning_runs = active_store.planning_runs
     audit_events = active_store.audit_events
+    if not simio_template_registry:
+        simio_template_registry.update(default_simio_template_registry())
+        active_store.active_simio_template_id = next(iter(simio_template_registry))
     claim_lock = Lock()
 
     @app.middleware("http")
@@ -3450,6 +3473,7 @@ def create_app(
                 audit_events=[
                     event for event in audit_events if event["RunID"] == run_id
                 ],
+                simio_validation_runs=simio_validation_runs,
                 superseded_by_run_id=_superseded_by_run_id(
                     run_id=run_id,
                     planning_runs=planning_runs,
@@ -3479,6 +3503,7 @@ def create_app(
             audit_events=[
                 event for event in audit_events if event["RunID"] == run_id
             ],
+            simio_validation_runs=simio_validation_runs,
             superseded_by_run_id=_superseded_by_run_id(
                 run_id=run_id,
                 planning_runs=planning_runs,
@@ -4669,6 +4694,177 @@ def create_app(
             "Endpoint": "/planner/workbench/simio/export",
             "StatusCode": 200,
             "Data": SimioValidationAdapter().export_problem(problem),
+        }
+
+    @app.get("/planner/workbench/simio/templates")
+    def planner_workbench_simio_templates() -> dict[str, object]:
+        endpoint = "/planner/workbench/simio/templates"
+        active_template_id = active_store.active_simio_template_id
+        templates = list(simio_template_registry.values())
+        active_template: dict[str, object] | None = None
+        try:
+            active_template = resolve_simio_template(
+                template_registry=simio_template_registry,
+                active_template_id=active_template_id,
+            )
+            status = "Ready"
+            message = "Simio validation template is configured."
+        except SimioValidationError as error:
+            status = error.status
+            message = error.message
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "Status": status,
+                "Message": message,
+                "ActiveTemplateID": active_template_id,
+                "ActiveTemplate": active_template,
+                "Templates": templates,
+                "TemplateCount": len(templates),
+                "TemplatePolicy": {
+                    "DefaultDirectory": "model/templates/simio",
+                    "RuntimeRule": (
+                        "Copy the active template to a derived package for each "
+                        "validation run; do not mutate the source template."
+                    ),
+                    "TimeUnitRule": (
+                        "APS minutes must be written to Simio time fields with "
+                        "explicit Minutes units."
+                    ),
+                },
+            },
+        }
+
+    @app.post("/planner/workbench/simio/validation-runs")
+    def planner_workbench_simio_validation_run_create(
+        payload: SimioValidationRunPayload,
+    ):
+        endpoint = "/planner/workbench/simio/validation-runs"
+        planning_run = planning_runs.get(payload.RunID)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=payload.RunID)
+        output_package = build_schedule_output_package(
+            planning_run=planning_run,
+            master_data_version=master_data_versions.get(
+                str(planning_run.get("MasterDataVersionID"))
+            ),
+            operational_state_snapshot=operational_state_snapshots.get(
+                str(planning_run.get("OperationalStateSnapshotID"))
+            ),
+            release_authorizations=release_authorizations,
+            audit_events=[
+                event for event in audit_events if event["RunID"] == payload.RunID
+            ],
+            simio_validation_runs=simio_validation_runs,
+            superseded_by_run_id=_superseded_by_run_id(
+                run_id=payload.RunID,
+                planning_runs=planning_runs,
+            ),
+        )
+        if output_package.get("Status") == "OutputPackageUnavailable":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": payload.RunID,
+                        "Status": "SimioValidationUnavailable",
+                        "Message": (
+                            "Simio validation requires a completed, internally "
+                            "consistent schedule output package."
+                        ),
+                        "Completeness": output_package.get("Completeness"),
+                    },
+                },
+            )
+        try:
+            validation_run = create_simio_validation_run(
+                planning_run=planning_run,
+                output_package=output_package,
+                runner_mode=payload.RunnerMode,
+                requested_by=payload.RequestedBy,
+                requested_at=payload.RequestedAt,
+                template_registry=simio_template_registry,
+                active_template_id=active_store.active_simio_template_id,
+                template_id=payload.TemplateID,
+            )
+        except SimioValidationError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": payload.RunID,
+                        "Status": error.status,
+                        "Message": error.message,
+                    },
+                },
+            )
+        simio_validation_runs[str(validation_run["ValidationRunID"])] = validation_run
+        _append_planning_run_audit_event(
+            audit_events=audit_events,
+            run_id=payload.RunID,
+            action="SimioValidationRunCreated",
+            actor_id=payload.RequestedBy,
+            occurred_at=payload.RequestedAt or datetime.now(timezone.utc),
+            details={
+                "ValidationRunID": validation_run["ValidationRunID"],
+                "RunnerMode": payload.RunnerMode,
+                "TemplateID": validation_run["Package"].get("TemplateID"),
+                "TemplateVersion": validation_run["Package"].get("TemplateVersion"),
+                "Status": validation_run["Status"],
+                "PackageID": validation_run["Package"]["PackageID"],
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": validation_run,
+        }
+
+    @app.get("/planner/workbench/simio/validation-runs/{validation_run_id}")
+    def planner_workbench_simio_validation_run_get(validation_run_id: str):
+        endpoint = f"/planner/workbench/simio/validation-runs/{validation_run_id}"
+        validation_run = simio_validation_runs.get(validation_run_id)
+        if validation_run is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {
+                        "ValidationRunID": validation_run_id,
+                        "Status": "SimioValidationRunNotFound",
+                        "Message": (
+                            f"Simio validation run {validation_run_id} was not found."
+                        ),
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": validation_run,
+        }
+
+    @app.get(
+        "/planner/workbench/schedule-results/runs/{run_id}/simio-validation"
+    )
+    def planner_workbench_schedule_result_simio_validation(run_id: str):
+        endpoint = f"/planner/workbench/schedule-results/runs/{run_id}/simio-validation"
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": summarize_simio_validation(
+                simio_validation_runs=simio_validation_runs,
+                run_id=run_id,
+            ),
         }
 
     @app.post("/planner/workbench/release")
@@ -6030,15 +6226,15 @@ def create_app(
             },
         }
 
-    @app.get("/planner/workbench/dispatch-priority/runs/{run_id}/workbench")
-    def planner_workbench_dispatch_priority(
+    def _mes_dispatch_priority_payload(
+        *,
+        endpoint: str,
         run_id: str,
         evaluated_at: datetime,
-        operational_state_max_age_minutes: int = Query(default=60, gt=0),
-        use_latest_operational_state: bool = True,
-        operational_state_snapshot_id: str | None = None,
-    ):
-        endpoint = f"/planner/workbench/dispatch-priority/runs/{run_id}/workbench"
+        operational_state_max_age_minutes: int,
+        use_latest_operational_state: bool,
+        operational_state_snapshot_id: str | None,
+    ) -> dict[str, object] | JSONResponse:
         planning_run = planning_runs.get(run_id)
         if planning_run is None:
             return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
@@ -6101,17 +6297,131 @@ def create_app(
             operational_state_snapshot_id=snapshot.snapshot_id,
             release_policy=release_policy,
         )
+        return build_mes_dispatch_priority_queue(
+            planning_run=planning_run,
+            master_data_version=master_data,
+            release_workbench=release_workbench,
+            authorizations=release_authorizations,
+            execution_events=execution_events,
+            evaluated_at=evaluated_at,
+        )
+
+    @app.get("/planner/workbench/dispatch-priority/runs/{run_id}/workbench")
+    def planner_workbench_dispatch_priority(
+        run_id: str,
+        evaluated_at: datetime,
+        operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = True,
+        operational_state_snapshot_id: str | None = None,
+    ):
+        endpoint = f"/planner/workbench/dispatch-priority/runs/{run_id}/workbench"
+        payload = _mes_dispatch_priority_payload(
+            endpoint=endpoint,
+            run_id=run_id,
+            evaluated_at=evaluated_at,
+            operational_state_max_age_minutes=operational_state_max_age_minutes,
+            use_latest_operational_state=use_latest_operational_state,
+            operational_state_snapshot_id=operational_state_snapshot_id,
+        )
+        if isinstance(payload, JSONResponse):
+            return payload
         return {
             "Endpoint": endpoint,
             "StatusCode": 200,
-            "Data": build_mes_dispatch_priority_queue(
-                planning_run=planning_run,
-                master_data_version=master_data,
-                release_workbench=release_workbench,
-                authorizations=release_authorizations,
-                execution_events=execution_events,
-                evaluated_at=evaluated_at,
-            ),
+            "Data": payload,
+        }
+
+    @app.get("/planner/workbench/mes/dispatch-suggestions/runs/{run_id}")
+    def planner_workbench_mes_dispatch_suggestions(
+        run_id: str,
+        evaluated_at: datetime,
+        operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = True,
+        operational_state_snapshot_id: str | None = None,
+    ):
+        endpoint = f"/planner/workbench/mes/dispatch-suggestions/runs/{run_id}"
+        payload = _mes_dispatch_priority_payload(
+            endpoint=endpoint,
+            run_id=run_id,
+            evaluated_at=evaluated_at,
+            operational_state_max_age_minutes=operational_state_max_age_minutes,
+            use_latest_operational_state=use_latest_operational_state,
+            operational_state_snapshot_id=operational_state_snapshot_id,
+        )
+        if isinstance(payload, JSONResponse):
+            return payload
+        planning_run = planning_runs[str(run_id)]
+        package = build_mes_dispatch_suggestion_package(
+            dispatch_workbench=payload,
+            schedule_fingerprint=str(planning_run.get("ScheduleFingerprint") or ""),
+            generated_at=evaluated_at,
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"DispatchSuggestionPackage": package},
+        }
+
+    @app.post("/planner/workbench/mes/dispatch-suggestions/runs/{run_id}/issue")
+    def planner_workbench_mes_dispatch_suggestions_issue(
+        run_id: str,
+        evaluated_at: datetime,
+        issued_by: str = "planner-1",
+        operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = True,
+        operational_state_snapshot_id: str | None = None,
+    ):
+        endpoint = f"/planner/workbench/mes/dispatch-suggestions/runs/{run_id}/issue"
+        payload = _mes_dispatch_priority_payload(
+            endpoint=endpoint,
+            run_id=run_id,
+            evaluated_at=evaluated_at,
+            operational_state_max_age_minutes=operational_state_max_age_minutes,
+            use_latest_operational_state=use_latest_operational_state,
+            operational_state_snapshot_id=operational_state_snapshot_id,
+        )
+        if isinstance(payload, JSONResponse):
+            return payload
+        planning_run = planning_runs[str(run_id)]
+        package = build_mes_dispatch_suggestion_package(
+            dispatch_workbench=payload,
+            schedule_fingerprint=str(planning_run.get("ScheduleFingerprint") or ""),
+            generated_at=evaluated_at,
+        )
+        contract = find_integration_contract("MES-OUTBOUND-V1")
+        assert contract is not None
+        message = {
+            "MessageID": package["PackageID"],
+            "MessageType": "DispatchQueueIssued",
+            "SourceSystem": "SDBR",
+            "OccurredAt": evaluated_at.isoformat(),
+            "Payload": {
+                "IssuedBy": issued_by,
+                "DispatchSuggestionPackage": package,
+            },
+        }
+        validation = validate_integration_message(
+            contract=contract,
+            message=message,
+            existing_messages=integration_messages,
+            received_at=datetime.now(timezone.utc),
+        )
+        if validation["Status"] in {"Accepted", "Rejected"}:
+            integration_messages.append(
+                integration_message_record(
+                    contract=contract,
+                    message=message,
+                    validation=validation,
+                )
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "Status": "MockDispatchSuggestionIssued",
+                "DispatchSuggestionPackage": package,
+                "IntegrationMessage": validation,
+            },
         }
 
     @app.get("/planner/workbench/release-authorizations/{authorization_id}/dispatch-package")

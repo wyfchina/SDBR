@@ -391,8 +391,8 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             ),
             wip_limits=import_wip_limits_from_rows(
                 [
-                    WipLimitImportRow("TST-WC-DRUM", 2, 5),
-                    WipLimitImportRow("TST-WC-PAINT", 1, 6),
+                    WipLimitImportRow("TST_WC_DRUM", 2, 5),
+                    WipLimitImportRow("TST_WC_PAINT", 1, 6),
                     WipLimitImportRow("TST-SYSTEM", 8, 18),
                 ]
             ),
@@ -410,8 +410,8 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             ),
             wip_limits=import_wip_limits_from_rows(
                 [
-                    WipLimitImportRow("TST-WC-DRUM", 2, 5),
-                    WipLimitImportRow("TST-WC-PAINT", 1, 6),
+                    WipLimitImportRow("TST_WC_DRUM", 2, 5),
+                    WipLimitImportRow("TST_WC_PAINT", 1, 6),
                     WipLimitImportRow("TST-SYSTEM", 8, 18),
                 ]
             ),
@@ -429,8 +429,8 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             ),
             wip_limits=import_wip_limits_from_rows(
                 [
-                    WipLimitImportRow("TST-WC-DRUM", 5, 5),
-                    WipLimitImportRow("TST-WC-PAINT", 6, 6),
+                    WipLimitImportRow("TST_WC_DRUM", 5, 5),
+                    WipLimitImportRow("TST_WC_PAINT", 6, 6),
                     WipLimitImportRow("TST-SYSTEM", 18, 18),
                 ]
             ),
@@ -963,12 +963,12 @@ def _baseline_resources() -> list[Resource]:
         date(2026, 7, 3),
     ]
     resource_specs = [
-        ("TST-WC-PREP", "测试-备料工作中心", False, 540),
-        ("TST-WC-DRUM", "测试-约束机加工", True, 420),
-        ("TST-WC-ALT-DRUM", "测试-备用机加工", False, 360),
-        ("TST-WC-PAINT", "测试-表面处理", False, 480),
-        ("TST-WC-ASSY", "测试-总装", False, 600),
-        ("TST-WC-PACK", "测试-包装", False, 480),
+        ("TST_WC_PREP", "测试-备料工作中心", False, 540),
+        ("TST_WC_DRUM", "测试-约束机加工", True, 420),
+        ("TST_WC_ALT_DRUM", "测试-备用机加工", False, 360),
+        ("TST_WC_PAINT", "测试-表面处理", False, 480),
+        ("TST_WC_ASSY", "测试-总装", False, 600),
+        ("TST_WC_PACK", "测试-包装", False, 480),
     ]
     rows = [
         ResourceCapacityImportRow(resource_id, name, is_constraint, workday, capacity)
@@ -980,22 +980,22 @@ def _baseline_resources() -> list[Resource]:
 
 def _baseline_routings() -> list[Routing]:
     rows = [
-        RoutingImportRow("TST-FG-A", "PRIMARY", True, "PREP", "TST-WC-PREP", 35, 10),
-        RoutingImportRow("TST-FG-A", "PRIMARY", True, "DRUM", "TST-WC-DRUM", 95, 20, ["TST-WC-ALT-DRUM"]),
-        RoutingImportRow("TST-FG-A", "PRIMARY", True, "ASSY", "TST-WC-ASSY", 60, 30),
-        RoutingImportRow("TST-FG-A", "PRIMARY", True, "PACK", "TST-WC-PACK", 25, 40),
-        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PREP", "TST-WC-PREP", 25, 10),
-        RoutingImportRow("TST-FG-B", "PRIMARY", True, "DRUM", "TST-WC-DRUM", 120, 20, ["TST-WC-ALT-DRUM"]),
-        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PAINT", "TST-WC-PAINT", 70, 30),
-        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PACK", "TST-WC-PACK", 30, 40),
-        RoutingImportRow("TST-FG-C", "PRIMARY", True, "PREP", "TST-WC-PREP", 45, 10),
-        RoutingImportRow("TST-FG-C", "PRIMARY", True, "DRUM", "TST-WC-DRUM", 80, 20, ["TST-WC-ALT-DRUM"]),
-        RoutingImportRow("TST-FG-C", "PRIMARY", True, "ASSY", "TST-WC-ASSY", 90, 30),
-        RoutingImportRow("TST-FG-C", "PRIMARY", True, "PACK", "TST-WC-PACK", 35, 40),
-        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PREP", "TST-WC-PREP", 25, 10),
-        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "DRUM", "TST-WC-ALT-DRUM", 145, 20),
-        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PAINT", "TST-WC-PAINT", 65, 30),
-        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PACK", "TST-WC-PACK", 30, 40),
+        RoutingImportRow("TST-FG-A", "PRIMARY", True, "PREP", "TST_WC_PREP", 35, 10),
+        RoutingImportRow("TST-FG-A", "PRIMARY", True, "DRUM", "TST_WC_DRUM", 95, 20, ["TST_WC_ALT_DRUM"]),
+        RoutingImportRow("TST-FG-A", "PRIMARY", True, "ASSY", "TST_WC_ASSY", 60, 30),
+        RoutingImportRow("TST-FG-A", "PRIMARY", True, "PACK", "TST_WC_PACK", 25, 40),
+        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PREP", "TST_WC_PREP", 25, 10),
+        RoutingImportRow("TST-FG-B", "PRIMARY", True, "DRUM", "TST_WC_DRUM", 120, 20, ["TST_WC_ALT_DRUM"]),
+        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PAINT", "TST_WC_PAINT", 70, 30),
+        RoutingImportRow("TST-FG-B", "PRIMARY", True, "PACK", "TST_WC_PACK", 30, 40),
+        RoutingImportRow("TST-FG-C", "PRIMARY", True, "PREP", "TST_WC_PREP", 45, 10),
+        RoutingImportRow("TST-FG-C", "PRIMARY", True, "DRUM", "TST_WC_DRUM", 80, 20, ["TST_WC_ALT_DRUM"]),
+        RoutingImportRow("TST-FG-C", "PRIMARY", True, "ASSY", "TST_WC_ASSY", 90, 30),
+        RoutingImportRow("TST-FG-C", "PRIMARY", True, "PACK", "TST_WC_PACK", 35, 40),
+        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PREP", "TST_WC_PREP", 25, 10),
+        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "DRUM", "TST_WC_ALT_DRUM", 145, 20),
+        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PAINT", "TST_WC_PAINT", 65, 30),
+        RoutingImportRow("TST-FG-B", "ALT-PAINT-LATE", False, "PACK", "TST_WC_PACK", 30, 40),
     ]
     return import_routings_from_operation_rows(rows)
 

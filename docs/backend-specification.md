@@ -175,7 +175,7 @@ ERP / 主数据源
 | `BE-REL-008` | 偏差触发重排请求并支持人工决策 | `[VERIFIED]` | `C` `replanning.py`; `A` replan endpoints; `T` `tests/test_replanning.py`, `tests/test_api.py` | 已满足 |
 | `BE-REL-009` | 时间缓冲红黄绿计算 | `[VERIFIED]` | `C` `planner_view.py`, `work_order_release_view.py`; `T` `tests/test_planner_view.py`, `tests/test_api.py` | Planning Run 释放管理已按冻结释放策略比例计算红黄绿；Buffer Board 更复杂优先级仍由 BE-REL-011 跟踪 |
 | `BE-REL-010` | 两阶段五区域 Buffer Board 聚合 | `[VERIFIED]` | `C` `sdbr/buffer_execution_view.py`; `A` Buffer Board workbench/detail endpoints; `T` `tests/test_api.py` | 已按 Planning Run 聚合授权、冻结计划和执行事件；更复杂的优先级由 BE-REL-011 承担 |
-| `BE-REL-011` | 配置化执行优先级矩阵 | `[PARTIAL]` | `C` `sdbr/dispatch_priority.py`; `A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`; `T` `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版 MES 派工优先级已按“已授权释放、红黄绿、渗透率、约束资源计划开始、客户交期”输出资源/工作中心 + 工序级队列；MTS、Min-Max、MTO 独立策略及 Stockout/Critical/OTOG 等权重仍后续配置化 |
+| `BE-REL-011` | 配置化执行优先级矩阵 | `[PARTIAL]` | `C` `sdbr/dispatch_priority.py`; `A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`, `/planner/workbench/mes/dispatch-suggestions/runs/{run_id}`; `T` `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版 MES 派工优先级已按“已授权释放、红黄绿、渗透率、约束资源计划开始、客户交期”输出资源/工作中心 + 工序级队列和 Mock 派工建议包；MTS、Min-Max、MTO 独立策略及 Stockout/Critical/OTOG 等权重仍后续配置化 |
 | `BE-REL-012` | 版本化 DBR 与释放策略中心 | `[VERIFIED]` | `C/A` `/dbr/release-policies` 列表/创建/查询、Planning Run 冻结 `ReleasePolicyVersionID` 和策略快照、释放推荐/门控/授权证据消费策略、管理后台配置摘要；`T` `tests/test_api.py` | 已实现绳长、缓冲比例、策略 WIP 上限、物料检查窗口和稳定性阈值驱动当前释放算法；后续只做业务校准、编辑 UI 和审批流程 |
 
 ## 8. 计划输出、负载与方案比较
@@ -212,7 +212,7 @@ ERP / 主数据源
 | `BE-INT-002` | ERP 出站计划与释放回写 | `[PARTIAL]` | `C` `sdbr/integration_contracts.py`; `A` `/planner/workbench/integrations/contracts`, `/planner/workbench/integrations/mock-api/status`, `/planner/workbench/integrations/messages`; `T` `tests/test_integration_contracts.py` | 第一版采用 Mock API，不真实回写 ERP；已定义确认计划、建议释放、实际释放和异常状态的出站契约及确认/重放边界；未来通过可替换 Adapter 接入直连 ERP 或 UNS Topic；真实 ERP 回写连接器、投递队列和回执对账仍未实现 |
 | `BE-INT-003` | ERP 业务所有权 | `[EXTERNAL]` | ERP 是权威来源 | 本系统不替代 ERP 主数据、采购和库存账务 |
 | `BE-INT-004` | MES 入站执行事件连接器 | `[PARTIAL]` | `C/A` 通用执行事件接口、`sdbr/integration_contracts.py` MES 入站契约和消息测试桩；`T` `tests/test_integration_contracts.py`, `tests/test_shop_floor_execution.py` | 第一版采用 Mock API 接收测试/验收事件；已补幂等键、来源系统、字段校验、死信、重放契约，以及 DispatchAccepted、StartedOperation、CompletedOperation、DispatchRejected、ExceptionReported 第一版回执类型；真实 MES 适配、重放执行和对账仍未实现 |
-| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` dispatch package、`sdbr/dispatch_priority.py`、`sdbr/integration_contracts.py` MES 出站契约；`A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`, `/planner/workbench/integrations/mock-api/status`; `T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py`, `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版只生成 MES 派工建议，不真实下发 MES；已定义版本化派工/释放消息、资源/工作中心 + 工序级派工队列、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
+| `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` dispatch package、`sdbr/dispatch_priority.py`、`sdbr/integration_contracts.py` MES 出站契约；`A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`, `/planner/workbench/mes/dispatch-suggestions/runs/{run_id}`, `/planner/workbench/mes/dispatch-suggestions/runs/{run_id}/issue`, `/planner/workbench/integrations/mock-api/status`; `T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py`, `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版只生成 MES 派工建议，不真实下发 MES；已定义版本化派工/释放消息、资源/工作中心 + 工序级派工队列、Mock issue 台账、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
 | `BE-INT-006` | MES/SCADA 业务所有权 | `[EXTERNAL]` | MES/SCADA 负责现场采集和控制 | 本系统消费状态，不直接控制设备 |
 | `BE-INT-007` | 通用集成监控 | `[PARTIAL]` | `C/A` 集成消息台账、死信查询和重放请求接口；`T` `tests/test_integration_contracts.py` | 已提供契约层错误队列和人工重放占位；连接状态、延迟、最后成功时间、自动重试和外部系统健康检查仍未实现 |
 
@@ -278,12 +278,18 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 
 ## 11. Simio 验证
 
+Simio 集成工作约束：
+
+- 任何 Simio 模型生成、XML 写入、`.spfx` 修改或 headless 调用过程，都必须记录到仓库文档，作为后续沉淀 Codex Skill 的素材。
+- 遇到 Simio API、XML、Server Connector、headless 执行或模型结构不确定时，必须优先查阅 `model/` 目录，首选 `model/Simio API Reference Guide.pdf`，其次参考 `model/Simio Reference Guide.pdf`、`model/Simio Server Connector Reference.pdf` 和现有 `.spfx` / XML 原型。
+- Simio 模板生成应保留可重复验证脚本或测试，避免只依赖人工打开模型检查。
+
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
 | --- | --- | --- | --- | --- |
-| `BE-SIM-001` | 导出求解问题或计划到 Simio 契约 | `[PAUSED]` | `D` `SimioValidationAdapter` 和 `/simio/export` 仅提供基础导出 | 项目恢复后冻结交换模型并完成契约测试 |
-| `BE-SIM-002` | 提交仿真任务并跟踪生命周期 | `[PAUSED]` | 无 | 定义提交、运行、超时、取消和失败恢复 |
-| `BE-SIM-003` | 接收验证结果、风险与调整建议 | `[PAUSED]` | 无 | 定义可行性、吞吐、队列、在制品和瓶颈反馈 |
-| `BE-SIM-004` | 可选验证路径 | `[PARTIAL]` | `D` 产品路径和适配器边界已定义 | 实现“直接输出”和“经 Simio 验证后输出”的统一 Planning Run 状态流 |
+| `BE-SIM-001` | 导出求解问题或计划到 Simio 契约 | `[PARTIAL]` | `C` `sdbr/simio_validation.py`, `SimioValidationAdapter`; `A` `/simio/export`, `/planner/workbench/simio/validation-runs`, `/planner/workbench/simio/templates`; `D` 默认模板源 `model/templates/simio/SDBR_Example_Base.xml`; `T` `tests/test_simio_model_template.py`, `tests/test_simio_validation.py` | 已从内部计划输出包和注册模板生成派生 `.spfx` Simio 验证包，写入 `Resources`、`Routings`、`ManufacturingOrders`，保留下划线资源 ID、固定工时、`5DayWeek` 和计划指纹；模板补充 SDBR 最小 Process/输出链路承载点，用于工单开始、工序开始/结束、工单完成、WIP、队列和运行汇总；`model/Simple_DBR_XML/SDBR_Example.xml` 作为可审阅源副本，`model/SDBR_Example.spfx` 仅保留为历史/调试包 |
+| `BE-SIM-002` | 提交仿真任务并跟踪生命周期 | `[PARTIAL]` | `C` `create_simio_validation_run`, `run_simio_validation_package`, Mock Runner、本机 Local Headless helper、RLM 检测/启动、结果模型保存；`A` `POST/GET /planner/workbench/simio/validation-runs`; `T` `tests/test_simio_validation.py`; `R` 2026-06-23 XML 源模板派生 `.spfx` 后本机 `runner_mode=local` 调用 Simio `Plan.RunPlan` 成功 | 第一版已支持 Mock Runner 稳定验收和本机 Local Headless `RunPlan`，并保存 RunPlan 后的结果模型；真实运行进度、超时/取消和并发 runner 队列仍未实现 |
+| `BE-SIM-003` | 接收验证结果、风险与调整建议 | `[PARTIAL]` | `C` `summarize_simio_validation`、结果模型解析、`FeasibilityConclusion`、吞吐/队列/WIP/资源利用率结构、`Interactive_Results.stats` 解析、`TableStates.sqlite` 订单输出状态解析；`A` `/planner/workbench/schedule-results/runs/{run_id}/simio-validation`, schedule governance read model; `T` `tests/test_simio_validation.py`; `R` Local Headless 返回 `Infeasible`、系统 WIP、资源饥饿/计划利用率、Project/Model 名称和 RLM 状态 | 已接收并展示 Mock/Local 验证结果、验证包、runner、RLM 状态、可行性结论、吞吐、队列/WIP/资源利用率数值摘要和问题数；解析层支持从 SDBR 输出字段读取 ActualStart/ActualEnd、队列等待、WIP 快照和运行汇总；专用输入队列曲线、调整建议和更细资源状态仍待 Simio 报表或日志深度解码 |
+| `BE-SIM-004` | 可选验证路径 | `[PARTIAL]` | `A` 排程结果治理区 Simio 验证摘要；`T` `tests/test_simio_validation.py`, `tests/test_api.py` | 已实现“未验证/已验证/不可用/可行/可行但有警告/不可行”摘要，不阻止计划发布；启用“必须通过 Simio 才能发布”的策略门控仍待业务确认 |
 
 ## 12. BI 与流程挖掘
 
@@ -342,7 +348,8 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 | P1 | `BE-OPS-005` 至 `BE-OPS-009` | 上线前安全、运维和接口治理 |
 | P2 | `BE-INT-*`, `BE-BI-*` | ERP/MES 接入和管理分析阶段 |
 | 当前迁移 | `BE-SOLVER-009` | CP-SAT 成为唯一活动求解器并完成 Gurobi 约束等价迁移 |
-| 暂停 | `BE-SOLVER-002`, `BE-SIM-*` | Gurobi 暂停新执行；Simio 按项目决定延后 |
+| 暂停 | `BE-SOLVER-002` | Gurobi 暂停新执行；Simio Portal、Server Connector、Experiment 批量运行仍按项目决定延后 |
+| 可选验证 | `BE-SIM-*` | Simio Mock Runner 与本机 Local Headless 验证作为计划完成后的可选验证能力，不参与 CP-SAT 求解 |
 
 ### 15.3 推荐开发顺序
 
@@ -534,6 +541,15 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 - 已知限制：真实 MES 投递、外部确认对账、UNS Topic 发布、直连 Adapter、投递重试队列和 UI 独立派工页面仍未实现；当前端点是内部稳定 read model/API 契约
 - 用户确认：待确认
 
+### BE-REL-011 / BE-INT-005 MES 派工建议包验收记录
+
+- 状态变更：`BE-REL-011`、`BE-INT-005` 保持 `[PARTIAL]`，补充 Mock API 派工建议包和 issue 台账证据。
+- 日期：2026-06-24
+- 实现范围：派工队列继续由最新释放门控、授权记录、执行事件和缓冲渗透率驱动；正式队列只包含已授权且最新门控通过的工序；候选/预警区显示未授权、物料/WIP 阻塞、缺少现场到达确认和异常阻塞等原因。新增 MES 派工建议包 read model 与 Mock issue 动作，输出 `DispatchQueueIssued` canonical payload，并写入集成消息台账。
+- 业务边界：第一版只生成派工建议，不真实控制 MES；Mock API payload 将作为未来 Direct MES Adapter 或 UNS Topic 的稳定输入结构。
+- 已知限制：真实 MES ACK、自动重发、队列撤销、调度员审批流和工厂级自定义优先级矩阵仍待后续开发。
+- 用户确认：待确认
+
 ### BE-DATA-014 案例验收体系验收记录
 
 - 状态变更：保持 `[VERIFIED]`，补充案例验收包、预期/实际差异、人工确认/驳回和持久化证据
@@ -641,6 +657,62 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 - 业务验收：第一版外部接口采用 Mock API；MES 只生成资源/工作中心 + 工序级派工建议，不真实下发；本系统做轻量 MRP，但不替代 ERP 库存账务；默认排程偏好为交期优先、流动时间第二、瓶颈/备用资源保护第三
 - 已知限制：完整 BOM 展开、多级净需求、替代料、批次/效期分配、真实 ERP/MES/UNS Adapter、自动投递、回执对账和生产级重试调度仍未实现
 
+### BE-DATA-012 用户确认的多级 BOM/MRP、替代料和批次规则原则
+
+- 日期：2026-06-22
+- 状态变更：保持 `[PARTIAL]`，补充后续完整 MRP/BOM 能力的业务原则，不误报为已实现
+- 多级 BOM：排程只消费冻结后的计划 BOM；按工单需求逐层展开，计算自制件，以及有工艺路线和产能资源约束的工单。
+- 时间维度：物料需求必须按需要时间判断；时间窗口原则上在 1 个月内可调，具体调整方式后续进入策略配置。
+- 净需求：净需求 = 需求 - 可用库存 - 已分配库存 - 有效在途。
+- 已分配库存：已承诺给其他工单的库存不能重复使用。
+- 在途物料：只有到达时间早于物料检查窗口，才可视为可用。
+- 替代料：需要定义替代优先级、替代比例、是否允许混用；实现留待后续开发。
+- 替代约束：留待后续开发。
+- 批次规则：留待后续开发。
+- 拆批：系统要允许物料定义最小批量、是否允许跨资源、是否允许跨天；具体排程和物料分配规则后续开发。
+- 合批：留待后续开发。
+- 追溯：留待后续开发。
+- ERP 边界：库存账、采购订单和批次状态以 ERP 为权威；本系统负责计划分配和可行性判断，不替代 ERP 库存账务。
+
+### BE-SIM-001 / BE-SIM-002 / BE-SIM-003 / BE-SIM-004 XML 模板与结果回传验收记录
+
+- 状态变更：保持 `[PARTIAL]`，补充 XML 模板源、Local Headless 结果模型、Simio 统计解析和结果回传证据。
+- 日期：2026-06-23
+- 实现证据：`sdbr/simio_validation.py` 将默认模板源切换为 `model/Simple_DBR_XML/SDBR_Example.xml`，从 XML 导出中的 `<Files>` 解码生成派生 `.spfx`；生成包保留模板全量 `Resources` 表并合并 APS 占用资源，避免 Simio 资源对象初始化时找不到表行；生成包记录 `TimeMapping`，把 APS 绝对时间平移到 Simio `RunSetup` 窗口；`tools/simio_headless_helper/Program.cs` 支持 `--source` 和 `--output`，RunPlan 后保存结果模型，选择主模型 `Model` 而非首个 `ModelEntity`，并回传 `AvailableModels`、`SelectedModelReason`、`PostRunLogSummary`；SDBR 可解析 `Results/Model/TableStates.sqlite` 的 `PlanValues` 与 `InteractiveValues`，将 Simio 行索引外键映射回 `ManufacturingOrders.OrderId` 和 `Routings.RoutingKey`，也可解析 `Interactive_Results.stats`，并在 stats 缺失时从 Simio post-run `ResourceStateLog` / `ResourceCapacityLog` 聚合资源利用率。
+- 测试证据：`pytest tests/test_simio_validation.py -q --basetemp .tmp/pytest-simio-zero-aux -p no:cacheprovider`，8 passed，1 warning；`python -m compileall -q sdbr` 通过；包生成检查确认 `TimeMapping` 将 APS `2026-06-23T06:00:00` 映射到 Simio `2019-12-02T08:00:00`，生成 `ManufacturingOrders.ReleaseDate=2019-12-02T08:00:00.0000000`，`Resources.xml` 包含模板全量资源，`Routings.ProcessTime` / `SetupTime` 保留 `Units="Minutes"`，并在验证包中将模板默认 `.1 Hours` 辅助任务归零。用户重启 license 后，本机 `runner_mode=local` 返回 `Status=Completed`、`FeasibilityConclusion=FeasibleWithWarnings`、`Throughput=Parsed`、`CompletedOrderCount=1`、`UnfinishedOrderCount=0`、`OutputSource=Results/Model/TableStates.sqlite:PlanValues`、`ScheduleAdherence=Parsed`，其中 `TST_WC_DRUM` 与 CP-SAT 对齐为 `08:00-09:00`、busy `60` 分钟、利用率约 `0.5682%`，`TST_WC_PACK` 对齐为 `09:00-09:30`、busy `30` 分钟、利用率约 `0.2841%`。
+- 业务验收：Simio 验证现在以本系统生成的 XML 模板为来源，而不是用户示例 `.spfx`；验证包能够保持模型资源、APS 路线/工单、时间轴和分钟级工时一致；SDBR 的统一回传结构包含 `FeasibilityConclusion`、`Throughput`、`QueueMetrics`、`WipMetrics`、`ResourceUtilization`、`ScheduleAdherence`、`ResultCoverage`、`RunnerDiagnostics`。其中吞吐、队列等待占位、WIP 快照、资源利用率和计划偏差已能从 headless 结果模型回传。
+- 已知限制：当前专用输入队列长度/等待曲线和时间加权系统 WIP 曲线仍未稳定获得；`Interactive_Results.stats` 在当前保存包中缺失时，系统提供 `PlanValues` 吞吐/计划偏差、post-run 资源利用率和日志覆盖证据；Simio Desktop 无设计错误校验仍需作为后续模板质量门。
+
+### BE-SIM-001 / BE-SIM-002 Simio 模板注册表验收记录
+
+- 状态变更：保持 `[PARTIAL]`，新增模板固定目录、模板注册表、活动模板和验证运行模板冻结。
+- 实现范围：Simio 验证模板默认从固定产品目录 `model/templates/simio/SDBR_Example_Base.xml` 读取；系统提供模板注册表和活动模板解析，验证请求可显式指定 `TemplateID`，未指定时使用当前活动模板。每次 `SimioValidationRun` 冻结 `TemplateID`、`TemplateVersion`、`TemplatePath`、模板源类型、时间单位策略、Desktop 校验状态和生成/结果模型路径，禁止再依赖“最近生成模型”或临时路径推断。
+- 验收标准：`GET /planner/workbench/simio/templates` 返回默认模板和活动模板；`POST /planner/workbench/simio/validation-runs` 可使用默认模板或指定模板；未知模板、未生效模板或模板文件缺失返回结构化错误；生成验证包记录模板版本和分钟单位策略。
+- 已知限制：第一版模板注册表是本系统内部配置对象，尚未做复杂 UI、模板上传、审批流或 Simio Desktop 自动设计校验；Desktop 设计校验状态先作为模板元数据记录。
+- 用户确认：待确认
+
+### BE-SIM-001 / BE-SIM-003 SDBR Process 最小反馈链验收记录
+
+- 日期：2026-06-23
+- 状态变更：保持 `[PARTIAL]`，补充模型侧 SDBR Process / Assignments 输出链路和解析证据。
+- 实现证据：`model/Simple_DBR_XML/SDBR_Example.xml` 增加 `SDBR_MfgStart`、`SDBR_OperationStart`、`SDBR_OperationEnd`、`SDBR_MfgEnd`、`SDBR_RunEndSummary` Process 文件引用；`SchedServer` 的 `Produce` 任务挂接 `ProducedMaterialAddOnProcess=SDBR_MfgEnd`；`ManufacturingOrdersOutput` 增加 `ActualStartTime`、`ActualEndTime`、`QueueEnteredTime`、`QueueWaitMinutes`、`WipAfterStart`、`WipAfterEnd`、`EventStatus`；新增 `SDBRRunSummary` 输出表；`sdbr/simio_validation.py` 将这些输出字段映射回 `ScheduleAdherence`、`QueueMetrics` 和 `WipMetrics`。
+- 测试证据：`pytest tests/test_simio_model_template.py tests/test_simio_validation.py -q --basetemp .tmp/pytest-simio-process-chain -p no:cacheprovider`，13 passed，1 warning；`python -m compileall -q sdbr` 通过。
+- 运行证据：本机 `runner_mode=local` smoke 使用 `.tmp/simio-process-smoke/RUN-SIMIO/SDBR_Example_RUN-SIMIO.spfx` 运行 `Plan.RunPlan`，返回 `Status=Completed`、`FeasibilityConclusion=FeasibleWithWarnings`、`Throughput.Status=Parsed`、`CompletedOrderCount=1`、`UnfinishedOrderCount=0`、`QueueMetrics.Status=ParsedFromSDBROutputRows`、`WipMetrics.Status=ParsedFromSDBROutputRows`。
+- 业务验收：SDBR 现在不再只依赖视觉上空的 `ManufacturingOrdersOutput.xml`，而是明确消费 Simio Process/Assignments 写入到 `TableStates.sqlite:PlanValues` 的模型侧业务事实；第一版可回传工序实际开始/结束、工单完成证据、队列等待占位、WIP 快照和运行汇总承载点。
+- 已知限制：当前 `QueueWaitMinutes` 是保守输出占位，专用输入队列长度和等待曲线仍需 queue enter/exit 事件或 Simio 报表/日志映射；WIP 是工序开始/结束快照，尚非时间加权 WIP 曲线；Simio Desktop 无设计错误校验仍需作为后续模板质量门。
+- 用户确认：待确认
+
+### BE-SOLVER-012 冻结期与可协调区稳定性原则
+
+- 日期：2026-06-22
+- 状态变更：保持 `[PARTIAL]`，补充稳定性分区原则
+- 当前已实现：Planning Run 和重排 payload 已有 `FreezeWindowMinutes`；重排执行会把上一版计划中落入“重排起点 + 冻结窗口”的工序固定为硬约束，同时保留锁定工单的固定安排。
+- 当前默认：如果未显式设置，`FreezeWindowMinutes=0`，即系统不自动冻结未来时间段；只有人工锁定工单会被固定。
+- 建议第一版默认：冻结期可先设为一个班次或 24 小时，适用于“现场已经准备或即将开工，不希望算法再移动”的计划段；实际分钟数应由计划员在重排时输入或由策略中心配置。
+- 可协调区：尚未形成独立实现。建议定义为冻结期之后、完整重排区之前的一段时间，在该区域内允许调整顺序或资源，但应增加稳定性惩罚、限制跨天移动或要求人工确认。
+- 后续配置项：`FreezeWindowMinutes`、`NegotiableWindowMinutes`、可协调区移动容忍分钟、是否允许换资源、是否允许跨天、是否需要人工确认。
+- 后续验收：重排差异应标识“冻结保持”“可协调调整”“完全重排调整”，用于计划员判断变更影响。
+
 ## 17. 当前验证基线
 
 截至 2026-06-21：
@@ -649,7 +721,7 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 - 主要部分实现：资源与日历配置、时间缓冲进入优化模型、Buffer Board、执行优先级、负载/甘特、UI 聚合 API、MES 事件集成、生产运维、CP-SAT 换型/并行资源/效率/时间窗/策略。
 - 主要未开始：合批拆批、ERP/MES 真实连接器、生产数据库、企业身份、完整可观测性和流程拓扑挖掘。
 - 当前开发：OR-Tools CP-SAT 已成为唯一活动求解器；高级排程 P1 闭环已部分完成，剩余为多机台换型、班组人数、固定偏移、版本化策略中心和批次规则。
-- 已暂停：Gurobi 新计划执行、Simio 实际仿真验证。
+- 已暂停：Gurobi 新计划执行；Simio Portal/Server Connector、Experiment 配置仍未启用。Simio Mock Runner 与本机 Local Headless `RunPlan` 已作为可选验证能力启用，并能从 XML 模板源生成派生 `.spfx`、保存结果模型和回传部分可行性指标；二进制日志深度解码仍未完成。
 - 外部边界：ERP 账务与主数据所有权、MES/SCADA 现场操作与设备控制、BI 报表设计器。
 - 完整自动化测试：2026-06-21 最近执行 `pytest -q --basetemp .tmp/pytest-full-v1-boundary-final -p no:cacheprovider`，结果为 `328 passed, 1 warning`。警告来自 Starlette TestClient/httpx 弃用提示，不影响测试通过。
 - 测试/生产隔离基线：新增 `BE-OPS-011` 环境元数据与独立 SQLite 路径，新增 `BE-DATA-014` 基准工厂、场景包和测试库重建。
@@ -662,6 +734,20 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.47 | 2026-06-24 | 修正 Simio 验证包时间语义：生成 `Routings.ProcessTime` / `SetupTime` 时保留 `Units="Minutes"`，验证包归零模板默认 `.1 Hours` 辅助任务；本机 Local Headless 重跑与 CP-SAT 60/30 分钟工序对齐，并回传吞吐、队列等待占位、WIP 快照和资源利用率 |
+| 2.48 | 2026-06-24 | 增加 Simio 模板注册表与固定模板目录：默认模板迁移到 `model/templates/simio/SDBR_Example_Base.xml`，验证请求支持 `TemplateID`，验证包冻结模板版本、路径、源类型和时间单位策略 |
+| 2.49 | 2026-06-24 | 在缓冲执行页和 Mock API 补 MES 派工建议包：正式队列、候选预警、现场状态、建议原因、Mock issue 台账与未来 Direct/UNS canonical payload 边界 |
+| 2.46 | 2026-06-23 | 调整 Simio 能力状态：管理后台和 Planning Run 能力接口显示 Simio 为计划完成后的可选验证能力；排程结果治理/read model 支撑独立仿真结果输出页，展示可行性、吞吐、队列/WIP、资源利用率、计划偏差和问题明细 |
+| 2.44 | 2026-06-23 | 研究并修正 Simio 模型侧输出读取：`Plan.RunPlan` 的 `ManufacturingOrdersOutput` 写入 `TableStates.sqlite:PlanValues`，XML/InteractiveValues 可为空；SDBR 优先解析 PlanValues 并映射外键，同时记录 `Routings.ProcessTime` 时间单位转换缺口 |
+| 2.45 | 2026-06-23 | 补齐 Simio SDBR 最小 Process/Assignments 反馈链：模板增加工单开始、工序开始/结束、工单完成、WIP、队列和运行汇总承载点；解析层从输出行回传 Actual、Queue、WIP 指标 |
+| 2.43 | 2026-06-23 | 用户重启 Simio license 后完成 Local Headless 重测：time-mapped XML 派生包 `RunPlan` 返回 `Completed / FeasibleWithWarnings`，资源利用率从 post-run 日志回传；队列、WIP 和订单完成输出仍保持部分覆盖 |
+| 2.42 | 2026-06-23 | 修正 Simio Local Headless 闭环：helper 选择主模型 `Model` 而非 `ModelEntity`，验证包合并模板全量资源表，APS 时间平移到 Simio RunSetup 窗口，并从 post-run `ResourceStateLog`/`ResourceCapacityLog` 聚合资源利用率；本机最终重跑仍受 Simio API 许可状态阻断 |
+| 2.41 | 2026-06-23 | Simio 结果回传增强：helper 解析 `Interactive_Results.stats`，SDBR 读取 `TableStates.sqlite` 输出状态，回传系统 WIP、资源利用率/饥饿时间、站内内容，并将当前模型验证结论更正为 `Infeasible` |
+| 2.40 | 2026-06-23 | Simio 验证闭环升级：默认模板源切换到 `model/Simple_DBR_XML/SDBR_Example.xml`，生成派生 `.spfx`，Local Headless 保存结果模型，并回传可行性结论、吞吐与部分结果覆盖 |
+| 2.39 | 2026-06-23 | 启用 Simio Local Headless helper：通过 Roslyn 编译 .NET 10 helper，调用 `SimioAPI.SimioProjectFactory.LoadProject` 和 `IPlan.RunPlan`，并接入 `runner_mode=local/auto` |
+| 2.38 | 2026-06-23 | 推进 BE-SIM-001 至 BE-SIM-004：新增 Simio 验证包生成、Mock Runner、RLM 前置检测、验证运行 API 和排程治理摘要；真实 Local Headless runner 仍保持增强路径 |
+| 2.37 | 2026-06-23 | 增加 Simio 集成工作约束：模型生成过程必须记录以便后续形成 Skill；不确定 Simio 集成细节时优先查阅 `model/` 下官方 API/Reference/Server Connector 文档和现有原型 |
+| 2.36 | 2026-06-23 | 推进 BE-SIM-001：补齐第一版 Simio 简单 DBR XML 模板，统一测试工厂资源 ID 下划线命名、固定工时、资源日历绑定和 FG-A/B/C 路由 |
 | 1.0 | 2026-06-19 | 建立完整产品蓝图、能力状态、实现证据、缺口、优先级与审计规则 |
 | 1.1 | 2026-06-19 | 完成 BE-UI-001 数据就绪聚合接口并记录 227 项测试基线 |
 | 1.2 | 2026-06-19 | 完成 BE-UI-002 Planning Run 工作台 read model、能力状态与冻结策略参数，记录 231 项测试基线 |
@@ -691,6 +777,7 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 | 2.32 | 2026-06-22 | 案例验收新增排程结果可打开性状态、不可打开原因、单案例复位和全部案例复位，确保 `TST-CP-*` 案例可重复验收 |
 | 2.33 | 2026-06-22 | 明确运行快照过期只触发“刷新快照并重新评估释放”，不触发重新排程；阻塞原因增加推荐动作和 `RequiresReschedule=false` 证据 |
 | 2.34 | 2026-06-22 | 补齐 Mock 运行快照刷新和 Planning Run 交互式队列处理：释放门控可生成新鲜测试快照后继续授权，Queued 任务可显式领取、计算并完成 |
+| 2.35 | 2026-06-22 | 记录用户确认的多级 BOM/MRP、替代料、拆批和 ERP 边界原则；补充冻结期已实现、可协调区待配置化的稳定性原则 |
 | 2.1 | 2026-06-19 | 新增 BE-DATA-014 与 BE-OPS-011，用于测试/生产隔离、基准测试数据集、场景包和测试库重建能力 |
 | 2.2 | 2026-06-19 | 完成 BE-OPS-011 测试/生产环境隔离与 BE-DATA-014 测试数据重建工具，记录 257 项测试基线 |
 | 2.3 | 2026-06-19 | 明确后台业务闭环 1-4 验收边界：测试数据驱动 Planning Run、计划输出、释放门控对齐及计划确认/发布生命周期 |

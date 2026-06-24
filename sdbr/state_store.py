@@ -46,6 +46,9 @@ class WorkbenchStateStore:
     scheduling_strategy_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     integration_messages: list[dict[str, object]] = field(default_factory=list)
     test_case_acceptance_decisions: list[dict[str, object]] = field(default_factory=list)
+    simio_validation_runs: dict[str, dict[str, object]] = field(default_factory=dict)
+    simio_template_registry: dict[str, dict[str, object]] = field(default_factory=dict)
+    active_simio_template_id: str | None = None
     master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
     audit_events: list[dict[str, object]] = field(default_factory=list)
@@ -117,6 +120,9 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "scheduling_strategy_versions": self.scheduling_strategy_versions,
             "integration_messages": self.integration_messages,
             "test_case_acceptance_decisions": self.test_case_acceptance_decisions,
+            "simio_validation_runs": self.simio_validation_runs,
+            "simio_template_registry": self.simio_template_registry,
+            "active_simio_template_id": self.active_simio_template_id,
             "master_data_versions": self.master_data_versions,
             "planning_runs": self.planning_runs,
             "audit_events": self.audit_events,
@@ -295,6 +301,11 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.test_case_acceptance_decisions.extend(
             payloads.get("test_case_acceptance_decisions", [])
         )
+        self.simio_validation_runs.update(payloads.get("simio_validation_runs", {}))
+        self.simio_template_registry.update(
+            payloads.get("simio_template_registry", {})
+        )
+        self.active_simio_template_id = payloads.get("active_simio_template_id")
         self.master_data_versions.update(payloads.get("master_data_versions", {}))
         self.planning_runs.update(payloads.get("planning_runs", {}))
         self.audit_events.extend(payloads.get("audit_events", []))
@@ -323,6 +334,9 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.scheduling_strategy_versions.clear()
         self.integration_messages.clear()
         self.test_case_acceptance_decisions.clear()
+        self.simio_validation_runs.clear()
+        self.simio_template_registry.clear()
+        self.active_simio_template_id = None
         self.master_data_versions.clear()
         self.planning_runs.clear()
         self.audit_events.clear()
@@ -353,6 +367,8 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "SchedulingStrategyVersions": len(store.scheduling_strategy_versions),
         "IntegrationMessages": len(store.integration_messages),
         "TestCaseAcceptanceDecisions": len(store.test_case_acceptance_decisions),
+        "SimioValidationRuns": len(store.simio_validation_runs),
+        "SimioTemplateRegistry": len(store.simio_template_registry),
         "MasterDataVersions": len(store.master_data_versions),
         "PlanningRuns": len(store.planning_runs),
         "AuditEvents": len(store.audit_events),

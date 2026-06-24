@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from hashlib import sha256
 
 from sdbr.buffer_execution_view import buffer_zone
 from sdbr.release_authorization import ReleaseAuthorization
@@ -53,6 +54,21 @@ def build_mes_dispatch_priority_queue(
         penetration = float(candidate.get("BufferPenetrationPercent") or 0)
         release_status = "Authorized" if authorization is not None else "CandidateOnly"
         gate = _dispatch_gate(candidate=candidate, authorization=authorization)
+        shop_floor = _shop_floor_status(operation=operation, events=execution_events)
+        if gate["Allowed"] and shop_floor["DispatchBlockingReason"] is not None:
+            gate = {
+                "Allowed": False,
+                "Status": str(shop_floor["DispatchBlockingReason"]),
+                "BlockingReasons": [
+                    {
+                        "Code": shop_floor["DispatchBlockingReason"],
+                        "Category": "MES",
+                        "Details": {
+                            "CurrentExecutionStatus": shop_floor["ExecutionStatus"],
+                        },
+                    }
+                ],
+            }
         rows.append(
             {
                 "OrderID": order_id,
@@ -71,6 +87,13 @@ def build_mes_dispatch_priority_queue(
                 "DispatchEligibility": (
                     "Dispatchable" if gate["Allowed"] and authorization is not None else "CandidateOnly"
                 ),
+                "ExecutionStatus": shop_floor["ExecutionStatus"],
+                "ArrivalStatus": shop_floor["ArrivalStatus"],
+                "CurrentProcessing": shop_floor["CurrentProcessing"],
+                "LastMesEventType": shop_floor["LastEventType"],
+                "LastMesEventAt": shop_floor["LastEventAt"],
+                "DispatchRecommendation": None,
+                "RecommendationReason": None,
                 "BufferZone": zone,
                 "BufferPenetrationPercent": penetration,
                 "LatestGateStatus": gate["Status"],
@@ -92,6 +115,9 @@ def build_mes_dispatch_priority_queue(
         _enrich_dispatch_conflicts(queue_rows, execution_events)
         for rank, row in enumerate(queue_rows, start=1):
             row["DispatchRank"] = rank
+            _enrich_dispatch_recommendation(row)
+        for row in candidate_rows:
+            _enrich_dispatch_recommendation(row)
         resources_payload.append(
             {
                 "ResourceID": resource_id,
@@ -148,6 +174,58 @@ def build_mes_dispatch_priority_queue(
     }
 
 
+def build_mes_dispatch_suggestion_package(
+    *,
+    dispatch_workbench: dict[str, object],
+    schedule_fingerprint: str | None = None,
+    generated_at: datetime,
+    target_system: str = "MES-MOCK",
+) -> dict[str, object]:
+    run_id = str(dispatch_workbench.get("RunID"))
+    fingerprint = schedule_fingerprint or ""
+    package_id = f"MES-DISPATCH-{run_id}-{_package_digest(dispatch_workbench, fingerprint)}"
+    resource_queues = []
+    for resource in _dict_list(dispatch_workbench.get("Resources")):
+        queue = [
+            _suggestion_row(row)
+            for row in _dict_list(resource.get("Queue"))
+        ]
+        warnings = [
+            _suggestion_row(row)
+            for row in _dict_list(resource.get("CandidateWarnings"))
+        ]
+        resource_queues.append(
+            {
+                "ResourceID": resource.get("ResourceID"),
+                "WorkCenterID": resource.get("WorkCenterID"),
+                "ResourceName": resource.get("ResourceName"),
+                "IsConstraintResource": resource.get("IsConstraintResource"),
+                "Queue": queue,
+                "CandidateWarnings": warnings,
+                "QueueCount": len(queue),
+                "CandidateWarningCount": len(warnings),
+            }
+        )
+    return {
+        "PackageID": package_id,
+        "PackageType": "MESDispatchSuggestionPackage",
+        "MessageType": "DispatchQueueIssued",
+        "RunID": run_id,
+        "ScheduleFingerprint": fingerprint or None,
+        "OperationalStateSnapshotID": dispatch_workbench.get("OperationalStateSnapshotID"),
+        "ReleasePolicyVersionID": dispatch_workbench.get("ReleasePolicyVersionID"),
+        "GeneratedAt": generated_at.isoformat(),
+        "TargetSystem": target_system,
+        "DeliveryMode": "MockAPIRecommendationOnly",
+        "SendsToMes": False,
+        "DispatchPolicy": dispatch_workbench.get("DispatchPolicy"),
+        "Summary": dispatch_workbench.get("Summary"),
+        "ResourceQueues": resource_queues,
+        "RecommendedActions": _recommended_actions(resource_queues),
+        "CanonicalPayloadVersion": "MES-DISPATCH-SUGGESTION-V1",
+    }
+
+
 def _enrich_dispatch_conflicts(
     rows: list[dict[str, object]],
     execution_events: list[dict[str, object]],
@@ -176,6 +254,35 @@ def _enrich_dispatch_conflicts(
                 "ConstraintResourceSetupOrIdleRisk",
                 "RedZoneCanOverrideSetupLossOnlyAfterPlannerConfirmation",
             ]
+
+
+def _enrich_dispatch_recommendation(row: dict[str, object]) -> None:
+    if row.get("DispatchEligibility") != "Dispatchable":
+        row["DispatchRecommendation"] = "Hold"
+        status = row.get("LatestGateStatus")
+        if status == "ReleaseNotAuthorized":
+            row["RecommendationReason"] = "未授权释放，暂不进入 MES 正式派工队列"
+        elif status == "ArrivalNotConfirmed":
+            row["RecommendationReason"] = "缺少现场到达确认，作为候选预警"
+        elif status == "DispatchRejected":
+            row["RecommendationReason"] = "MES 已拒绝派工，需处理原因后再派工"
+        elif status == "ExceptionReported":
+            row["RecommendationReason"] = "MES 已上报异常，需处理异常后再派工"
+        elif row.get("LatestGateBlockingReasons"):
+            row["RecommendationReason"] = "最新释放门控未通过，暂不派工"
+        else:
+            row["RecommendationReason"] = "暂不满足正式派工条件"
+        return
+    conflict = row.get("ConflictResult")
+    if conflict == "NeedsReplan":
+        row["DispatchRecommendation"] = "ReviewAndReplan"
+        row["RecommendationReason"] = "连续插队已超过阈值，建议调度员复核并重排"
+    elif conflict == "SuggestQueueJump":
+        row["DispatchRecommendation"] = "QueueJump"
+        row["RecommendationReason"] = "缓冲风险高于计划顺序，建议插队加工"
+    else:
+        row["DispatchRecommendation"] = "FollowPlan"
+        row["RecommendationReason"] = "释放、物料、WIP 和现场状态通过，按计划顺序加工"
 
 
 def _dispatch_sort_key(row: dict[str, object]) -> tuple[object, ...]:
@@ -258,6 +365,64 @@ def _operation_completed(
     )
 
 
+def _shop_floor_status(
+    *,
+    operation: dict[str, object],
+    events: list[dict[str, object]],
+) -> dict[str, object]:
+    order_id = operation.get("OrderID")
+    operation_id = operation.get("OperationID")
+    resource_id = operation.get("ResourceID")
+    relevant = [
+        event
+        for event in events
+        if event.get("OrderID") == order_id
+        and (
+            event.get("OperationID") in {None, operation_id}
+            or event.get("OperationID") == operation_id
+        )
+        and (
+            event.get("ResourceID") in {None, resource_id}
+            or event.get("ResourceID") == resource_id
+        )
+    ]
+    last = max(relevant, key=lambda item: str(item.get("EventAt") or ""), default={})
+    event_type = last.get("EventType")
+    status = "NotArrived"
+    arrival = "MissingArrivalConfirmation"
+    blocking: str | None = "ArrivalNotConfirmed"
+    processing = False
+    if event_type in {"ArrivedBuffer", "DispatchAccepted"}:
+        status = "Arrived"
+        arrival = "Arrived"
+        blocking = None
+    elif event_type == "StartedOperation":
+        status = "Processing"
+        arrival = "Arrived"
+        processing = True
+        blocking = None
+    elif event_type == "CompletedOperation":
+        status = "Completed"
+        arrival = "Arrived"
+        blocking = "OperationAlreadyCompleted"
+    elif event_type == "DispatchRejected":
+        status = "DispatchRejected"
+        arrival = "Arrived"
+        blocking = "DispatchRejected"
+    elif event_type == "ExceptionReported":
+        status = "ExceptionReported"
+        arrival = "Arrived"
+        blocking = "ExceptionReported"
+    return {
+        "ExecutionStatus": status,
+        "ArrivalStatus": arrival,
+        "CurrentProcessing": processing,
+        "DispatchBlockingReason": blocking,
+        "LastEventType": event_type,
+        "LastEventAt": last.get("EventAt"),
+    }
+
+
 def _consecutive_queue_jumps_by_resource(
     execution_events: list[dict[str, object]],
 ) -> dict[str, int]:
@@ -312,6 +477,61 @@ def _plan_rank_by_resource(
         ):
             result[_operation_key(operation)] = index
     return result
+
+
+def _suggestion_row(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "DispatchRank": row.get("DispatchRank"),
+        "PlanSequence": row.get("PlanSequence"),
+        "OrderID": row.get("OrderID"),
+        "OperationID": row.get("OperationID"),
+        "ResourceID": row.get("ResourceID"),
+        "WorkCenterID": row.get("WorkCenterID"),
+        "ScheduledStart": row.get("ScheduledStart"),
+        "ScheduledEnd": row.get("ScheduledEnd"),
+        "BufferZone": row.get("BufferZone"),
+        "BufferPenetrationPercent": row.get("BufferPenetrationPercent"),
+        "ReleaseStatus": row.get("ReleaseStatus"),
+        "DispatchEligibility": row.get("DispatchEligibility"),
+        "ExecutionStatus": row.get("ExecutionStatus"),
+        "ArrivalStatus": row.get("ArrivalStatus"),
+        "ConflictResult": row.get("ConflictResult"),
+        "RequiresPlannerConfirmation": row.get("RequiresPlannerConfirmation"),
+        "Recommendation": row.get("DispatchRecommendation"),
+        "RecommendationReason": row.get("RecommendationReason"),
+        "LatestGateStatus": row.get("LatestGateStatus"),
+        "LatestGateBlockingReasons": row.get("LatestGateBlockingReasons"),
+    }
+
+
+def _recommended_actions(resource_queues: list[dict[str, object]]) -> list[dict[str, object]]:
+    actions = []
+    for resource in resource_queues:
+        for row in _dict_list(resource.get("Queue")):
+            actions.append(
+                {
+                    "ResourceID": resource.get("ResourceID"),
+                    "OrderID": row.get("OrderID"),
+                    "OperationID": row.get("OperationID"),
+                    "Action": row.get("Recommendation"),
+                    "Reason": row.get("RecommendationReason"),
+                    "RequiresPlannerConfirmation": row.get("RequiresPlannerConfirmation"),
+                }
+            )
+    return actions
+
+
+def _package_digest(dispatch_workbench: dict[str, object], fingerprint: str) -> str:
+    payload = "|".join(
+        [
+            str(dispatch_workbench.get("RunID") or ""),
+            str(dispatch_workbench.get("EvaluatedAt") or ""),
+            str(dispatch_workbench.get("OperationalStateSnapshotID") or ""),
+            str(dispatch_workbench.get("ReleasePolicyVersionID") or ""),
+            fingerprint,
+        ]
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:12].upper()
 
 
 def _dict(value: object) -> dict[str, object]:

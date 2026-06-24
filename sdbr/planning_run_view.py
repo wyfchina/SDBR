@@ -51,8 +51,10 @@ def build_planning_run_workbench(
                 },
             ],
             "Simio": {
-                "Available": False,
-                "Status": "Paused",
+                "Available": True,
+                "Status": "Available",
+                "Mode": "OptionalValidation",
+                "CanRunAfterCompletedSchedule": True,
             },
         },
     }

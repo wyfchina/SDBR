@@ -13,7 +13,7 @@ const I18N = {
     language: "语言", planner: "计划员", workspaceEyebrow: "计划员工作台",
     pageOverview: "计划总览", pageData: "数据就绪", pageRuns: "排程任务",
     pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
-    descriptionOverview: "集中查看排程上下文、异常和下一步工作。",
+    descriptionOverview: "集中查看排程范围、异常和下一步工作。",
     descriptionData: "检查主数据版本与运行状态快照。",
     descriptionRuns: "创建、跟踪和恢复排程任务。",
     descriptionResults: "检查排程结果、负荷、甘特图和诊断。",
@@ -23,9 +23,9 @@ const I18N = {
     descriptionCalendar: "检查日历事项、冲突优先级和 CP-SAT 最终可用窗口。",
     descriptionAdmin: "管理主数据、求解器、集成和权限配置。",
     frameworkReady: "页面框架已就绪", emptyTitle: "此功能将在对应验收单元中启用",
-    emptyDescription: "当前阶段只建立应用导航、计划上下文和双语基础，不展示模拟生产数据。",
+    emptyDescription: "当前阶段只建立应用导航、计划输入和双语基础，不展示模拟生产数据。",
     overallReadiness: "总体就绪状态", loadingData: "正在读取数据状态", loadingDataDescription: "正在检查最新主数据版本与运行状态快照。",
-    refresh: "刷新", selectPlanningInputs: "选作本次排程输入", readinessLoadFailed: "无法读取数据就绪状态",
+    refresh: "刷新", generateOperationalSnapshot: "生成运行快照", selectPlanningInputs: "选作本次排程输入", readinessLoadFailed: "无法读取数据就绪状态",
     readinessRetryAdvice: "请检查服务状态后重试，当前页面不会清除已有选择。", masterData: "主数据",
     latestMasterDataVersion: "最新主数据版本", notAvailable: "无可用数据", version: "版本编号", source: "来源",
     createdBy: "创建人", capturedAt: "捕获时间", masterDataCounts: "主数据数量摘要", resources: "资源",
@@ -43,7 +43,11 @@ const I18N = {
     guidanceEmpty: "创建主数据版本和运行状态快照后才能开始排程。", guidanceBlocked: "请先解决阻塞问题，再选择本次排程输入。",
     guidanceReady: "最新版本与快照可以用于创建排程。", guidanceReadyWithWarnings: "当前数据可以用于排程，请同时关注警告项。",
     valid: "有效", invalid: "无效", fresh: "新鲜", stale: "已过期", future: "时间异常", notProvided: "未提供",
+    yes: "是", no: "否", noNeedReschedule: "暂不需要重排", needReschedule: "需要重排",
     issueCount: "个数据问题需要处理", inputsSelected: "已选择为本次排程输入",
+    operationalSnapshotGenerated: "运行快照已生成。",
+    operationalSnapshotGenerateFailed: "运行快照生成失败。",
+    operationalSnapshotMissing: "没有可复制的运行状态快照。",
     issue_MASTER_DATA_VERSION_MISSING: "尚未创建主数据版本。", issue_OPERATIONAL_STATE_SNAPSHOT_MISSING: "尚未创建运行状态快照。",
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "最新运行状态快照已经过期。", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "最新运行状态快照时间晚于当前时间。",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "运行状态快照未提供来源系统。", issue_RESOURCE_STATUS_NOT_CAPTURED: "当前快照尚未包含资源运行状态。",
@@ -59,7 +63,7 @@ const I18N = {
     PLANNING_RUN_NOT_COMPLETED: "Planning Run 尚未完成。", PLANNING_RUN_DEAD_LETTER: "Planning Run 已进入死信，不能打开排程结果。",
     PLANNING_RUN_NOT_EXECUTED: "Planning Run 尚未执行。",
     runMetrics: "排程任务状态摘要", allRuns: "全部任务", queued: "排队中", running: "运行中", completed: "已完成",
-    deadLetter: "死信", pending: "待处理", failed: "失败", cancelled: "已取消", allStatuses: "全部状态",
+    deadLetter: "死信", pending: "待计算", failed: "失败", cancelled: "已取消", allStatuses: "全部状态",
     status: "状态", requester: "请求人", filterRequester: "筛选请求人", exceptionsOnly: "仅看异常",
     timeRange: "时间范围", allTime: "全部时间", last24Hours: "最近 24 小时", last7Days: "最近 7 天",
     last30Days: "最近 30 天", allSolvers: "全部求解器", startedAt: "开始时间",
@@ -68,6 +72,15 @@ const I18N = {
     attempts: "尝试", actions: "操作", noPlanningRuns: "尚无排程任务", noPlanningRunsDescription: "选择有效输入后创建第一项排程任务。",
     wizardTitle: "新建 Planning Run", wizardSteps: "创建排程步骤", selectInputs: "选择输入", setPolicy: "设置策略",
     reviewSubmit: "验证并提交", scheduleStart: "计划起点", selectInputsFirst: "请先在数据就绪中心选择有效输入。",
+    timeBufferProfile: "时间缓冲参数", timeBufferCalculator: "时间缓冲计算器",
+    timeBufferFormula: "时间缓冲 = OLT × (1 + 变异与弹性综合系数)",
+    operatingLeadTime: "运营提前期 OLT（分钟）", variabilityProfile: "上游波动程度",
+    variabilityLow: "低", variabilityMedium: "中", variabilityHigh: "高",
+    variabilityHelp: "上游波动来自设备故障、来料准时率、返工和废品率。波动越高，约束前需要留出的时间保护越大。",
+    capacityFlexProfile: "产能弹性", capacityFlexHigh: "高弹性", capacityFlexMedium: "中弹性", capacityFlexLow: "低弹性",
+    capacityFlexHelp: "产能弹性表示上游非约束资源的保护性产能和追赶能力。弹性越高，异常后越容易追回进度，时间缓冲可相对较小。",
+    timeBufferMultiplier: "推荐倍数", recommendedTimeBuffer: "推荐时间缓冲", useRecommendedBuffer: "采用推荐值",
+    timeBufferRecommendationApplied: "已采用推荐时间缓冲。",
     timeBuffer: "时间缓冲（分钟）", timeLimit: "求解时间限制（秒）", maxAttempts: "最大尝试次数",
     retryDelay: "重试延迟（秒）", pausedUnavailable: "已暂停，暂不可用", enableSimio: "启用 Simio 验证",
     back: "上一步", next: "下一步", submitRun: "提交排程任务", available: "可用", unavailable: "不可用",
@@ -82,7 +95,7 @@ const I18N = {
     cancelReasonPrompt: "请输入取消原因。", recoverReasonPrompt: "请输入人工恢复原因。",
     actionFailed: "操作失败，请重新加载后重试。", solverUnavailable: "当前求解器不可用。",
     confirmAction: "确认操作", confirm: "确认", notifySuccess: "操作已完成", notifyError: "操作失败",
-    resultContext: "排程结果上下文", planningRun: "排程任务", scheduleResultLoadFailed: "无法读取排程结果",
+    resultContext: "排程结果范围", planningRun: "排程任务", scheduleResultLoadFailed: "无法读取排程结果",
     scheduleResultRetryAdvice: "请选择已完成的排程任务后重试。", noCompletedSchedules: "尚无已完成的排程结果",
     completeRunFirst: "请先完成一项排程任务。", scheduleKpis: "排程结果指标", onTimeOrders: "准时工单",
     lateOrders: "延迟工单", overloadMinutes: "超载分钟", redBuffers: "红区缓冲", peakLoad: "峰值负荷",
@@ -100,7 +113,7 @@ const I18N = {
     candidateScenario: "候选方案", compare: "比较", allResources: "全部资源", allOrders: "全部工单",
     allBarTypes: "全部条带", allZones: "全部缓冲区", allOptions: "全部", constraint: "约束资源",
     nonConstraint: "非约束资源", candidateConstraint: "候选约束", noGanttRows: "当前筛选条件下没有甘特任务。",
-    noDiagnostics: "求解器未返回诊断信息。", onTime: "准时", late: "延迟", unscheduled: "未排程",
+    noDiagnostics: "求解器未返回诊断信息。", onTime: "准时", late: "延迟", unscheduled: "未排程", code: "技术码", message: "消息",
     generatedAt: "生成时间", recommended: "推荐", selectScenario: "采用并送审", selectionReasonPrompt: "请输入采用该方案的原因。",
     selectedForReview: "方案已选择并进入审核。", candidateReducesOverload: "候选方案降低了资源超载。",
     candidateReducesLateOrders: "候选方案减少了延迟工单。", candidateReducesRedBuffers: "候选方案减少了红区缓冲。",
@@ -109,11 +122,42 @@ const I18N = {
     publicationRetryAdvice: "请刷新排程结果后重试。", publicationStatus: "发布状态", scheduleFingerprint: "计划指纹",
     allowedPublicationActions: "允许动作", publicationPackage: "发布包", packageId: "发布包编号", targetSystems: "目标系统",
     publishedBy: "发布人", publishedAt: "发布时间", solverStatus: "求解状态", publicationHistory: "发布历史",
-    outputGovernance: "输出治理", outputAvailability: "输出可用性", outputPackage: "输出包", outputPackageId: "输出包编号",
-    completenessStatus: "完整性状态", passedChecks: "通过检查", failedChecks: "未通过检查", releaseGovernance: "释放上下文",
-    recommendationCount: "释放建议数", unauthorizedCount: "未授权数", auditGovernance: "审计上下文", auditEventCount: "审计事件数",
+    outputGovernance: "计划输出", outputAvailability: "输出可用性", outputPackage: "计划输出包", outputPackageId: "输出包编号",
+    completenessStatus: "输出检查", passedChecks: "通过检查", failedChecks: "未通过检查", releaseGovernance: "释放准备",
+    recommendationCount: "释放建议数", unauthorizedCount: "未授权数", auditGovernance: "操作记录", auditEventCount: "记录数",
     scenarioSelectionCount: "方案选择数", workOrderCommandCount: "工单命令数", publicationActionCount: "发布动作数",
+    simulationResults: "仿真结果", simioValidation: "Simio 验证", simioValidationStatus: "验证状态", simioRunner: "运行器", simioPackage: "验证包",
+    simioModelPath: "模型路径", simioResultModelPath: "结果模型", simioIssues: "问题数", simioKpis: "验证指标",
+    simioFeasibility: "可行性结论", simioThroughput: "吞吐", simioQueueMetrics: "队列指标", simioWipMetrics: "WIP 指标",
+    simioResourceUtilization: "资源利用率", simioResultCoverage: "结果解析覆盖", simioRunnerMode: "运行模式",
+    simioTemplateRegistry: "Simio 仿真模板", simioTemplate: "仿真模板", activeSimioTemplate: "当前活动模板",
+    templateId: "模板编号", templateName: "模板名称", templateVersion: "模板版本", templatePath: "模板路径",
+    templateSourceType: "模板来源类型", timeUnitPolicy: "时间单位规则", desktopValidationStatus: "Desktop 校验状态",
+    templateStatus: "模板状态", configuredTemplates: "已登记模板", templatePolicy: "模板使用规则",
+    defaultTemplateDirectory: "默认模板目录", runtimeRule: "运行规则", timeUnitRule: "时间单位规则",
+    templateReady: "模板已配置，仿真验证将复制该模板并生成运行模型。",
+    templateNeedsAttention: "模板配置需要检查。", pendingManualCheck: "待人工 Desktop 校验",
+    simioRunnerAuto: "自动", simioRunnerMock: "Mock", simioRunnerLocal: "本机 Headless", runSimioValidation: "运行仿真验证",
+    simioOptionalValidation: "计划完成后可在仿真结果页运行", simioValidationRequested: "Simio 仿真验证已完成。",
+    noSimulationResult: "尚未请求 Simio 仿真验证。", busyMinutes: "忙碌分钟", starvedMinutes: "饥饿分钟", evidence: "数据来源",
+    actualStart: "实际开始", actualEnd: "实际结束", queueWaitMinutes: "队列等待", wipAfterStart: "开工后 WIP",
+    wipAfterEnd: "完工后 WIP", eventStatus: "事件状态", parsedSources: "已用数据", unavailableSources: "未取得数据",
+    simioSourceParsedFromSDBROutputRows: "来自工单输出记录", simioSourceParsedFromPostRunLogs: "来自 Simio 运行日志",
+    simioSourceParsedFromInteractiveStatistics: "来自 Simio 交互统计", simioSourceParsed: "已完整解析",
+    simioSourcePartialResultParsed: "已解析部分仿真结果", simioSourceUnavailable: "暂不可用",
+    simioPartialWithAvailableMetrics: "已解析部分仿真结果，可查看下方已回传指标。",
+    businessDecision: "业务判断", publicationDecision: "发布进度", outputDecision: "输出准备", releaseDecision: "释放准备",
+    simulationDecision: "仿真验证", auditDecision: "操作留痕", technicalDetails: "技术详情", showDetails: "展开", hideDetails: "收起",
+    planCanPublish: "计划可进入发布流程", planNeedsReview: "计划需先复核或批准", outputReadyForReview: "计划输出已齐套", outputNeedsAttention: "计划输出需检查",
+    releaseReadySummary: "已有释放建议，可进入释放评估", releaseNoRecommendation: "暂无释放建议", simulationPassedSummary: "仿真验证通过，可作为复核证据",
+    simulationWarningSummary: "仿真可运行，但存在提示项", simulationNotRunSummary: "尚未运行仿真验证", auditReadySummary: "关键操作已留痕",
+    simioIssue_SIMIO_RESULT_LOG_MISSING: "未取得完整统计文件，已用其他结果数据补充。",
+    simioIssue_SIMIO_UNFINISHED_ORDERS: "仿真显示存在未完成工单。",
+    simioIssue_SIMIO_BINARY_LOGS_PARTIAL: "部分仿真日志只能解析到关键指标。",
+    simioIssue_SIMIO_RESULT_PARTIAL: "仿真完成，但部分明细未能解析。",
+    simioEvent_OperationStarted: "工序开始", simioEvent_OperationCompleted: "工序完成", simioEvent_OrderStarted: "工单开始", simioEvent_OrderCompleted: "工单完成",
     externalDelivery: "外部投递", notSent: "未发送", packageReady: "输出包可用", packageUnavailable: "输出包不可用",
+    externalDeliveryOwnedByIntegrations: "ERP/MES 下发由外部接口模块负责，本版本只生成内部输出包。",
     noPublicationHistory: "尚无发布历史。", supersedesRun: "替代计划", supersededByRun: "被替代方",
     reviewPlan: "提交复核", approvePlan: "批准计划", publishPlan: "发布计划", revokePublication: "撤销发布",
     publicationCommentPrompt: "请输入计划治理备注。", publicationActionCompleted: "计划发布状态已更新。",
@@ -129,7 +173,7 @@ const I18N = {
     previousPage: "上一页", nextPage: "下一页", rowsPerPage: "每页", viewNamePrompt: "请输入视图名称。",
     priorityPrompt: "请输入优先级（1-999）。", selectedCount: "已选择 {count} 个工单", planCurrent: "当前计划",
     planStale: "已有更新计划", workOrderDetail: "工单详情", operations: "工序", auditHistory: "审计历史",
-    releaseContext: "释放评估上下文", evaluatedAt: "评估时间", reevaluate: "重新评估",
+    releaseContext: "释放评估", evaluatedAt: "评估时间", reevaluate: "重新评估",
     releaseSnapshotRefreshed: "Mock 运行快照已刷新，释放门控已重新评估。", releaseLoadFailed: "无法读取释放评估",
     releaseRetryAdvice: "请检查已完成计划和运行状态快照。", noReleaseRuns: "没有可评估的已完成计划",
     totalOrders: "工单总数", readyToRelease: "可释放", blocked: "已阻塞", authorized: "已授权",
@@ -145,15 +189,27 @@ const I18N = {
     effectiveMaxWipCount: "实际采用 WIP 上限", actualWipCount: "当前 WIP", projectedWipCount: "释放后 WIP",
     minutesUntilRelease: "距离可释放分钟", toleranceMinutes: "稳定性容忍分钟", replanThresholdMinutes: "重排阈值分钟",
     consecutiveBlockedThreshold: "连续阻塞阈值", replanCooldownMinutes: "重排冷却分钟", action: "动作",
-    deviationMinutes: "偏差分钟", absoluteDeviationMinutes: "绝对偏差分钟", reasonCodeLabel: "原因码", riskCount: "风险数",
+    deviationMinutes: "偏差分钟", absoluteDeviationMinutes: "绝对偏差分钟", reasonCodeLabel: "业务原因", riskCount: "风险数",
+    recommendedAction: "建议动作", requiresReschedule: "是否需要重排",
     reason_ROPE_TIME_NOT_REACHED: "尚未到达绳长释放时间。", reason_MATERIAL_SHORTAGE: "可用物料不足。",
     reason_MATERIAL_INBOUND_PENDING: "物料仍在途中。", reason_WIP_LIMIT_EXCEEDED: "释放后将超过 WIP 上限。",
     reason_OPERATIONAL_SNAPSHOT_STALE: "运行状态快照已过期。", reason_OPERATIONAL_SNAPSHOT_FUTURE: "运行状态快照时间晚于评估时间。",
     action_RefreshOperationalSnapshotAndReevaluate: "同步/生成新运行快照后重新评估释放",
     action_CorrectEvaluationTimeOrSnapshot: "修正评估时间或选择正确快照",
+    action_ReadyForRelease: "可以授权释放",
+    action_HoldForWip: "暂缓释放，等待 WIP 降低",
+    action_WaitForInbound: "等待在途物料到达",
+    action_ExpediteMaterial: "催办物料或调整供应",
+    action_Monitor: "继续监控",
+    action_Review: "需要计划员复核",
+    action_Replan: "建议发起重排",
+    reason_DeviationAtReplanThreshold: "偏差已达到重排阈值",
+    reason_WithinTolerance: "偏差仍在容忍范围内",
+    reason_ConsecutiveGateBlocks: "连续阻塞次数达到阈值",
+    reason_ReplanCooldownActive: "重排冷却期内，先复核再决定",
     authorizeImpact: "确认授权释放该工单？系统将记录门控快照并生成调度包。", releaseAuthorized: "工单已授权释放。",
     commandRecorded: "工单命令已记录。", pageOf: "第 {page} / {pages} 页",
-    bufferContext: "约束缓冲上下文", bufferMatrix: "两阶段五区域缓冲矩阵", bufferLoadFailed: "无法读取缓冲执行看板",
+    bufferContext: "约束缓冲", bufferMatrix: "两阶段五区域缓冲矩阵", bufferLoadFailed: "无法读取缓冲执行看板",
     bufferRetryAdvice: "请选择包含已授权工单的已完成计划。", noBufferRuns: "没有可用的已完成计划", bufferOwner: "缓冲负责人",
     dailyLoad: "当日总负荷", lastScheduled: "最近排程时间", hours: "小时", yetToBeReceived: "待接收", received: "已接收",
     Early: "提前", Green: "绿区", Yellow: "黄区", Red: "红区", Late: "逾期", orderCount: "工单数", totalLoad: "总负荷",
@@ -164,6 +220,13 @@ const I18N = {
     noDispatchWarnings: "当前没有候选/预警。", Dispatchable: "可派工", CandidateOnly: "候选/预警", FollowPlan: "按计划执行",
     SuggestQueueJump: "建议插队", NeedsReplan: "需要重排", Clear: "通过", ReleaseNotAuthorized: "未授权释放",
     LatestOperationalStateBlocked: "最新状态阻塞", LatestOperationalStateNotReady: "最新状态未就绪",
+    ArrivalNotConfirmed: "缺少到达确认", DispatchRejected: "MES 已拒绝", ExceptionReported: "现场异常",
+    NotArrived: "未到达", MissingArrivalConfirmation: "缺少到达确认", Arrived: "已到达", Processing: "加工中", Completed: "已完成",
+    currentExecution: "现场状态", arrivalStatus: "到达状态", recommendation: "建议", recommendationReason: "建议原因",
+    issueDispatchSuggestions: "生成 MES 派工建议包", dispatchSuggestionNotIssued: "尚未生成派工建议包。",
+    dispatchSuggestionIssued: "MES 派工建议包已生成", packageId: "包编号", mockDeliveryStatus: "Mock 投递状态",
+    MockDispatchSuggestionIssued: "Mock 派工建议已生成", Accepted: "已接收", Duplicate: "重复消息",
+    Hold: "暂不派工", QueueJump: "建议插队", ReviewAndReplan: "复核并考虑重排",
     required: "需要", ConstraintResourceSetupOrIdleRisk: "约束资源可能增加换型或产生空闲风险",
     RedZoneCanOverrideSetupLossOnlyAfterPlannerConfirmation: "红区可压倒换型损失，但需要调度员确认",
     bufferOrderDetail: "缓冲工单详情", customer: "客户", currentReason: "当前原因", receiveStatus: "接收状态",
@@ -172,7 +235,7 @@ const I18N = {
     reasonRequiredForLate: "Late 区事务必须选择标准原因码。", Quantity: "数量", CompletionPercent: "完成百分比", Hours: "工时",
     transactionRecorded: "执行事务已记录。", receiveOrStart: "接收 / 开工", reason_MATERIAL_SHORTAGE_CODE: "缺料",
     reason_EQUIPMENT_DOWN_CODE: "设备故障", reason_STAFF_ABSENCE_CODE: "人员缺勤", reason_QUALITY_REWORK_CODE: "质量返工",
-    exceptionContext: "异常中心上下文", severity: "严重程度", exceptionLoadFailed: "无法读取异常中心", exceptionRetryAdvice: "请确认服务可用后重试。",
+    exceptionContext: "异常中心", severity: "严重程度", exceptionLoadFailed: "无法读取异常中心", exceptionRetryAdvice: "请确认服务可用后重试。",
     totalExceptions: "异常总数", criticalExceptions: "严重", warningExceptions: "警告", openExceptions: "未处理", object: "对象", occurredAt: "发生时间",
     businessImpact: "业务影响", suggestedAction: "建议动作", exceptionDetail: "异常详情", allSeverities: "全部严重程度", allSources: "全部来源",
     Critical: "严重", Warning: "警告", Information: "提示", impact_ScheduleUnavailable: "排程结果不可用", impact_ConstraintMayStarve: "约束可能断料",
@@ -181,7 +244,7 @@ const I18N = {
     action_ReviewExecutionAlert: "处理执行预警", action_ReviewReplanRequest: "审核重排建议", viewDetail: "查看详情", relatedObjects: "关联对象", resolutionActions: "处理动作",
     auditTrail: "审计历史", noAuditTrail: "没有审计记录", type_PlanningRunDeadLetter: "排程死信", type_PlanningRunFailed: "排程失败", type_ConstraintBufferRisk: "约束缓冲风险",
     type_ExecutionAlert: "执行预警", type_ReplanSuggestion: "重排建议",
-    calendarContext: "日历配置上下文", calendarPreviewLoadFailed: "无法读取日历预览", calendarPreviewRetryAdvice: "请确认已有主数据版本和资源日历配置后重试。",
+    calendarContext: "日历配置", calendarPreviewLoadFailed: "无法读取日历预览", calendarPreviewRetryAdvice: "请确认已有主数据版本和资源日历配置后重试。",
     calendarElements: "日历事项", calendarRequiredElements: "事项要素检查", cpSatCapacityWindows: "CP-SAT 能力窗口", finalCapacityWindows: "最终可用窗口",
     sourceRules: "来源规则", appliedCalendarElements: "已识别日历规则", cpSatNeedReason: "CP-SAT 需求原因", missingImpactDomain: "缺失影响域",
     previewMode: "预览模式", finalWindowCount: "最终窗口数", missingDailyCapacityDates: "缺失日能力日期", noCalendarWindows: "当前范围没有最终可用窗口。",
@@ -198,7 +261,7 @@ const I18N = {
     crossShiftRuleDescription: "当前要求工序完整落入单个能力窗口，连续跨班次加工后续确认。",
     noCalendarConfigRows: "尚无配置记录。", adminCalendarMoved: "日历配置已移到独立页面；管理后台只保留能力摘要和当前配置清单。",
     openCalendarConfiguration: "打开日历配置", baseCalendarSummary: "基础日历摘要", calendarOverrideSummary: "日历临时覆盖摘要",
-    administrationContext: "管理后台上下文", sensitiveSettingsReadOnly: "敏感连接参数当前只读。", administrationLoadFailed: "无法读取管理后台",
+    administrationContext: "管理后台", sensitiveSettingsReadOnly: "敏感连接参数当前只读。", administrationLoadFailed: "无法读取管理后台",
     administrationRetryAdvice: "请确认本地服务可用后重试。", adminMasterDataTitle: "主数据后台", importPreview: "导入预览",
     importPreviewDescription: "选择对象后先查看结构化预览和预校验结果，再生成主数据版本。", importFile: "导入文件", preValidate: "预校验",
     generateVersion: "生成版本", routingImport: "导入工艺路线", noImportSelected: "尚未选择导入对象", rawJsonHidden: "原始 JSON 默认隐藏，仅管理员调试模式可查看。",
@@ -219,6 +282,7 @@ const I18N = {
     calendarOverrideBoundary: "生效的临时覆盖会驱动新建 Planning Run；维护 > 节假日 > 临时覆盖 > 加班 > 基础班次，审批流暂不做。",
     calendarScope: "日历范围", ResourceOnly: "仅资源级", conflictPriority: "冲突优先级", ApprovalFlowStatus: "审批流",
     StatusOnly: "仅状态字段", Maintenance: "维护", Holiday: "节假日", BaseShift: "基础班次", Draft: "草案", Active: "生效", Retired: "停用",
+    Ready: "已就绪", SimioXmlProjectExport: "Simio XML 项目导出",
     RateInterpretation: "速率解释方式", Units: "单位", SchedulingWindow: "排程窗口",
     BufferBoundaries: "缓冲区边界比例", PiecesPerHour: "件/小时", HoursPerPiece: "小时/件", MinutesPerPiece: "分钟/件",
     BufferMinutes: "缓冲分钟", SetupMinutes: "换型分钟", DurationMinutes: "持续分钟", FixedOffsetMinutes: "固定偏移分钟",
@@ -250,7 +314,7 @@ const I18N = {
     frameworkReady: "Page framework ready", emptyTitle: "This capability will open in its acceptance unit",
     emptyDescription: "This phase establishes navigation, planning context, and bilingual foundations without fabricated production data.",
     overallReadiness: "Overall readiness", loadingData: "Loading data status", loadingDataDescription: "Checking the latest master data version and operational snapshot.",
-    refresh: "Refresh", selectPlanningInputs: "Use as planning inputs", readinessLoadFailed: "Data readiness could not be loaded",
+    refresh: "Refresh", generateOperationalSnapshot: "Generate operational snapshot", selectPlanningInputs: "Use as planning inputs", readinessLoadFailed: "Data readiness could not be loaded",
     readinessRetryAdvice: "Check the service and retry. Existing selections will not be cleared.", masterData: "Master data",
     latestMasterDataVersion: "Latest Master Data Version", notAvailable: "Not available", version: "Version", source: "Source",
     createdBy: "Created by", capturedAt: "Captured at", masterDataCounts: "Master data counts", resources: "Resources",
@@ -268,7 +332,11 @@ const I18N = {
     guidanceEmpty: "Create a master data version and operational snapshot before planning.", guidanceBlocked: "Resolve blocking issues before selecting planning inputs.",
     guidanceReady: "The latest version and snapshot can be used for planning.", guidanceReadyWithWarnings: "The data can be used for planning; review the warnings as well.",
     valid: "Valid", invalid: "Invalid", fresh: "Fresh", stale: "Stale", future: "Time mismatch", notProvided: "Not provided",
+    yes: "Yes", no: "No", noNeedReschedule: "No reschedule needed", needReschedule: "Reschedule needed",
     issueCount: "data issues require attention", inputsSelected: "Selected as planning inputs",
+    operationalSnapshotGenerated: "Operational snapshot generated.",
+    operationalSnapshotGenerateFailed: "Operational snapshot generation failed.",
+    operationalSnapshotMissing: "No operational snapshot is available to copy.",
     issue_MASTER_DATA_VERSION_MISSING: "No master data version has been created.", issue_OPERATIONAL_STATE_SNAPSHOT_MISSING: "No operational state snapshot has been created.",
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "The latest operational snapshot is stale.", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "The latest operational snapshot is dated after the evaluation time.",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "The operational snapshot has no source system.", issue_RESOURCE_STATUS_NOT_CAPTURED: "The current snapshot does not include resource runtime status.",
@@ -293,6 +361,15 @@ const I18N = {
     attempts: "Attempts", actions: "Actions", noPlanningRuns: "No planning runs", noPlanningRunsDescription: "Select valid inputs and create the first planning run.",
     wizardTitle: "New Planning Run", wizardSteps: "Create planning run steps", selectInputs: "Select inputs", setPolicy: "Set policy",
     reviewSubmit: "Review and submit", scheduleStart: "Schedule start", selectInputsFirst: "Select valid inputs in Data Readiness first.",
+    timeBufferProfile: "Time buffer parameters", timeBufferCalculator: "Time buffer calculator",
+    timeBufferFormula: "Time buffer = OLT × (1 + variability and flex coefficient)",
+    operatingLeadTime: "Operating Lead Time OLT (minutes)", variabilityProfile: "Upstream variability",
+    variabilityLow: "Low", variabilityMedium: "Medium", variabilityHigh: "High",
+    variabilityHelp: "Upstream variability reflects equipment downtime, supplier punctuality, rework, and scrap. Higher variability needs more time protection before the constraint.",
+    capacityFlexProfile: "Capacity flex", capacityFlexHigh: "High flex", capacityFlexMedium: "Medium flex", capacityFlexLow: "Low flex",
+    capacityFlexHelp: "Capacity flex reflects protective capacity and catch-up ability in upstream non-constraints. Higher flex can support a smaller time buffer.",
+    timeBufferMultiplier: "Recommended multiplier", recommendedTimeBuffer: "Recommended time buffer", useRecommendedBuffer: "Use recommendation",
+    timeBufferRecommendationApplied: "Recommended time buffer applied.",
     timeBuffer: "Time buffer (minutes)", timeLimit: "Solver time limit (seconds)", maxAttempts: "Maximum attempts",
     retryDelay: "Retry delay (seconds)", pausedUnavailable: "Paused and unavailable", enableSimio: "Enable Simio validation",
     back: "Back", next: "Next", submitRun: "Submit planning run", available: "Available", unavailable: "Unavailable",
@@ -307,7 +384,7 @@ const I18N = {
     cancelReasonPrompt: "Enter a cancellation reason.", recoverReasonPrompt: "Enter a recovery reason.",
     actionFailed: "The operation failed. Reload and try again.", solverUnavailable: "The selected solver is unavailable.",
     confirmAction: "Confirm action", confirm: "Confirm", notifySuccess: "Action completed", notifyError: "Action failed",
-    resultContext: "Schedule result context", planningRun: "Planning run", scheduleResultLoadFailed: "Schedule result could not be loaded",
+    resultContext: "Schedule result scope", planningRun: "Planning run", scheduleResultLoadFailed: "Schedule result could not be loaded",
     scheduleResultRetryAdvice: "Select a completed planning run and retry.", noCompletedSchedules: "No completed schedule results",
     completeRunFirst: "Complete a planning run first.", scheduleKpis: "Schedule result metrics", onTimeOrders: "On-time orders",
     lateOrders: "Late orders", overloadMinutes: "Overload minutes", redBuffers: "Red buffers", peakLoad: "Peak load",
@@ -325,7 +402,7 @@ const I18N = {
     candidateScenario: "Candidate", compare: "Compare", allResources: "All resources", allOrders: "All orders",
     allBarTypes: "All bar types", allZones: "All zones", allOptions: "All", constraint: "Constraint",
     nonConstraint: "Non-constraint", candidateConstraint: "Candidate constraint", noGanttRows: "No Gantt tasks match the current filters.",
-    noDiagnostics: "The solver returned no diagnostics.", onTime: "On time", late: "Late", unscheduled: "Unscheduled",
+    noDiagnostics: "The solver returned no diagnostics.", onTime: "On time", late: "Late", unscheduled: "Unscheduled", code: "Technical code", message: "Message",
     generatedAt: "Generated at", recommended: "Recommended", selectScenario: "Select for review", selectionReasonPrompt: "Enter the reason for selecting this scenario.",
     selectedForReview: "Scenario selected for review.", candidateReducesOverload: "Candidate reduces resource overload.",
     candidateReducesLateOrders: "Candidate reduces late orders.", candidateReducesRedBuffers: "Candidate reduces red buffers.",
@@ -334,11 +411,42 @@ const I18N = {
     publicationRetryAdvice: "Refresh the schedule result and retry.", publicationStatus: "Publication status", scheduleFingerprint: "Schedule fingerprint",
     allowedPublicationActions: "Allowed actions", publicationPackage: "Publication package", packageId: "Package ID", targetSystems: "Target systems",
     publishedBy: "Published by", publishedAt: "Published at", solverStatus: "Solver status", publicationHistory: "Publication history",
-    outputGovernance: "Output governance", outputAvailability: "Output availability", outputPackage: "Output package", outputPackageId: "Output package ID",
-    completenessStatus: "Completeness status", passedChecks: "Passed checks", failedChecks: "Failed checks", releaseGovernance: "Release context",
-    recommendationCount: "Release recommendations", unauthorizedCount: "Unauthorized", auditGovernance: "Audit context", auditEventCount: "Audit events",
+    outputGovernance: "Plan output", outputAvailability: "Output availability", outputPackage: "Plan output package", outputPackageId: "Output package ID",
+    completenessStatus: "Output checks", passedChecks: "Passed checks", failedChecks: "Failed checks", releaseGovernance: "Release readiness",
+    recommendationCount: "Release recommendations", unauthorizedCount: "Unauthorized", auditGovernance: "Action history", auditEventCount: "Records",
     scenarioSelectionCount: "Scenario selections", workOrderCommandCount: "Work-order commands", publicationActionCount: "Publication actions",
+    simulationResults: "Simulation results", simioValidation: "Simio validation", simioValidationStatus: "Validation status", simioRunner: "Runner", simioPackage: "Validation package",
+    simioModelPath: "Model path", simioResultModelPath: "Result model", simioIssues: "Issues", simioKpis: "Validation KPIs",
+    simioFeasibility: "Feasibility", simioThroughput: "Throughput", simioQueueMetrics: "Queue metrics", simioWipMetrics: "WIP metrics",
+    simioResourceUtilization: "Resource utilization", simioResultCoverage: "Result coverage", simioRunnerMode: "Runner mode",
+    simioTemplateRegistry: "Simio simulation templates", simioTemplate: "Simulation template", activeSimioTemplate: "Active template",
+    templateId: "Template ID", templateName: "Template name", templateVersion: "Template version", templatePath: "Template path",
+    templateSourceType: "Template source type", timeUnitPolicy: "Time unit rule", desktopValidationStatus: "Desktop validation status",
+    templateStatus: "Template status", configuredTemplates: "Registered templates", templatePolicy: "Template usage rule",
+    defaultTemplateDirectory: "Default template directory", runtimeRule: "Runtime rule", timeUnitRule: "Time unit rule",
+    templateReady: "Template configured. Simulation validation will copy it into a derived run model.",
+    templateNeedsAttention: "Template configuration needs review.", pendingManualCheck: "Pending manual Desktop check",
+    simioRunnerAuto: "Auto", simioRunnerMock: "Mock", simioRunnerLocal: "Local headless", runSimioValidation: "Run simulation validation",
+    simioOptionalValidation: "Available after the plan is completed on the simulation results tab.", simioValidationRequested: "Simio simulation validation completed.",
+    noSimulationResult: "Simio simulation validation has not been requested.", busyMinutes: "Busy minutes", starvedMinutes: "Starved minutes", evidence: "Data source",
+    actualStart: "Actual start", actualEnd: "Actual end", queueWaitMinutes: "Queue wait", wipAfterStart: "WIP after start",
+    wipAfterEnd: "WIP after end", eventStatus: "Event status", parsedSources: "Data used", unavailableSources: "Data not available",
+    simioSourceParsedFromSDBROutputRows: "From work-order output rows", simioSourceParsedFromPostRunLogs: "From Simio run logs",
+    simioSourceParsedFromInteractiveStatistics: "From Simio interactive statistics", simioSourceParsed: "Fully parsed",
+    simioSourcePartialResultParsed: "Partial simulation result parsed", simioSourceUnavailable: "Unavailable",
+    simioPartialWithAvailableMetrics: "Partial simulation result parsed; available returned metrics are shown below.",
+    businessDecision: "Business decision", publicationDecision: "Publication progress", outputDecision: "Output readiness", releaseDecision: "Release readiness",
+    simulationDecision: "Simulation validation", auditDecision: "Action history", technicalDetails: "Technical details", showDetails: "Expand", hideDetails: "Collapse",
+    planCanPublish: "Plan can continue through publication", planNeedsReview: "Plan needs review or approval first", outputReadyForReview: "Plan output is complete", outputNeedsAttention: "Plan output needs attention",
+    releaseReadySummary: "Release recommendations are available", releaseNoRecommendation: "No release recommendations yet", simulationPassedSummary: "Simulation passed and can support review",
+    simulationWarningSummary: "Simulation ran with warnings", simulationNotRunSummary: "Simulation has not been run", auditReadySummary: "Key actions are recorded",
+    simioIssue_SIMIO_RESULT_LOG_MISSING: "Full statistics file was not produced; other result data is being used.",
+    simioIssue_SIMIO_UNFINISHED_ORDERS: "Simulation shows one or more unfinished orders.",
+    simioIssue_SIMIO_BINARY_LOGS_PARTIAL: "Some simulation logs only returned key metrics.",
+    simioIssue_SIMIO_RESULT_PARTIAL: "Simulation completed, but some details could not be parsed.",
+    simioEvent_OperationStarted: "Operation started", simioEvent_OperationCompleted: "Operation completed", simioEvent_OrderStarted: "Order started", simioEvent_OrderCompleted: "Order completed",
     externalDelivery: "External delivery", notSent: "Not sent", packageReady: "Output package available", packageUnavailable: "Output package unavailable",
+    externalDeliveryOwnedByIntegrations: "ERP/MES delivery is owned by the external integration module. This version only creates an internal output package.",
     noPublicationHistory: "No publication history yet.", supersedesRun: "Supersedes run", supersededByRun: "Superseded by",
     reviewPlan: "Submit for review", approvePlan: "Approve plan", publishPlan: "Publish plan", revokePublication: "Revoke publication",
     publicationCommentPrompt: "Enter a plan-governance comment.", publicationActionCompleted: "Plan publication status updated.",
@@ -354,7 +462,7 @@ const I18N = {
     previousPage: "Previous", nextPage: "Next", rowsPerPage: "Rows per page", viewNamePrompt: "Enter a view name.",
     priorityPrompt: "Enter a priority from 1 to 999.", selectedCount: "{count} orders selected", planCurrent: "Current plan",
     planStale: "Newer plan available", workOrderDetail: "Work order detail", operations: "Operations", auditHistory: "Audit history",
-    releaseContext: "Release evaluation context", evaluatedAt: "Evaluated at", reevaluate: "Re-evaluate",
+    releaseContext: "Release evaluation", evaluatedAt: "Evaluated at", reevaluate: "Re-evaluate",
     releaseSnapshotRefreshed: "Mock operational snapshot refreshed and release gate re-evaluated.", releaseLoadFailed: "Release evaluation could not be loaded",
     releaseRetryAdvice: "Check the completed plan and operational snapshot.", noReleaseRuns: "No completed plan is available for evaluation",
     totalOrders: "Total orders", readyToRelease: "Ready", blocked: "Blocked", authorized: "Authorized",
@@ -370,15 +478,27 @@ const I18N = {
     effectiveMaxWipCount: "Effective WIP limit", actualWipCount: "Current WIP", projectedWipCount: "Projected WIP",
     minutesUntilRelease: "Minutes until release", toleranceMinutes: "Stability tolerance minutes", replanThresholdMinutes: "Replan threshold minutes",
     consecutiveBlockedThreshold: "Consecutive block threshold", replanCooldownMinutes: "Replan cooldown minutes", action: "Action",
-    deviationMinutes: "Deviation minutes", absoluteDeviationMinutes: "Absolute deviation minutes", reasonCodeLabel: "Reason code", riskCount: "Risk count",
+    deviationMinutes: "Deviation minutes", absoluteDeviationMinutes: "Absolute deviation minutes", reasonCodeLabel: "Business reason", riskCount: "Risk count",
+    recommendedAction: "Recommended action", requiresReschedule: "Requires reschedule",
     reason_ROPE_TIME_NOT_REACHED: "Rope release time has not been reached.", reason_MATERIAL_SHORTAGE: "Available material is insufficient.",
     reason_MATERIAL_INBOUND_PENDING: "Required material is still inbound.", reason_WIP_LIMIT_EXCEEDED: "Release would exceed the WIP limit.",
     reason_OPERATIONAL_SNAPSHOT_STALE: "The operational snapshot is stale.", reason_OPERATIONAL_SNAPSHOT_FUTURE: "The operational snapshot is later than the evaluation time.",
     action_RefreshOperationalSnapshotAndReevaluate: "Sync/create a fresh operational snapshot and re-evaluate release",
     action_CorrectEvaluationTimeOrSnapshot: "Correct the evaluation time or selected snapshot",
+    action_ReadyForRelease: "Ready for release",
+    action_HoldForWip: "Hold until WIP decreases",
+    action_WaitForInbound: "Wait for inbound material",
+    action_ExpediteMaterial: "Expedite material or adjust supply",
+    action_Monitor: "Monitor",
+    action_Review: "Planner review required",
+    action_Replan: "Replan recommended",
+    reason_DeviationAtReplanThreshold: "Deviation reached the replan threshold",
+    reason_WithinTolerance: "Deviation remains within tolerance",
+    reason_ConsecutiveGateBlocks: "Consecutive gate blocks reached the threshold",
+    reason_ReplanCooldownActive: "Replan cooldown is active; review before deciding",
     authorizeImpact: "Authorize this work order? The gate snapshot will be audited and a dispatch package generated.", releaseAuthorized: "Work order release authorized.",
     commandRecorded: "Work order command recorded.", pageOf: "Page {page} of {pages}",
-    bufferContext: "Constraint buffer context", bufferMatrix: "Two-stage five-zone buffer matrix", bufferLoadFailed: "Buffer execution board could not be loaded",
+    bufferContext: "Constraint buffer", bufferMatrix: "Two-stage five-zone buffer matrix", bufferLoadFailed: "Buffer execution board could not be loaded",
     bufferRetryAdvice: "Select a completed plan containing authorized orders.", noBufferRuns: "No completed plan is available", bufferOwner: "Buffer owner",
     dailyLoad: "Daily load", lastScheduled: "Last scheduled", hours: "hours", yetToBeReceived: "Yet to be received", received: "Received",
     Early: "Early", Green: "Green", Yellow: "Yellow", Red: "Red", Late: "Late", orderCount: "Orders", totalLoad: "Total load",
@@ -389,6 +509,13 @@ const I18N = {
     noDispatchWarnings: "No candidates or warnings.", Dispatchable: "Dispatchable", CandidateOnly: "Candidate / warning", FollowPlan: "Follow plan",
     SuggestQueueJump: "Suggest queue jump", NeedsReplan: "Needs replan", Clear: "Clear", ReleaseNotAuthorized: "Release not authorized",
     LatestOperationalStateBlocked: "Latest state blocked", LatestOperationalStateNotReady: "Latest state not ready",
+    ArrivalNotConfirmed: "Arrival not confirmed", DispatchRejected: "MES rejected", ExceptionReported: "Shop-floor exception",
+    NotArrived: "Not arrived", MissingArrivalConfirmation: "Arrival not confirmed", Arrived: "Arrived", Processing: "Processing", Completed: "Completed",
+    currentExecution: "Shop-floor status", arrivalStatus: "Arrival status", recommendation: "Recommendation", recommendationReason: "Reason",
+    issueDispatchSuggestions: "Generate MES dispatch package", dispatchSuggestionNotIssued: "No dispatch suggestion package generated yet.",
+    dispatchSuggestionIssued: "MES dispatch suggestion package generated", packageId: "Package ID", mockDeliveryStatus: "Mock delivery status",
+    MockDispatchSuggestionIssued: "Mock dispatch suggestion generated", Accepted: "Accepted", Duplicate: "Duplicate",
+    Hold: "Hold", QueueJump: "Queue jump", ReviewAndReplan: "Review and replan",
     required: "Required", ConstraintResourceSetupOrIdleRisk: "Constraint resource may incur setup or idle risk",
     RedZoneCanOverrideSetupLossOnlyAfterPlannerConfirmation: "Red zone may override setup loss only after planner confirmation",
     bufferOrderDetail: "Buffer order detail", customer: "Customer", currentReason: "Current reason", receiveStatus: "Receipt status",
@@ -397,7 +524,7 @@ const I18N = {
     reasonRequiredForLate: "Late-zone transactions require a standard reason code.", Quantity: "Quantity", CompletionPercent: "Completion percent", Hours: "Hours",
     transactionRecorded: "Execution transaction recorded.", receiveOrStart: "Receive / Start", reason_MATERIAL_SHORTAGE_CODE: "Material shortage",
     reason_EQUIPMENT_DOWN_CODE: "Equipment down", reason_STAFF_ABSENCE_CODE: "Staff absence", reason_QUALITY_REWORK_CODE: "Quality rework",
-    exceptionContext: "Exception center context", severity: "Severity", exceptionLoadFailed: "Exception center could not be loaded", exceptionRetryAdvice: "Check the service and retry.",
+    exceptionContext: "Exception center", severity: "Severity", exceptionLoadFailed: "Exception center could not be loaded", exceptionRetryAdvice: "Check the service and retry.",
     totalExceptions: "Total exceptions", criticalExceptions: "Critical", warningExceptions: "Warnings", openExceptions: "Open", object: "Object", occurredAt: "Occurred at",
     businessImpact: "Business impact", suggestedAction: "Suggested action", exceptionDetail: "Exception detail", allSeverities: "All severities", allSources: "All sources",
     Critical: "Critical", Warning: "Warning", Information: "Information", impact_ScheduleUnavailable: "Schedule output unavailable", impact_ConstraintMayStarve: "Constraint may starve",
@@ -406,7 +533,7 @@ const I18N = {
     action_ReviewExecutionAlert: "Handle execution alert", action_ReviewReplanRequest: "Review replan request", viewDetail: "View detail", relatedObjects: "Related objects", resolutionActions: "Resolution actions",
     auditTrail: "Audit trail", noAuditTrail: "No audit trail", type_PlanningRunDeadLetter: "Planning run dead letter", type_PlanningRunFailed: "Planning run failed", type_ConstraintBufferRisk: "Constraint buffer risk",
     type_ExecutionAlert: "Execution alert", type_ReplanSuggestion: "Replan suggestion",
-    calendarContext: "Calendar configuration context", calendarPreviewLoadFailed: "Calendar preview could not be loaded", calendarPreviewRetryAdvice: "Check that master data and resource calendars are available, then retry.",
+    calendarContext: "Calendar configuration", calendarPreviewLoadFailed: "Calendar preview could not be loaded", calendarPreviewRetryAdvice: "Check that master data and resource calendars are available, then retry.",
     calendarElements: "Calendar elements", calendarRequiredElements: "Required element check", cpSatCapacityWindows: "CP-SAT capacity windows", finalCapacityWindows: "Final availability windows",
     sourceRules: "Source rules", appliedCalendarElements: "Recognized calendar rules", cpSatNeedReason: "Why CP-SAT needs it", missingImpactDomain: "Impact if missing",
     previewMode: "Preview mode", finalWindowCount: "Final windows", missingDailyCapacityDates: "Missing daily capacity dates", noCalendarWindows: "No final availability windows in this range.",
@@ -423,7 +550,7 @@ const I18N = {
     crossShiftRuleDescription: "Operations must currently fit inside one availability window; continuous cross-shift processing needs later confirmation.",
     noCalendarConfigRows: "No configuration records yet.", adminCalendarMoved: "Calendar configuration has moved to the dedicated page; administration keeps only capability summaries and current records.",
     openCalendarConfiguration: "Open calendar configuration", baseCalendarSummary: "Base calendar summary", calendarOverrideSummary: "Temporary override summary",
-    administrationContext: "Administration context", sensitiveSettingsReadOnly: "Sensitive connection parameters are read-only.", administrationLoadFailed: "Administration could not be loaded",
+    administrationContext: "Administration", sensitiveSettingsReadOnly: "Sensitive connection parameters are read-only.", administrationLoadFailed: "Administration could not be loaded",
     administrationRetryAdvice: "Check the local service and retry.", adminMasterDataTitle: "Master Data Administration", importPreview: "Import preview",
     importPreviewDescription: "Select an object, review structured preview and pre-validation, then generate a master data version.", importFile: "Import file", preValidate: "Pre-validate",
     generateVersion: "Generate version", routingImport: "Import routings", noImportSelected: "No import object selected", rawJsonHidden: "Raw JSON is hidden by default and available only in administrator debug mode.",
@@ -444,6 +571,7 @@ const I18N = {
     calendarOverrideBoundary: "Active temporary overrides drive new Planning Runs; maintenance > holiday > temporary override > overtime > base shift. Approval flow is status-only for now.",
     calendarScope: "Calendar scope", ResourceOnly: "Resource only", conflictPriority: "Conflict priority", ApprovalFlowStatus: "Approval flow",
     StatusOnly: "Status fields only", Maintenance: "Maintenance", Holiday: "Holiday", BaseShift: "Base shift", Draft: "Draft", Active: "Active", Retired: "Retired",
+    Ready: "Ready", SimioXmlProjectExport: "Simio XML project export",
     RateInterpretation: "Rate interpretation", Units: "Units", SchedulingWindow: "Scheduling window",
     BufferBoundaries: "Buffer boundary ratios", PiecesPerHour: "Pieces/hour", HoursPerPiece: "Hours/piece", MinutesPerPiece: "Minutes/piece",
     BufferMinutes: "Buffer minutes", SetupMinutes: "Setup minutes", DurationMinutes: "Duration minutes", FixedOffsetMinutes: "Fixed offset minutes",
@@ -489,6 +617,7 @@ let selectedReleaseRunID = null;
 let releaseManagementUsesLatestOperationalState = false;
 let bufferBoardData = null;
 let dispatchPriorityData = null;
+let mesDispatchIssueData = null;
 let selectedBufferRunID = null;
 let selectedBufferOrder = null;
 let exceptionCenterData = null;
@@ -498,6 +627,12 @@ let baseCalendarsData = [];
 let resourceCalendarAssignmentsData = [];
 let calendarOverridesData = [];
 let calendarResourcesData = [];
+
+const TIME_BUFFER_MULTIPLIERS = {
+  Low: { High: 0.75, Medium: 1.0, Low: 1.25 },
+  Medium: { High: 1.0, Medium: 1.25, Low: 1.5 },
+  High: { High: 1.5, Medium: 2.0, Low: 2.5 }
+};
 
 function translate(key) {
   return I18N[currentLanguage][key] || I18N.en[key] || key;
@@ -538,6 +673,7 @@ function applyLanguage(language) {
   });
   document.getElementById("language-select").value = currentLanguage;
   renderRoute();
+  refreshNavigationHelp();
 }
 
 function currentRoute() {
@@ -590,12 +726,198 @@ function renderRoute(focusWorkspace = false) {
   }
 }
 
+function navigationHelpContent(route) {
+  const routeConfig = ROUTES[route];
+  if (!routeConfig) return null;
+  const [titleKey, descriptionKey] = routeConfig;
+  return {
+    title: translate(titleKey),
+    description: translate(descriptionKey)
+  };
+}
+
+function positionNavigationHelp(link) {
+  const tooltip = document.getElementById("nav-business-tooltip");
+  if (!tooltip || tooltip.hidden) return;
+  const navigation = document.getElementById("primary-navigation");
+  const navRect = navigation.getBoundingClientRect();
+  const linkRect = link.getBoundingClientRect();
+  const spacing = 12;
+  const viewportPadding = 12;
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - tooltip.offsetWidth - viewportPadding);
+  const left = Math.min(navRect.right + spacing, maxLeft);
+  const top = Math.min(
+    Math.max(viewportPadding, linkRect.top + (linkRect.height / 2) - (tooltip.offsetHeight / 2)),
+    Math.max(viewportPadding, window.innerHeight - tooltip.offsetHeight - viewportPadding)
+  );
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function showNavigationHelp(link) {
+  if (isNarrowScreen()) return;
+  const content = navigationHelpContent(link.dataset.route);
+  if (!content) return;
+  const tooltip = document.getElementById("nav-business-tooltip");
+  document.getElementById("nav-business-tooltip-title").textContent = content.title;
+  document.getElementById("nav-business-tooltip-description").textContent = content.description;
+  tooltip.dataset.route = link.dataset.route;
+  tooltip.hidden = false;
+  tooltip.setAttribute("aria-hidden", "false");
+  document.querySelectorAll("[data-nav-help]").forEach((item) => item.removeAttribute("aria-describedby"));
+  link.setAttribute("aria-describedby", "nav-business-tooltip");
+  window.requestAnimationFrame(() => positionNavigationHelp(link));
+}
+
+function hideNavigationHelp() {
+  const tooltip = document.getElementById("nav-business-tooltip");
+  if (!tooltip) return;
+  tooltip.hidden = true;
+  tooltip.setAttribute("aria-hidden", "true");
+  tooltip.removeAttribute("data-route");
+  document.querySelectorAll("[data-nav-help]").forEach((item) => item.removeAttribute("aria-describedby"));
+}
+
+function refreshNavigationHelp() {
+  const tooltip = document.getElementById("nav-business-tooltip");
+  if (!tooltip || tooltip.hidden) return;
+  const route = tooltip.dataset.route;
+  const link = document.querySelector(`[data-nav-help][data-route="${route}"]`);
+  if (!link) {
+    hideNavigationHelp();
+    return;
+  }
+  showNavigationHelp(link);
+}
+
 function setText(id, value) {
   document.getElementById(id).textContent = value ?? "-";
 }
 
 function displayValue(value) {
   return value === null || value === undefined || value === "" ? translate("notProvided") : String(value);
+}
+
+function businessValue(value) {
+  if (typeof value === "boolean") return translate(value ? "yes" : "no");
+  if (["Pending", "Queued", "Running", "Completed", "Failed", "DeadLetter", "Cancelled"].includes(String(value))) {
+    return statusLabel(String(value));
+  }
+  if (value === "Test planning run is awaiting execution.") {
+    return currentLanguage === "zh" ? "排程任务正在等待执行。" : value;
+  }
+  const translated = translate(`reason_${value}`);
+  if (!String(translated).startsWith("reason_")) return translated;
+  const action = translate(`action_${value}`);
+  if (!String(action).startsWith("action_")) return action;
+  return simioBusinessStatusLabel(value);
+}
+
+function businessBoolean(key, value) {
+  if (key === "requiresReschedule") return translate(value ? "needReschedule" : "noNeedReschedule");
+  return businessValue(value);
+}
+
+function externalDeliveryReason(value) {
+  return value === "External ERP/MES delivery is owned by BE-INT-* integrations."
+    ? translate("externalDeliveryOwnedByIntegrations")
+    : displayValue(value);
+}
+
+function simioSourceLabel(value) {
+  const key = {
+    ParsedFromSDBROutputRows: "simioSourceParsedFromSDBROutputRows",
+    ParsedFromPostRunLogs: "simioSourceParsedFromPostRunLogs",
+    ParsedFromInteractiveStatistics: "simioSourceParsedFromInteractiveStatistics",
+    Parsed: "simioSourceParsed",
+    PartialResultParsed: "simioSourcePartialResultParsed",
+    Unavailable: "simioSourceUnavailable"
+  }[value];
+  return key ? translate(key) : simioBusinessStatusLabel(value);
+}
+
+function simioEventStatusLabel(value) {
+  const translated = translate(`simioEvent_${value}`);
+  return !String(translated).startsWith("simioEvent_") ? translated : businessValue(value);
+}
+
+function simioIssueBusinessLabel(issue) {
+  const translated = translate(`simioIssue_${issue?.Code}`);
+  if (!String(translated).startsWith("simioIssue_")) return translated;
+  return businessValue(issue?.Message || issue?.Code || "simioIssues");
+}
+
+function simioIssueSeverityClass(issue) {
+  return issue?.Severity === "Error" ? " is-error" : "";
+}
+
+function simioDataSourceLabel(value) {
+  if (value === "Results/Model/Interactive_Results.stats") {
+    return currentLanguage === "zh" ? "完整统计文件" : "Full statistics file";
+  }
+  return simioSourceLabel(value);
+}
+
+function compactFingerprint(value) {
+  return value ? `${String(value).slice(0, 16)}...` : "-";
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return new Intl.NumberFormat(currentLanguage === "zh" ? "zh-CN" : "en-US", {
+    maximumFractionDigits: 2
+  }).format(number);
+}
+
+function formatSimioThroughput(throughput) {
+  if (!throughput) return null;
+  const completed = formatNumber(throughput.CompletedOrderCount);
+  const planned = formatNumber(throughput.PlannedOrderCount);
+  const unfinished = formatNumber(throughput.UnfinishedOrderCount);
+  const created = throughput.SimioEntityCreated === undefined ? null : formatNumber(throughput.SimioEntityCreated);
+  const destroyed = throughput.SimioEntityDestroyed === undefined ? null : formatNumber(throughput.SimioEntityDestroyed);
+  const parts = [
+    currentLanguage === "zh" ? `完成 ${completed} / 计划 ${planned}` : `Completed ${completed} / planned ${planned}`,
+    currentLanguage === "zh" ? `未完成 ${unfinished}` : `unfinished ${unfinished}`
+  ];
+  if (created !== null || destroyed !== null) {
+    parts.push(currentLanguage === "zh" ? `实体 ${created ?? "-"} / 销毁 ${destroyed ?? "-"}` : `entities ${created ?? "-"} / destroyed ${destroyed ?? "-"}`);
+  }
+  return parts.join(" · ");
+}
+
+function formatSimioWip(metrics) {
+  if (!metrics) return null;
+  const avg = formatNumber(metrics.SystemAverageWip);
+  const max = formatNumber(metrics.SystemMaxWip);
+  return currentLanguage === "zh"
+    ? `${simioSourceLabel(metrics.Status)}，平均 ${avg}，最大 ${max}`
+    : `${simioSourceLabel(metrics.Status)}, avg ${avg}, max ${max}`;
+}
+
+function formatSimioQueue(metrics) {
+  if (!metrics) return null;
+  const first = (metrics.Resources || [])[0] || {};
+  if (first.AverageWaitMinutes !== undefined || first.MaxWaitMinutes !== undefined) {
+    return currentLanguage === "zh"
+      ? `${simioSourceLabel(metrics.Status)}，平均/最大等待 ${formatNumber(first.AverageWaitMinutes)}/${formatNumber(first.MaxWaitMinutes)} 分钟`
+      : `${simioSourceLabel(metrics.Status)}, avg/max wait ${formatNumber(first.AverageWaitMinutes)}/${formatNumber(first.MaxWaitMinutes)} min`;
+  }
+  return currentLanguage === "zh"
+    ? `${simioSourceLabel(metrics.Status)}，平均/最大队列 ${formatNumber(first.AverageStationContent)}/${formatNumber(first.MaxStationContent)}`
+    : `${simioSourceLabel(metrics.Status)}, avg/max queue ${formatNumber(first.AverageStationContent)}/${formatNumber(first.MaxStationContent)}`;
+}
+
+function formatSimioUtilization(metrics) {
+  if (!metrics) return null;
+  const resources = metrics.Resources || [];
+  const busyRows = resources.filter((item) => Number(item.BusyMinutes || 0) > 0).length;
+  const total = resources.length;
+  return currentLanguage === "zh"
+    ? `${simioSourceLabel(metrics.Status)}，${busyRows}/${total} 个资源有加工记录`
+    : `${simioSourceLabel(metrics.Status)}, ${busyRows}/${total} resources have processing records`;
 }
 
 function formatDate(value) {
@@ -822,6 +1144,7 @@ function renderDataReadiness(payload) {
   renderSummary("operational-state-summary", snapshot?.Summary);
   renderReadinessIssues(payload.Issues || []);
   document.getElementById("select-planning-inputs").disabled = !payload.CanCreatePlanningRun;
+  document.getElementById("generate-operational-snapshot").disabled = !snapshot?.SnapshotID;
   document.getElementById("readiness-error").hidden = true;
 }
 
@@ -891,7 +1214,43 @@ async function loadDataReadiness() {
     renderDataReadiness(payload.Data);
   } catch (_error) {
     banner.className = "readiness-banner is-blocked";
+    document.getElementById("generate-operational-snapshot").disabled = true;
     document.getElementById("readiness-error").hidden = false;
+  }
+}
+
+async function generateOperationalSnapshotFromLatest() {
+  const sourceSnapshotID = dataReadiness?.LatestOperationalStateSnapshot?.SnapshotID;
+  if (!sourceSnapshotID) {
+    showNotification(translate("operationalSnapshotMissing"), "error");
+    return;
+  }
+  const button = document.getElementById("generate-operational-snapshot");
+  button.disabled = true;
+  try {
+    const sourceResponse = await fetch(`/planner/workbench/operational-state/snapshots/${encodeURIComponent(sourceSnapshotID)}`, { headers: { Accept: "application/json" } });
+    if (!sourceResponse.ok) throw new Error(String(sourceResponse.status));
+    const source = (await sourceResponse.json()).Data.Snapshot || {};
+    const now = new Date();
+    const snapshotID = `OPS-MOCK-${now.toISOString().replace(/\D/g, "").slice(0, 14)}`;
+    const createResponse = await fetch("/planner/workbench/operational-state/snapshots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        SnapshotID: snapshotID,
+        CapturedAt: now.toISOString(),
+        InventoryBuffers: source.InventoryBuffers || [],
+        MaterialAvailability: source.MaterialAvailability || [],
+        WipLimits: source.WipLimits || []
+      })
+    });
+    if (!createResponse.ok) throw new Error(String(createResponse.status));
+    showNotification(translate("operationalSnapshotGenerated"), "success");
+    await loadDataReadiness();
+  } catch (_error) {
+    showNotification(translate("operationalSnapshotGenerateFailed"), "error");
+  } finally {
+    button.disabled = !dataReadiness?.LatestOperationalStateSnapshot?.SnapshotID;
   }
 }
 
@@ -1034,6 +1393,32 @@ async function loadPlanningRuns() {
   }
 }
 
+function selectedOptionText(inputId) {
+  const element = document.getElementById(inputId);
+  return element?.selectedOptions?.[0]?.textContent || element?.value || "-";
+}
+
+function timeBufferRecommendation() {
+  const olt = Math.max(0, Number(document.getElementById("wizard-olt-minutes").value || 0));
+  const variability = document.getElementById("wizard-variability-profile").value;
+  const flex = document.getElementById("wizard-capacity-flex-profile").value;
+  const multiplier = TIME_BUFFER_MULTIPLIERS[variability]?.[flex] ?? 1.25;
+  return { multiplier, minutes: Math.round(olt * multiplier) };
+}
+
+function renderTimeBufferRecommendation() {
+  const { multiplier, minutes } = timeBufferRecommendation();
+  document.getElementById("wizard-time-buffer-multiplier").value = `${formatNumber(multiplier)}×`;
+  document.getElementById("wizard-time-buffer-recommendation").textContent = currentLanguage === "zh"
+    ? `${formatNumber(minutes)} 分钟`
+    : `${formatNumber(minutes)} min`;
+}
+
+function applyTimeBufferRecommendation() {
+  document.getElementById("wizard-time-buffer").value = timeBufferRecommendation().minutes;
+  showNotification(translate("timeBufferRecommendationApplied"), "success");
+}
+
 async function openPlanningRunWizard() {
   if (!dataReadiness) await loadDataReadiness();
   const dialog = document.getElementById("planning-run-wizard");
@@ -1048,6 +1433,8 @@ async function openPlanningRunWizard() {
   const ortools = planningRunWorkbench?.Capabilities?.Solvers?.find((item) => item.BackendID === "ortools");
   document.getElementById("solver-ortools").disabled = !ortools?.Available;
   document.getElementById("solver-ortools-status").textContent = translate(ortools?.Available ? "available" : "unavailable");
+  document.getElementById("wizard-olt-minutes").value = document.getElementById("wizard-time-buffer").value || "120";
+  renderTimeBufferRecommendation();
   setWizardStep(1);
   dialog.showModal();
 }
@@ -1071,6 +1458,8 @@ function renderWizardReview() {
   [
     ["runId", "wizard-run-id"], ["problem", "wizard-problem-id"], ["masterDataVersionLabel", "wizard-master-data-version"],
     ["snapshotLabel", "wizard-operational-snapshot"], ["scheduleStart", "wizard-schedule-start"],
+    ["operatingLeadTime", "wizard-olt-minutes"], ["variabilityProfile", "wizard-variability-profile"],
+    ["capacityFlexProfile", "wizard-capacity-flex-profile"], ["timeBufferMultiplier", "wizard-time-buffer-multiplier"],
     ["timeBuffer", "wizard-time-buffer"], ["timeLimit", "wizard-time-limit"], ["maxAttempts", "wizard-max-attempts"],
     ["retryDelay", "wizard-retry-delay"]
   ].forEach(([labelKey, inputId]) => {
@@ -1079,7 +1468,8 @@ function renderWizardReview() {
     const label = document.createElement("span");
     label.textContent = translate(labelKey);
     const value = document.createElement("strong");
-    value.textContent = document.getElementById(inputId).value || "-";
+    const input = document.getElementById(inputId);
+    value.textContent = input?.tagName === "SELECT" ? selectedOptionText(inputId) : (input?.value || "-");
     row.append(label, value);
     review.append(row);
   });
@@ -1149,7 +1539,7 @@ function renderPlanningRunDetail(detail) {
     ["duration", formatDate(detail.Worker.LeaseExpiresAt)], ["attempts", detail.Worker.LeaseRenewalCount]
   ] : [["workerLease", translate("noWorker")]]));
   content.append(listSection("timeline", detail.Timeline, (item) => `${statusLabel(item.Status)} · ${formatDate(item.ChangedAt)} · ${item.ChangedBy}`));
-  content.append(listSection("diagnostics", detail.Diagnostics, (item) => `${item.Code}: ${item.Message}`));
+  content.append(listSection("diagnostics", detail.Diagnostics, (item) => `${businessValue(item.Code)}：${businessValue(item.Message)}`));
   content.append(listSection("auditEvents", detail.AuditEvents, (item) => `${item.Action} · ${item.ActorID} · ${formatDate(item.OccurredAt)}`));
 }
 
@@ -1174,21 +1564,56 @@ function detailSection(titleKey, rows) {
   return section;
 }
 
+function collapsibleDetailSection(titleKey, rows, { open = false } = {}) {
+  const details = document.createElement("details");
+  details.className = "collapsible-detail";
+  details.open = open;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = translate(titleKey);
+  const action = document.createElement("small");
+  action.className = "collapsible-action";
+  action.textContent = translate(open ? "hideDetails" : "showDetails");
+  summary.append(title, action);
+  const content = detailSection(titleKey, rows);
+  content.querySelector("h3")?.remove();
+  details.append(summary, content);
+  details.addEventListener("toggle", () => {
+    action.textContent = translate(details.open ? "hideDetails" : "showDetails");
+  });
+  return details;
+}
+
+function businessDecisionCard(titleKey, value, detailRows = [], { tone = "neutral" } = {}) {
+  const card = document.createElement("article");
+  card.className = `business-decision-card tone-${tone}`;
+  const title = document.createElement("span");
+  title.textContent = translate(titleKey);
+  const strong = document.createElement("strong");
+  strong.textContent = value ?? "-";
+  card.append(title, strong);
+  if (detailRows.length) {
+    card.append(collapsibleDetailSection("technicalDetails", detailRows));
+  }
+  return card;
+}
+
 function detailRowsFromObject(source) {
   return Object.entries(source || {})
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .map(([key, value]) => [lowerFirst(key), detailDisplayValue(value)]);
+    .map(([key, value]) => [lowerFirst(key), detailDisplayValue(value, lowerFirst(key))]);
 }
 
-function detailDisplayValue(value) {
+function detailDisplayValue(value, key = "") {
   if (Array.isArray(value)) return `${value.length} · ${translate("riskCount")}`;
+  if (typeof value === "boolean") return businessBoolean(key, value);
   if (typeof value === "object" && value !== null) {
     return Object.entries(value)
       .filter(([, nested]) => nested !== undefined && nested !== null && nested !== "")
-      .map(([key, nested]) => `${translate(lowerFirst(key))}: ${detailDisplayValue(nested)}`)
+      .map(([nestedKey, nested]) => `${translate(lowerFirst(nestedKey))}: ${detailDisplayValue(nested, lowerFirst(nestedKey))}`)
       .join(" · ");
   }
-  return value;
+  return businessValue(value);
 }
 
 function lowerFirst(value) {
@@ -1767,7 +2192,10 @@ function renderScheduleOutputGovernance() {
   const container = document.getElementById("output-governance-summary");
   if (!container) return;
   container.replaceChildren();
-  if (!scheduleOutputGovernanceData) return;
+  if (!scheduleOutputGovernanceData) {
+    renderSimulationResults();
+    return;
+  }
   const completeness = scheduleOutputGovernanceData.Completeness || {};
   const checks = completeness.Checks || [];
   const passedCount = checks.filter((item) => item.Passed).length;
@@ -1775,35 +2203,261 @@ function renderScheduleOutputGovernance() {
   const release = scheduleOutputGovernanceData.Release || {};
   const audit = scheduleOutputGovernanceData.Audit || {};
   const frozen = scheduleOutputGovernanceData.FrozenInputs || {};
+  const simio = scheduleOutputGovernanceData.SimioValidation || {};
   const packageId = scheduleOutputPackageData?.PackageID || scheduleOutputGovernanceData.OutputPackageID;
-  container.append(detailSection("outputGovernance", [
-    ["outputAvailability", translate(scheduleOutputGovernanceData.OutputAvailability === "Available" ? "packageReady" : "packageUnavailable")],
-    ["outputPackageId", displayValue(packageId)],
-    ["scheduleFingerprint", scheduleOutputGovernanceData.ScheduleFingerprint ? `${scheduleOutputGovernanceData.ScheduleFingerprint.slice(0, 16)}...` : "-"],
+  const publicationStatus = planPublicationData?.Status;
+  const publicationReady = ["Reviewed", "Approved", "Published"].includes(publicationStatus);
+  const outputAvailable = scheduleOutputGovernanceData.OutputAvailability === "Available";
+  const hasReleaseRecommendations = Number(release.RecommendationCount || 0) > 0;
+  const simioStatus = simio.Status || "NotRequested";
+  const simioFeasible = ["Feasible", "FeasibleWithWarnings"].includes(simio.FeasibilityConclusion);
+  const simioTone = simio.FeasibilityConclusion === "Feasible" ? "good" : (simio.Status === "NotRequested" ? "neutral" : "warn");
+  container.classList.add("governance-decision-grid");
+  container.append(
+    businessDecisionCard(
+      "publicationDecision",
+      publicationReady ? translate("planCanPublish") : translate("planNeedsReview"),
+      [["publicationStatus", publicationStatus ? publicationStatusLabel(publicationStatus) : "-"]],
+      { tone: publicationReady ? "good" : "warn" }
+    ),
+    businessDecisionCard(
+      "outputDecision",
+      outputAvailable && !failedCodes.length ? translate("outputReadyForReview") : translate("outputNeedsAttention"),
+      [
+        ["outputAvailability", translate(outputAvailable ? "packageReady" : "packageUnavailable")],
+        ["passedChecks", `${passedCount} / ${checks.length}`],
+        ["failedChecks", failedCodes.length ? failedCodes.map(businessValue).join(", ") : translate("noIssues")],
+        ["outputPackageId", displayValue(packageId)],
+        ["scheduleFingerprint", compactFingerprint(scheduleOutputGovernanceData.ScheduleFingerprint)]
+      ],
+      { tone: outputAvailable && !failedCodes.length ? "good" : "warn" }
+    ),
+    businessDecisionCard(
+      "releaseDecision",
+      hasReleaseRecommendations ? translate("releaseReadySummary") : translate("releaseNoRecommendation"),
+      [
+        ["recommendationCount", displayValue(release.RecommendationCount)],
+        ["authorized", displayValue(release.AuthorizedCount)],
+        ["unauthorizedCount", displayValue(release.UnauthorizedCount)]
+      ],
+      { tone: hasReleaseRecommendations ? "good" : "neutral" }
+    ),
+    businessDecisionCard(
+      "simulationDecision",
+      simioStatus === "NotRequested"
+        ? translate("simulationNotRunSummary")
+        : (simio.FeasibilityConclusion === "Feasible" ? translate("simulationPassedSummary") : translate("simulationWarningSummary")),
+      [
+        ["simioValidationStatus", simioBusinessStatusLabel(simio.Status)],
+        ["simioFeasibility", simioBusinessStatusLabel(simio.FeasibilityConclusion)],
+        ["simioTemplate", displayValue([simio.TemplateID, simio.TemplateVersion].filter(Boolean).join(" · "))],
+        ["simioIssues", displayValue(simio.IssueCount)],
+        ["simioThroughput", displayValue(formatSimioThroughput(simio.Throughput))],
+        ["simioQueueMetrics", displayValue(formatSimioQueue(simio.QueueMetrics))],
+        ["simioWipMetrics", displayValue(formatSimioWip(simio.WipMetrics))],
+        ["simioResourceUtilization", displayValue(formatSimioUtilization(simio.ResourceUtilization))]
+      ],
+      { tone: simioFeasible ? simioTone : (simioStatus === "NotRequested" ? "neutral" : "warn") }
+    ),
+    businessDecisionCard(
+      "auditDecision",
+      translate("auditReadySummary"),
+      [
+        ["auditEventCount", displayValue(audit.AuditEventCount)],
+        ["scenarioSelectionCount", displayValue(audit.ScenarioSelectionCount)],
+        ["workOrderCommandCount", displayValue(audit.WorkOrderCommandCount)],
+        ["publicationActionCount", displayValue(audit.PublicationActionCount)]
+      ],
+      { tone: "neutral" }
+    )
+  );
+  container.append(collapsibleDetailSection("technicalDetails", [
     ["masterDataVersionLabel", displayValue(frozen.MasterDataVersionID)],
     ["snapshotLabel", displayValue(frozen.OperationalStateSnapshotID)],
-    ["releasePolicyVersion", displayValue(frozen.ReleasePolicyVersionID)]
-  ]));
-  container.append(detailSection("completenessStatus", [
-    ["passedChecks", `${passedCount} / ${checks.length}`],
-    ["failedChecks", failedCodes.length ? failedCodes.join(", ") : translate("noIssues")]
-  ]));
-  container.append(detailSection("releaseGovernance", [
-    ["recommendationCount", displayValue(release.RecommendationCount)],
-    ["authorized", displayValue(release.AuthorizedCount)],
-    ["unauthorizedCount", displayValue(release.UnauthorizedCount)]
-  ]));
-  container.append(detailSection("auditGovernance", [
-    ["auditEventCount", displayValue(audit.AuditEventCount)],
-    ["scenarioSelectionCount", displayValue(audit.ScenarioSelectionCount)],
-    ["workOrderCommandCount", displayValue(audit.WorkOrderCommandCount)],
-    ["publicationActionCount", displayValue(audit.PublicationActionCount)]
+    ["releasePolicyVersion", displayValue(frozen.ReleasePolicyVersionID)],
+    ["simioRunner", displayValue(simio.RunnerBackend || simio.RunnerMode)],
+    ["simioPackage", displayValue(simio.PackageID)],
+    ["templatePath", displayValue(simio.TemplateFrozenSnapshot?.TemplatePath || simio.TemplateSourcePath)],
+    ["templateSourceType", displayValue(simio.TemplateFrozenSnapshot?.TemplateSourceType)],
+    ["timeUnitPolicy", displayValue(simio.TemplateFrozenSnapshot?.TimeUnitPolicy)],
+    ["desktopValidationStatus", simioTemplateStatusLabel(simio.TemplateFrozenSnapshot?.DesktopValidationStatus)],
+    ["simioResultCoverage", simioSourceLabel(simio.ResultCoverage?.Status)],
+    ["parsedSources", displayValue((simio.ResultCoverage?.ParsedSources || []).map(simioDataSourceLabel).join(", "))],
+    ["unavailableSources", displayValue((simio.ResultCoverage?.UnavailableSources || []).map(simioDataSourceLabel).join(", "))],
+    ["simioModelPath", displayValue(simio.ModelPath)],
+    ["simioResultModelPath", displayValue(simio.ResultModelPath)]
   ]));
   if (scheduleOutputPackageData) {
-    container.append(detailSection("externalDelivery", [
+    container.append(collapsibleDetailSection("externalDelivery", [
       ["externalDelivery", translate("notSent")],
-      ["reason", displayValue(scheduleOutputPackageData.ExternalDelivery?.Reason)]
+      ["reason", externalDeliveryReason(scheduleOutputPackageData.ExternalDelivery?.Reason)]
     ]));
+  }
+  renderSimulationResults();
+}
+
+function simioBusinessStatusLabel(value) {
+  const zh = {
+    NotRequested: "未请求", Completed: "已完成", Failed: "失败", Running: "验证中",
+    Feasible: "可行", FeasibleWithWarnings: "可行但有警告", Infeasible: "不可行",
+    ResultUnavailable: "结果不可用", PartialResultParsed: "已解析部分仿真结果", Parsed: "已完整解析",
+    ParsedFromPostRunLogs: "来自 Simio 运行日志", ParsedFromSDBROutputRows: "来自工单输出记录",
+    Mocked: "Mock 验证", NotSimulated: "未仿真", Unavailable: "不可用",
+    Warning: "提示", Error: "错误", Information: "信息"
+  };
+  const en = {
+    NotRequested: "Not requested", Completed: "Completed", Failed: "Failed", Running: "Running",
+    Feasible: "Feasible", FeasibleWithWarnings: "Feasible with warnings", Infeasible: "Infeasible",
+    ResultUnavailable: "Result unavailable", PartialResultParsed: "Partial simulation result parsed", Parsed: "Fully parsed",
+    ParsedFromPostRunLogs: "From Simio run logs", ParsedFromSDBROutputRows: "From work-order output rows",
+    Mocked: "Mocked", NotSimulated: "Not simulated", Unavailable: "Unavailable",
+    Warning: "Warning", Error: "Error", Information: "Information"
+  };
+  return (currentLanguage === "zh" ? zh : en)[value] || displayValue(value);
+}
+
+function renderSimulationResults() {
+  const summary = document.getElementById("simio-result-summary");
+  const utilizationBody = document.getElementById("simio-resource-utilization-body");
+  const adherenceBody = document.getElementById("simio-adherence-body");
+  const issuesContainer = document.getElementById("simio-result-issues");
+  if (!summary || !utilizationBody || !adherenceBody || !issuesContainer) return;
+  summary.replaceChildren();
+  utilizationBody.replaceChildren();
+  adherenceBody.replaceChildren();
+  issuesContainer.replaceChildren();
+  const simio = scheduleOutputGovernanceData?.SimioValidation || {};
+  if (!scheduleOutputGovernanceData || !simio.Status || simio.Status === "NotRequested") {
+    summary.append(detailSection("simioValidation", [
+      ["simioValidationStatus", translate("noSimulationResult")]
+    ]));
+    return;
+  }
+  const coverage = simio.ResultCoverage || {};
+  summary.append(detailSection("simioValidation", [
+    ["simioValidationStatus", simioBusinessStatusLabel(simio.Status)],
+    ["simioFeasibility", simioBusinessStatusLabel(simio.FeasibilityConclusion)],
+    ["simioTemplate", displayValue([simio.TemplateID, simio.TemplateVersion].filter(Boolean).join(" · "))],
+    ["simioThroughput", displayValue(formatSimioThroughput(simio.Throughput))],
+    ["simioQueueMetrics", displayValue(formatSimioQueue(simio.QueueMetrics))],
+    ["simioWipMetrics", displayValue(formatSimioWip(simio.WipMetrics))],
+    ["simioResultCoverage", simioBusinessStatusLabel(coverage.Status)]
+  ]));
+  summary.append(collapsibleDetailSection("technicalDetails", [
+    ["simioRunner", displayValue(simio.RunnerBackend || simio.RunnerMode)],
+    ["simioPackage", displayValue(simio.PackageID)],
+    ["templatePath", displayValue(simio.TemplateFrozenSnapshot?.TemplatePath || simio.TemplateSourcePath)],
+    ["templateSourceType", displayValue(simio.TemplateFrozenSnapshot?.TemplateSourceType)],
+    ["timeUnitPolicy", displayValue(simio.TemplateFrozenSnapshot?.TimeUnitPolicy)],
+    ["desktopValidationStatus", simioTemplateStatusLabel(simio.TemplateFrozenSnapshot?.DesktopValidationStatus)],
+    ["parsedSources", displayValue((coverage.ParsedSources || []).map(simioDataSourceLabel).join(", "))],
+    ["unavailableSources", displayValue((coverage.UnavailableSources || []).map(simioDataSourceLabel).join(", "))],
+    ["simioModelPath", displayValue(simio.ModelPath)],
+    ["simioResultModelPath", displayValue(simio.ResultModelPath)]
+  ]));
+
+  const utilizationRows = simio.ResourceUtilization?.Resources || [];
+  if (!utilizationRows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.className = "table-empty";
+    cell.textContent = translate("notAvailable");
+    row.append(cell);
+    utilizationBody.append(row);
+  } else {
+    utilizationRows.forEach((item) => {
+      const row = document.createElement("tr");
+      [
+        item.ResourceID,
+        item.UtilizationPercent === null || item.UtilizationPercent === undefined ? "-" : `${formatNumber(item.UtilizationPercent)}%`,
+        item.BusyMinutes,
+        item.StarvedMinutes,
+        item.MetricBasis ? simioDataSourceLabel(item.MetricBasis) : ((item.SourceLogs || []).map(simioDataSourceLabel).join(", ") || simioSourceLabel(simio.ResourceUtilization?.Status))
+      ].forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = displayValue(value);
+        row.append(cell);
+      });
+      utilizationBody.append(row);
+    });
+  }
+
+  const adherenceRows = simio.ScheduleAdherence?.Rows || [];
+  if (!adherenceRows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.className = "table-empty";
+    cell.textContent = displayValue(simio.ScheduleAdherence?.Message);
+    row.append(cell);
+    adherenceBody.append(row);
+  } else {
+    adherenceRows.forEach((item) => {
+      const row = document.createElement("tr");
+      [
+        item.OrderID,
+        item.ActualStartTime,
+        item.ActualEndTime,
+        item.QueueWaitMinutes,
+        item.WipAfterStart,
+        item.WipAfterEnd,
+        simioEventStatusLabel(item.EventStatus)
+      ].forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = displayValue(value);
+        row.append(cell);
+      });
+      adherenceBody.append(row);
+    });
+  }
+
+  const issues = simio.Issues || [];
+  if (!issues.length) {
+    const item = document.createElement("div");
+    item.className = "diagnostic-item";
+    item.textContent = translate("noIssues");
+    issuesContainer.append(item);
+  } else {
+    issues.forEach((issue) => {
+      const item = document.createElement("div");
+      item.className = `diagnostic-item${simioIssueSeverityClass(issue)}`;
+      const strong = document.createElement("strong");
+      strong.textContent = simioIssueBusinessLabel(issue);
+      const detail = document.createElement("span");
+      detail.textContent = simioBusinessStatusLabel(issue.Severity) || displayValue(issue.Severity);
+      item.append(strong, detail, collapsibleDetailSection("technicalDetails", [
+        ["code", displayValue(issue.Code)],
+        ["message", displayValue(issue.Message)],
+        ["severity", displayValue(issue.Severity)]
+      ]));
+      issuesContainer.append(item);
+    });
+  }
+}
+
+async function runSimioValidation() {
+  if (!selectedScheduleRunID) return;
+  const button = document.getElementById("run-simio-validation");
+  button.disabled = true;
+  try {
+    const response = await fetch("/planner/workbench/simio/validation-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        RunID: selectedScheduleRunID,
+        RunnerMode: document.getElementById("simio-runner-mode").value,
+        RequestedBy: "planner",
+        RequestedAt: new Date().toISOString()
+      })
+    });
+    if (!response.ok) throw new Error(String(response.status));
+    showNotification(translate("simioValidationRequested"), "success");
+    await loadScheduleOutputGovernance(selectedScheduleRunID);
+  } catch (_error) {
+    showNotification(translate("notifyError"), "error");
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -2349,7 +3003,7 @@ function openReleaseReasons(candidate) {
       title.textContent = translate(`reason_${reason.Code}`);
       const code = document.createElement("span");
       code.className = "issue-meta";
-      code.textContent = reason.Code;
+      code.textContent = `${translate("technicalCode")}: ${reason.Code}`;
       item.append(title, code);
       const reasonDetails = { ...(reason.Details || {}) };
       if (reasonDetails.RecommendedAction) {
@@ -2490,8 +3144,10 @@ function renderMesDispatchPriority() {
   const summary = document.getElementById("mes-dispatch-summary");
   const resources = document.getElementById("mes-dispatch-resources");
   const chip = document.getElementById("mes-dispatch-policy-chip");
+  const issueStatus = document.getElementById("mes-dispatch-issue-status");
   summary.replaceChildren();
   resources.replaceChildren();
+  renderMesDispatchIssueStatus(issueStatus);
   if (!dispatchPriorityData) {
     chip.className = "status-chip neutral";
     chip.textContent = translate("mesDispatchUnavailable");
@@ -2509,21 +3165,40 @@ function renderMesDispatchPriority() {
     ["replanSuggestions", dispatchPriorityData.Summary.ReplanSuggestionCount]
   ].forEach(([labelKey, value]) => summary.append(detailMetric(labelKey, value)));
   (dispatchPriorityData.Resources || []).forEach((resource) => {
-    const section = document.createElement("section");
-    section.className = "dispatch-resource-card";
-    const heading = document.createElement("div");
+    const section = document.createElement("details");
+    section.className = "dispatch-resource-card collapsible-resource";
+    const heading = document.createElement("summary");
     heading.className = "dispatch-resource-heading";
     const title = document.createElement("strong");
     title.textContent = `${resource.ResourceName || resource.ResourceID} · ${resource.WorkCenterID}`;
     const counts = document.createElement("span");
     counts.className = "status-chip neutral";
     counts.textContent = `${translate("dispatchableOperations")} ${resource.QueueCount} · ${translate("candidateWarnings")} ${resource.CandidateWarningCount}`;
-    heading.append(title, counts);
+    const action = document.createElement("small");
+    action.className = "collapsible-action";
+    action.textContent = translate("showDetails");
+    heading.append(title, counts, action);
     section.append(heading);
+    section.addEventListener("toggle", () => {
+      action.textContent = translate(section.open ? "hideDetails" : "showDetails");
+    });
     section.append(dispatchQueueGroup("dispatchableOperations", resource.Queue || [], false));
     section.append(dispatchQueueGroup("candidateWarnings", resource.CandidateWarnings || [], true));
     resources.append(section);
   });
+}
+
+function renderMesDispatchIssueStatus(container) {
+  if (!container) return;
+  if (!mesDispatchIssueData) {
+    container.className = "inline-note";
+    container.textContent = translate("dispatchSuggestionNotIssued");
+    return;
+  }
+  const packageId = mesDispatchIssueData.DispatchSuggestionPackage?.PackageID;
+  const status = mesDispatchIssueData.IntegrationMessage?.Status || mesDispatchIssueData.Status;
+  container.className = "inline-note";
+  container.textContent = `${translate("dispatchSuggestionIssued")} · ${translate("packageId")}: ${displayValue(packageId)} · ${translate("mockDeliveryStatus")}: ${translate(status) || displayValue(status)}`;
 }
 
 function dispatchQueueGroup(titleKey, rows, isWarning) {
@@ -2561,9 +3236,18 @@ function dispatchOperationCard(row, isWarning) {
     ["plannedStart", formatDate(row.ScheduledStart)],
     ["conflictResult", row.ConflictResultLabelZh || translate(row.ConflictResult)],
     ["releaseGate", translate(row.LatestGateStatus) || row.LatestGateStatus],
+    ["arrivalStatus", translate(row.ArrivalStatus) || row.ArrivalStatus],
+    ["currentExecution", translate(row.ExecutionStatus) || row.ExecutionStatus],
+    ["recommendation", translate(row.DispatchRecommendation) || row.DispatchRecommendation],
     ["plannerConfirmation", row.RequiresPlannerConfirmation ? translate("required") : translate("notProvided")]
   ].forEach(([labelKey, value]) => details.append(detailMetric(labelKey, value)));
   card.append(title, details);
+  if (row.RecommendationReason) {
+    const reason = document.createElement("p");
+    reason.className = isWarning ? "inline-warning" : "inline-note";
+    reason.textContent = `${translate("recommendationReason")}: ${row.RecommendationReason}`;
+    card.append(reason);
+  }
   if ((row.PlannerConfirmationReasons || []).length) {
     const note = document.createElement("p");
     note.className = "inline-warning";
@@ -2577,6 +3261,29 @@ function dispatchOperationCard(row, isWarning) {
     card.append(note);
   }
   return card;
+}
+
+async function issueMesDispatchSuggestions() {
+  const runId = document.getElementById("buffer-run-select").value;
+  const evaluatedValue = document.getElementById("buffer-evaluated-at").value;
+  const button = document.getElementById("issue-mes-dispatch-suggestions");
+  if (!runId || !evaluatedValue || !button) return;
+  button.disabled = true;
+  try {
+    const query = new URLSearchParams({
+      evaluated_at: new Date(evaluatedValue).toISOString(),
+      issued_by: "planner-1"
+    });
+    const response = await fetch(`/planner/workbench/mes/dispatch-suggestions/runs/${encodeURIComponent(runId)}/issue?${query}`, { method: "POST" });
+    if (!response.ok) throw new Error(String(response.status));
+    mesDispatchIssueData = (await response.json()).Data;
+    showNotification(translate("dispatchSuggestionIssued"), "success");
+  } catch (_error) {
+    showNotification(translate("actionFailed"), "error");
+  } finally {
+    button.disabled = false;
+    renderMesDispatchPriority();
+  }
 }
 
 function emptyDispatchMessage(key) {
@@ -3031,24 +3738,27 @@ function renderCalendarSourceElements() {
 
 async function loadAdministration() {
   try {
-    const [administrationResponse, cpSatResponse, baseCalendarsResponse, calendarAssignmentsResponse, calendarOverridesResponse] = await Promise.all([
+    const [administrationResponse, cpSatResponse, baseCalendarsResponse, calendarAssignmentsResponse, calendarOverridesResponse, simioTemplatesResponse] = await Promise.all([
       fetch("/planner/workbench/administration/workbench", { headers: { Accept: "application/json" } }),
       fetch("/planner/workbench/admin/cp-sat/assumptions", { headers: { Accept: "application/json" } }),
       fetch("/planner/workbench/admin/base-calendars", { headers: { Accept: "application/json" } }),
       fetch("/planner/workbench/admin/resource-calendar-assignments", { headers: { Accept: "application/json" } }),
-      fetch("/planner/workbench/admin/calendar-overrides", { headers: { Accept: "application/json" } })
+      fetch("/planner/workbench/admin/calendar-overrides", { headers: { Accept: "application/json" } }),
+      fetch("/planner/workbench/simio/templates", { headers: { Accept: "application/json" } })
     ]);
     if (!administrationResponse.ok) throw new Error(`HTTP ${administrationResponse.status}`);
     if (!cpSatResponse.ok) throw new Error(`HTTP ${cpSatResponse.status}`);
     if (!baseCalendarsResponse.ok) throw new Error(`HTTP ${baseCalendarsResponse.status}`);
     if (!calendarAssignmentsResponse.ok) throw new Error(`HTTP ${calendarAssignmentsResponse.status}`);
     if (!calendarOverridesResponse.ok) throw new Error(`HTTP ${calendarOverridesResponse.status}`);
+    if (!simioTemplatesResponse.ok) throw new Error(`HTTP ${simioTemplatesResponse.status}`);
     const administrationPayload = await administrationResponse.json();
     const cpSatPayload = await cpSatResponse.json();
     const baseCalendarsPayload = await baseCalendarsResponse.json();
     const calendarAssignmentsPayload = await calendarAssignmentsResponse.json();
     const calendarOverridesPayload = await calendarOverridesResponse.json();
-    administrationData = { ...administrationPayload.Data, CpSatAssumptions: cpSatPayload.Data };
+    const simioTemplatesPayload = await simioTemplatesResponse.json();
+    administrationData = { ...administrationPayload.Data, CpSatAssumptions: cpSatPayload.Data, SimioTemplates: simioTemplatesPayload.Data };
     baseCalendarsData = baseCalendarsPayload.Data?.Calendars || [];
     resourceCalendarAssignmentsData = calendarAssignmentsPayload.Data?.Assignments || [];
     calendarOverridesData = calendarOverridesPayload.Data?.Overrides || [];
@@ -3066,6 +3776,7 @@ function renderAdministration() {
   setText("admin-mode-chip", translate("partialEditable"));
   renderAdminObjects(administrationData.MasterDataObjects || []);
   renderAdminCapabilities(administrationData);
+  renderAdminSimioTemplates(administrationData.SimioTemplates);
   renderAdminCpSatAssumptions(administrationData.CpSatAssumptions);
   renderAdminPolicyGroups(administrationData.PolicyGroups || []);
 }
@@ -3133,6 +3844,46 @@ function renderAdminCapabilities(data) {
     card.append(title, status, detail);
     container.append(card);
   });
+}
+
+function simioTemplateStatusLabel(value) {
+  if (value === "PendingManualCheck") return translate("pendingManualCheck");
+  return translate(value) || displayValue(value);
+}
+
+function renderAdminSimioTemplates(data) {
+  const container = document.getElementById("admin-simio-templates");
+  if (!container) return;
+  container.replaceChildren();
+  if (!data) {
+    container.append(detailSection("simioTemplateRegistry", [["statusUnavailable", translate("notAvailable")]]));
+    return;
+  }
+  const active = data.ActiveTemplate || {};
+  const status = data.Status || "Unavailable";
+  const templateCount = data.TemplateCount ?? (data.Templates || []).length;
+  const rows = [
+    ["templateStatus", simioTemplateStatusLabel(status)],
+    ["activeSimioTemplate", displayValue(active.TemplateID)],
+    ["templateVersion", displayValue(active.TemplateVersion)],
+    ["timeUnitPolicy", displayValue(active.TimeUnitPolicy)],
+    ["desktopValidationStatus", simioTemplateStatusLabel(active.DesktopValidationStatus)],
+    ["configuredTemplates", templateCount]
+  ];
+  const section = detailSection("simioTemplateRegistry", rows);
+  const message = document.createElement("p");
+  message.className = status === "Ready" ? "inline-note" : "inline-warning";
+  message.textContent = status === "Ready" ? translate("templateReady") : translate("templateNeedsAttention");
+  section.append(message);
+  section.append(collapsibleDetailSection("technicalDetails", [
+    ["templateName", displayValue(active.TemplateName)],
+    ["templatePath", displayValue(active.TemplatePath)],
+    ["templateSourceType", displayValue(active.TemplateSourceType)],
+    ["defaultTemplateDirectory", displayValue(data.TemplatePolicy?.DefaultDirectory)],
+    ["runtimeRule", displayValue(data.TemplatePolicy?.RuntimeRule)],
+    ["timeUnitRule", displayValue(data.TemplatePolicy?.TimeUnitRule)]
+  ]));
+  container.append(section);
 }
 
 function renderAdminCpSatAssumptions(data) {
@@ -3537,6 +4288,7 @@ function toggleNavigation() {
   const navigation = document.getElementById("primary-navigation");
   const backdrop = document.getElementById("navigation-backdrop");
   const button = document.getElementById("navigation-toggle");
+  hideNavigationHelp();
   if (isNarrowScreen()) {
     const open = navigation.classList.toggle("is-open");
     backdrop.hidden = !open;
@@ -3549,6 +4301,7 @@ function toggleNavigation() {
 
 function closeMobileNavigation() {
   const navigation = document.getElementById("primary-navigation");
+  hideNavigationHelp();
   navigation.classList.remove("is-open");
   document.getElementById("navigation-backdrop").hidden = true;
   document.getElementById("navigation-toggle").setAttribute("aria-expanded", "false");
@@ -3585,11 +4338,19 @@ document.addEventListener("DOMContentLoaded", () => {
     persistLanguage(languageSelect.value);
     applyLanguage(languageSelect.value);
   });
+  document.querySelectorAll("[data-nav-help]").forEach((link) => {
+    link.addEventListener("mouseenter", () => showNavigationHelp(link));
+    link.addEventListener("focus", () => showNavigationHelp(link));
+    link.addEventListener("mouseleave", hideNavigationHelp);
+    link.addEventListener("blur", hideNavigationHelp);
+  });
+  window.addEventListener("resize", refreshNavigationHelp);
   document.getElementById("navigation-toggle").addEventListener("click", toggleNavigation);
   document.getElementById("navigation-backdrop").addEventListener("click", closeMobileNavigation);
   document.getElementById("refresh-case-acceptance").addEventListener("click", loadCaseAcceptance);
   document.getElementById("reset-all-cases").addEventListener("click", resetAllAcceptanceCases);
   document.getElementById("refresh-data-readiness").addEventListener("click", loadDataReadiness);
+  document.getElementById("generate-operational-snapshot").addEventListener("click", generateOperationalSnapshotFromLatest);
   document.getElementById("view-readiness-issues").addEventListener("click", openIssuesDrawer);
   document.getElementById("close-issues-drawer").addEventListener("click", closeIssuesDrawer);
   document.getElementById("drawer-backdrop").addEventListener("click", () => {
@@ -3608,11 +4369,18 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("close-planning-run-wizard").addEventListener("click", () => document.getElementById("planning-run-wizard").close());
   document.getElementById("wizard-back").addEventListener("click", () => setWizardStep(Math.max(1, planningRunWizardStep - 1)));
   document.getElementById("wizard-next").addEventListener("click", () => setWizardStep(Math.min(3, planningRunWizardStep + 1)));
+  ["wizard-olt-minutes", "wizard-variability-profile", "wizard-capacity-flex-profile"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", renderTimeBufferRecommendation);
+    document.getElementById(id).addEventListener("change", renderTimeBufferRecommendation);
+  });
+  document.getElementById("apply-time-buffer-recommendation").addEventListener("click", applyTimeBufferRecommendation);
   document.getElementById("planning-run-form").addEventListener("submit", submitPlanningRun);
   document.getElementById("close-planning-run-detail").addEventListener("click", closePlanningRunDetail);
   document.getElementById("schedule-result-run-select").addEventListener("change", (event) => loadScheduleResult(event.target.value));
   document.getElementById("refresh-schedule-result").addEventListener("click", () => loadScheduleResult(selectedScheduleRunID));
   document.querySelectorAll("[data-schedule-tab]").forEach((button) => button.addEventListener("click", () => setScheduleTab(button.dataset.scheduleTab)));
+  document.getElementById("run-simio-validation").addEventListener("click", runSimioValidation);
+  document.getElementById("refresh-simio-validation").addEventListener("click", () => loadScheduleOutputGovernance(selectedScheduleRunID));
   document.querySelectorAll("[data-gantt-mode]").forEach((button) => button.addEventListener("click", () => setGanttMode(button.dataset.ganttMode)));
   ["gantt-resource-filter", "gantt-order-filter", "gantt-type-filter", "gantt-zone-filter", "gantt-from-date", "gantt-to-date", "gantt-zoom"].forEach((id) => document.getElementById(id).addEventListener("change", renderGanttBoard));
   document.querySelectorAll("[data-load-view]").forEach((button) => button.addEventListener("click", () => setLoadView(button.dataset.loadView)));
@@ -3649,6 +4417,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refresh-release-management").addEventListener("click", reevaluateReleaseManagementWithLatestState);
   document.getElementById("buffer-run-select").addEventListener("change", loadBufferBoard);
   document.getElementById("refresh-buffer-board").addEventListener("click", loadBufferBoard);
+  document.getElementById("issue-mes-dispatch-suggestions").addEventListener("click", issueMesDispatchSuggestions);
   document.getElementById("close-buffer-order-detail").addEventListener("click", () => closeSideDrawer("buffer-order-detail"));
   document.getElementById("close-buffer-transaction-dialog").addEventListener("click", () => document.getElementById("buffer-transaction-dialog").close());
   document.getElementById("cancel-buffer-transaction").addEventListener("click", () => document.getElementById("buffer-transaction-dialog").close());

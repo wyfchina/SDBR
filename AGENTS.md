@@ -23,4 +23,10 @@
 
 - OR-Tools CP-SAT is the currently active and only executable solver implementation for new planning runs.
 - Gurobi must retain historical-result compatibility, but new Gurobi planning runs are paused and must be shown as unavailable for execution.
-- Simio must retain the product path defined by `UI-RUN-002`, but must be shown as unavailable until its backend integration is implemented.
+- Simio must retain the product path defined by `UI-RUN-002`; the current implemented scope is optional post-schedule validation through Mock Runner or local Headless Runner. Simio Portal, Server Connector, Experiment automation, and any publication hard gate remain deferred until explicitly implemented.
+
+## Simio integration work
+
+- Record every Simio model generation or mutation process in a durable repository document so the workflow can later be promoted into a Codex Skill.
+- Before guessing Simio API, XML, server connector, or headless execution behavior, inspect `model/` first, especially `model/Simio API Reference Guide.pdf`; use `model/Simio Reference Guide.pdf` and `model/Simio Server Connector Reference.pdf` as secondary references.
+- Treat existing Simio `.spfx` / XML prototypes under `model/` as local source-of-truth examples for object names, table shapes, and supported scheduling constructs.

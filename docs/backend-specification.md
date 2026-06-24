@@ -281,7 +281,7 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 Simio 集成工作约束：
 
 - 任何 Simio 模型生成、XML 写入、`.spfx` 修改或 headless 调用过程，都必须记录到仓库文档，作为后续沉淀 Codex Skill 的素材。
-- 遇到 Simio API、XML、Server Connector、headless 执行或模型结构不确定时，必须优先查阅 `model/` 目录，首选 `model/Simio API Reference Guide.pdf`，其次参考 `model/Simio Reference Guide.pdf`、`model/Simio Server Connector Reference.pdf` 和现有 `.spfx` / XML 原型。
+- 遇到 Simio API、XML、Server Connector、headless 执行或模型结构不确定时，必须优先查阅 `model/` 目录。Simio 官方 PDF 属于本地参考资料，不纳入 Git；若本机存在，首选 `model/Simio API Reference Guide.pdf`，其次参考 `model/Simio Reference Guide.pdf`、`model/Simio Server Connector Reference.pdf` 和现有 `.spfx` / XML 原型。
 - Simio 模板生成应保留可重复验证脚本或测试，避免只依赖人工打开模型检查。
 
 | ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
@@ -746,7 +746,7 @@ Simio 集成工作约束：
 | 2.40 | 2026-06-23 | Simio 验证闭环升级：默认模板源切换到 `model/Simple_DBR_XML/SDBR_Example.xml`，生成派生 `.spfx`，Local Headless 保存结果模型，并回传可行性结论、吞吐与部分结果覆盖 |
 | 2.39 | 2026-06-23 | 启用 Simio Local Headless helper：通过 Roslyn 编译 .NET 10 helper，调用 `SimioAPI.SimioProjectFactory.LoadProject` 和 `IPlan.RunPlan`，并接入 `runner_mode=local/auto` |
 | 2.38 | 2026-06-23 | 推进 BE-SIM-001 至 BE-SIM-004：新增 Simio 验证包生成、Mock Runner、RLM 前置检测、验证运行 API 和排程治理摘要；真实 Local Headless runner 仍保持增强路径 |
-| 2.37 | 2026-06-23 | 增加 Simio 集成工作约束：模型生成过程必须记录以便后续形成 Skill；不确定 Simio 集成细节时优先查阅 `model/` 下官方 API/Reference/Server Connector 文档和现有原型 |
+| 2.37 | 2026-06-23 | 增加 Simio 集成工作约束：模型生成过程必须记录以便后续形成 Skill；不确定 Simio 集成细节时优先查阅 `model/` 下官方 API/Reference/Server Connector 本地文档和现有原型，PDF 参考资料不纳入 Git |
 | 2.36 | 2026-06-23 | 推进 BE-SIM-001：补齐第一版 Simio 简单 DBR XML 模板，统一测试工厂资源 ID 下划线命名、固定工时、资源日历绑定和 FG-A/B/C 路由 |
 | 1.0 | 2026-06-19 | 建立完整产品蓝图、能力状态、实现证据、缺口、优先级与审计规则 |
 | 1.1 | 2026-06-19 | 完成 BE-UI-001 数据就绪聚合接口并记录 227 项测试基线 |

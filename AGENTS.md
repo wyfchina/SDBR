@@ -28,5 +28,5 @@
 ## Simio integration work
 
 - Record every Simio model generation or mutation process in a durable repository document so the workflow can later be promoted into a Codex Skill.
-- Before guessing Simio API, XML, server connector, or headless execution behavior, inspect `model/` first, especially `model/Simio API Reference Guide.pdf`; use `model/Simio Reference Guide.pdf` and `model/Simio Server Connector Reference.pdf` as secondary references.
+- Before guessing Simio API, XML, server connector, or headless execution behavior, inspect `model/` first. Official Simio PDFs are local-only reference files and are intentionally ignored by Git; when present locally, prefer `model/Simio API Reference Guide.pdf`, then `model/Simio Reference Guide.pdf` and `model/Simio Server Connector Reference.pdf`.
 - Treat existing Simio `.spfx` / XML prototypes under `model/` as local source-of-truth examples for object names, table shapes, and supported scheduling constructs.

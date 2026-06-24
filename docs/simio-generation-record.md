@@ -7,10 +7,11 @@ This document records Simio model generation and mutation workflows so they can 
 - Record every Simio model generation or mutation step here, including source model, changed tables, changed embedded files, validation scripts, and known limitations.
 - Before making assumptions about Simio API, XML, server connector, or headless execution behavior, inspect the local references under `model/`.
 - Reference priority:
-  1. `model/Simio API Reference Guide.pdf`
-  2. `model/Simio Reference Guide.pdf`
-  3. `model/Simio Server Connector Reference.pdf`
-  4. Existing `.spfx` / XML prototypes under `model/`
+  1. Local-only `model/Simio API Reference Guide.pdf` when present
+  2. Local-only `model/Simio Reference Guide.pdf` when present
+  3. Local-only `model/Simio Server Connector Reference.pdf` when present
+  4. Existing tracked `.spfx` / XML prototypes under `model/`
+- Simio official PDFs are intentionally ignored by Git because of file size; record the expected local paths, but do not commit the PDFs.
 - Keep generated model content testable by automated XML/table checks, not only manual Simio UI inspection.
 
 ## 2026-06-23 Simple DBR XML Template Completion
@@ -99,7 +100,7 @@ Future Skill Candidate Steps:
 
 Source references:
 
-- `model/Simio API Reference Guide.pdf`
+- Local-only `model/Simio API Reference Guide.pdf` when present
 - `https://github.com/SimioLLC/SimioApiHelper`
 - Local API assembly: `D:\Program Files\Simio LLC\Simio\SimioAPI.dll`
 - Local license service executable: `D:\Program Files\Simio LLC\RLM\rlm.exe`
@@ -162,7 +163,7 @@ Known limitations:
 
 Source references:
 
-- `model/Simio API Reference Guide.pdf`
+- Local-only `model/Simio API Reference Guide.pdf` when present
 - `https://github.com/SimioLLC/SimioApiHelper`
 - Local API assembly: `D:\Program Files\Simio LLC\Simio\SimioAPI.dll`
 - Local runtime: `D:\Program Files\Simio LLC\Simio\Simio.runtimeconfig.json`

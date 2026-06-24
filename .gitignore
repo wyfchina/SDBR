@@ -5,6 +5,8 @@ __pycache__/
 
 *.log
 
+model/*.pdf
+
 data/**/*.db
 data/**/*.db.bak
 data/**/*.bak

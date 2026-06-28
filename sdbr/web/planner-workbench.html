@@ -21,30 +21,39 @@
         <a class="nav-item" href="#overview" data-route="overview" data-nav-help>
           <span class="nav-index" aria-hidden="true">01</span><span data-i18n="navOverview">计划总览</span>
         </a>
+        <a class="nav-item" href="#operational-metrics" data-route="operational-metrics" data-nav-help>
+          <span class="nav-index" aria-hidden="true">02</span><span data-i18n="navOperationalMetrics">运营指标</span>
+        </a>
         <a class="nav-item" href="#data-readiness" data-route="data-readiness" data-nav-help>
-          <span class="nav-index" aria-hidden="true">02</span><span data-i18n="navData">数据就绪</span>
+          <span class="nav-index" aria-hidden="true">03</span><span data-i18n="navData">数据就绪</span>
+        </a>
+        <a class="nav-item" href="#material-planning" data-route="material-planning" data-nav-help>
+          <span class="nav-index" aria-hidden="true">04</span><span data-i18n="navMaterials">物料计划</span>
         </a>
         <a class="nav-item" href="#planning-runs" data-route="planning-runs" data-nav-help>
-          <span class="nav-index" aria-hidden="true">03</span><span data-i18n="navRuns">排程任务</span>
+          <span class="nav-index" aria-hidden="true">05</span><span data-i18n="navRuns">排程任务</span>
         </a>
         <a class="nav-item" href="#schedule-results" data-route="schedule-results" data-nav-help>
-          <span class="nav-index" aria-hidden="true">04</span><span data-i18n="navResults">排程结果</span>
+          <span class="nav-index" aria-hidden="true">06</span><span data-i18n="navResults">排程结果</span>
         </a>
         <a class="nav-item" href="#release-management" data-route="release-management" data-nav-help>
-          <span class="nav-index" aria-hidden="true">05</span><span data-i18n="navRelease">释放管理</span>
+          <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navRelease">释放管理</span>
         </a>
         <a class="nav-item" href="#buffer-board" data-route="buffer-board" data-nav-help>
-          <span class="nav-index" aria-hidden="true">06</span><span data-i18n="navBuffer">缓冲执行</span>
+          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navBuffer">缓冲执行</span>
+        </a>
+        <a class="nav-item" href="#dispatch-suggestions" data-route="dispatch-suggestions" data-nav-help>
+          <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navDispatch">派工建议</span>
         </a>
         <a class="nav-item" href="#exceptions" data-route="exceptions" data-nav-help>
-          <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navExceptions">异常中心</span>
+          <span class="nav-index" aria-hidden="true">10</span><span data-i18n="navExceptions">异常中心</span>
           <span class="nav-badge" aria-label="0" data-i18n-aria-label="noUnreadExceptions">0</span>
         </a>
         <a class="nav-item" href="#calendar" data-route="calendar" data-nav-help>
-          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navCalendar">日历配置</span>
+          <span class="nav-index" aria-hidden="true">11</span><span data-i18n="navCalendar">日历配置</span>
         </a>
         <a class="nav-item" href="#administration" data-route="administration" data-nav-help>
-          <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navAdmin">管理后台</span>
+          <span class="nav-index" aria-hidden="true">12</span><span data-i18n="navAdmin">管理后台</span>
         </a>
       </nav>
 
@@ -146,6 +155,38 @@
           </section>
         </div>
 
+        <div id="operational-metrics-view" class="operational-metrics-view" hidden>
+          <section class="result-context-bar" aria-label="运营指标范围" data-i18n-aria-label="operationalMetricsContext">
+            <label><span data-i18n="planningRun">排程任务</span><select id="operational-metrics-run-select"></select></label>
+            <label><span data-i18n="evaluatedAt">评估时间</span><input id="operational-metrics-evaluated-at" type="datetime-local"></label>
+            <button id="refresh-operational-metrics" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+          </section>
+          <div id="operational-metrics-error" class="persistent-error" role="alert" hidden>
+            <strong data-i18n="operationalMetricsLoadFailed">无法读取运营指标</strong>
+            <span data-i18n="operationalMetricsRetryAdvice">请确认已存在完成的排程任务和本地服务可用后重试。</span>
+          </div>
+          <section id="operational-metrics-content" class="operational-metrics-content" hidden>
+            <section class="operational-metrics-hero" aria-label="运营指标总览" data-i18n-aria-label="operationalMetricsOverview">
+              <div>
+                <span class="context-label" data-i18n="ddomMetricSet">DDOM 流动指标</span>
+                <strong id="operational-metrics-status">-</strong>
+                <p id="operational-metrics-scope">-</p>
+              </div>
+              <div class="metric-score">
+                <span data-i18n="overallScore">综合得分</span>
+                <strong id="operational-metrics-score">-</strong>
+              </div>
+            </section>
+            <div id="operational-metrics-categories" class="operational-metrics-grid"></div>
+            <section class="operational-feedback-panel" aria-labelledby="operational-feedback-title">
+              <div class="panel-heading">
+                <div><span class="panel-kicker" data-i18n="varianceFeedback">偏差反馈</span><h2 id="operational-feedback-title" data-i18n="feedbackForDDSOP">给 DDS&OP 的运行表现反馈</h2></div>
+              </div>
+              <div id="operational-feedback-list" class="operational-feedback-list"></div>
+            </section>
+          </section>
+        </div>
+
         <div id="data-readiness-view" class="data-readiness-view" hidden>
           <section id="readiness-banner" class="readiness-banner is-loading loading-block" data-quality-state="loading" aria-live="polite">
             <div>
@@ -215,6 +256,49 @@
             </section>
           </div>
 
+          <section class="readiness-panel ddmrp-status-panel" aria-labelledby="ddmrp-status-heading">
+            <div class="panel-heading">
+              <div>
+                <span class="panel-kicker" data-i18n="ddmrpRuntime">DDMRP 运行</span>
+                <h2 id="ddmrp-status-heading" data-i18n="ddmrpRuntimeStatus">DDMRP 运行状态</h2>
+              </div>
+              <span id="ddmrp-status-chip" class="status-chip neutral" data-i18n="notAvailable">无可用数据</span>
+            </div>
+            <div id="ddmrp-status-summary" class="summary-metrics" aria-label="DDMRP 运行状态摘要" data-i18n-aria-label="ddmrpRuntimeSummary">
+              <div><span data-i18n="decouplingPoints">解耦点</span><strong data-ddmrp-summary="DecouplingPointCount">-</strong></div>
+              <div><span data-i18n="redZone">红区</span><strong data-ddmrp-summary="RedCount">-</strong></div>
+              <div><span data-i18n="yellowZone">黄区</span><strong data-ddmrp-summary="YellowCount">-</strong></div>
+              <div><span data-i18n="greenZone">绿区</span><strong data-ddmrp-summary="GreenCount">-</strong></div>
+              <div><span data-i18n="aboveGreenZone">高于绿区</span><strong data-ddmrp-summary="AboveGreenCount">-</strong></div>
+              <div><span data-i18n="replenishmentSuggestions">补货建议</span><strong data-ddmrp-summary="ReplenishmentSuggestionCount">-</strong></div>
+              <div><span data-i18n="missingData">缺失数据</span><strong data-ddmrp-summary="MissingDataCount">-</strong></div>
+            </div>
+            <details id="ddmrp-details" class="collapsible-detail ddmrp-details">
+              <summary>
+                <span data-i18n="viewDdmrpDetails">解耦点明细</span>
+                <small class="collapsible-action" data-ddmrp-details-action data-i18n="showDetails">展开</small>
+              </summary>
+              <div class="table-scroll">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="item">物料</th>
+                      <th data-i18n="location">地点</th>
+                      <th data-i18n="onHand">在手量</th>
+                      <th data-i18n="netFlowPosition">净流位置</th>
+                      <th data-i18n="planningBufferZone">计划缓冲区</th>
+                      <th data-i18n="executionBufferZone">在手执行区</th>
+                      <th data-i18n="suggestedReplenishmentQty">建议补货量</th>
+                      <th data-i18n="recommendedAction">建议动作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ddmrp-status-table-body"></tbody>
+                </table>
+              </div>
+            </details>
+            <p id="ddmrp-status-message" class="muted ddmrp-source-note"></p>
+          </section>
+
           <section class="issues-section" aria-labelledby="issues-heading">
             <div>
               <span class="panel-kicker" data-i18n="dataQuality">数据质量</span>
@@ -222,6 +306,114 @@
               <p id="issues-summary" data-i18n="noIssues">没有发现数据问题。</p>
             </div>
             <button id="view-readiness-issues" class="button secondary" type="button" disabled data-i18n="viewIssues">查看问题</button>
+          </section>
+        </div>
+
+        <div id="material-planning-view" class="material-planning-view" hidden>
+          <section class="material-planning-summary" aria-label="物料计划摘要" data-i18n-aria-label="materialPlanningSummary">
+            <div><span data-i18n="decouplingPoints">解耦点</span><strong data-material-summary="DecouplingPointCount">-</strong></div>
+            <div><span data-i18n="criticalPriority">紧急</span><strong data-material-summary="RedCount">-</strong></div>
+            <div><span data-i18n="attentionPriority">关注</span><strong data-material-summary="YellowCount">-</strong></div>
+            <div><span data-i18n="normalPriority">正常</span><strong data-material-summary="GreenCount">-</strong></div>
+            <div><span data-i18n="aboveGreenZone">高于绿区</span><strong data-material-summary="AboveGreenCount">-</strong></div>
+            <div><span data-i18n="replenishmentSuggestions">补货建议</span><strong data-material-summary="ReplenishmentSuggestionCount">-</strong></div>
+          </section>
+
+          <section class="material-workbench-panel" aria-labelledby="material-workbench-heading">
+            <div class="material-workbench-toolbar">
+              <div>
+                <span class="panel-kicker" data-i18n="ddmrpRuntime">DDMRP 运行</span>
+                <h2 id="material-workbench-heading" data-i18n="materialPlanningWorkbench">物料计划工作台</h2>
+                <p id="material-planning-source" class="muted ddmrp-source-note"></p>
+              </div>
+              <div class="material-workbench-filters">
+                <label>
+                  <span data-i18n="searchItemOrLocation">搜索物料或地点</span>
+                  <input id="material-planning-search" type="search" autocomplete="off" data-i18n-placeholder="searchItemOrLocation" placeholder="搜索物料或地点">
+                </label>
+                <label>
+                  <span data-i18n="bufferZone">缓冲区</span>
+                  <select id="material-planning-zone-filter">
+                    <option value="All" data-i18n="allZones">全部缓冲区</option>
+                    <option value="Red" data-i18n="redZone">红区</option>
+                    <option value="Yellow" data-i18n="yellowZone">黄区</option>
+                    <option value="Green" data-i18n="greenZone">绿区</option>
+                    <option value="AboveGreen" data-i18n="aboveGreenZone">高于绿区</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="sortBy">排序</span>
+                  <select id="material-planning-sort">
+                    <option value="PriorityRank" data-i18n="planningPriority">计划优先级</option>
+                    <option value="BufferPercent" data-i18n="bufferPercent">缓冲百分比</option>
+                    <option value="SuggestedReplenishmentQty" data-i18n="suggestedReplenishmentQty">建议补货量</option>
+                  </select>
+                </label>
+                <button id="refresh-material-planning" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+              </div>
+            </div>
+            <div id="material-planning-error" class="persistent-error" role="alert" hidden>
+              <strong data-i18n="materialPlanningLoadFailed">无法读取物料计划工作台</strong>
+              <span data-i18n="materialPlanningRetryAdvice">请确认 DDMRP 运行数据可用后重试。</span>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table material-planning-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="item">物料</th>
+                    <th data-i18n="location">地点</th>
+                    <th data-i18n="planningPriority">计划优先级</th>
+                    <th data-i18n="bufferZone">缓冲区</th>
+                    <th data-i18n="bufferPercent">缓冲百分比</th>
+                    <th data-i18n="onHand">在手量</th>
+                    <th data-i18n="openSupply">在途供应</th>
+                    <th data-i18n="qualifiedDemand">合格需求</th>
+                    <th data-i18n="netFlowPosition">净流位置</th>
+                    <th data-i18n="suggestedReplenishmentQty">建议补货量</th>
+                    <th data-i18n="recommendedAction">建议动作</th>
+                  </tr>
+                </thead>
+                <tbody id="material-planning-table-body"></tbody>
+              </table>
+            </div>
+            <div id="material-planning-empty" class="table-empty" hidden>
+              <strong data-i18n="materialPlanningNoRows">没有符合条件的物料计划记录</strong>
+              <span data-i18n="materialPlanningNoRowsAdvice">请调整筛选条件或检查 DDMRP 输入数据。</span>
+            </div>
+          </section>
+
+          <section id="material-planning-detail" class="material-detail-panel" aria-labelledby="material-detail-heading">
+            <div class="panel-heading">
+              <div>
+                <span class="panel-kicker" data-i18n="materialDetail">物料详情</span>
+                <h2 id="material-detail-heading" data-i18n="selectMaterialForDetails">选择一条物料查看详情</h2>
+              </div>
+              <span id="material-detail-status" class="status-chip neutral" data-i18n="notSelected">未选择</span>
+            </div>
+            <div id="material-detail-empty" class="table-empty">
+              <strong data-i18n="selectMaterialForDetails">选择一条物料查看详情</strong>
+              <span data-i18n="materialDetailAdvice">详情显示当前快照的缓冲边界、需求/供应构成和趋势占位。</span>
+            </div>
+            <div id="material-detail-content" hidden>
+              <dl class="metadata-list material-detail-metadata">
+                <div><dt data-i18n="topOfRed">红区顶部</dt><dd data-material-detail="TopOfRed">-</dd></div>
+                <div><dt data-i18n="topOfYellow">黄区顶部</dt><dd data-material-detail="TopOfYellow">-</dd></div>
+                <div><dt data-i18n="topOfGreen">绿区顶部</dt><dd data-material-detail="TopOfGreen">-</dd></div>
+                <div><dt data-i18n="bufferPercent">缓冲百分比</dt><dd data-material-detail="BufferPercentText">-</dd></div>
+                <div><dt data-i18n="openSupply">在途供应</dt><dd data-material-detail="QualifiedOpenSupplyQty">-</dd></div>
+                <div><dt data-i18n="qualifiedDemand">合格需求</dt><dd data-material-detail="QualifiedDemandQty">-</dd></div>
+              </dl>
+              <div class="material-detail-grid">
+                <div class="material-detail-card">
+                  <h3 data-i18n="supplyDemandComponents">需求与供应构成</h3>
+                  <p id="material-detail-components">-</p>
+                </div>
+                <div class="material-detail-card">
+                  <h3 data-i18n="trendPlaceholder">趋势分析</h3>
+                  <p data-i18n="trendPlaceholderMessage">第一版显示当前快照；历史缓冲、在手和净流趋势将在后续版本补充。</p>
+                </div>
+              </div>
+            </div>
           </section>
         </div>
 
@@ -434,7 +626,20 @@
               </div>
               <div id="simio-result-summary" class="publication-summary"></div>
               <div class="table-scroll"><table class="data-table"><thead><tr><th data-i18n="resource">资源</th><th data-i18n="utilization">利用率</th><th data-i18n="busyMinutes">忙碌分钟</th><th data-i18n="starvedMinutes">饥饿分钟</th><th data-i18n="evidence">证据</th></tr></thead><tbody id="simio-resource-utilization-body"></tbody></table></div>
-              <div class="table-scroll"><table class="data-table"><thead><tr><th data-i18n="workOrder">工单</th><th data-i18n="actualStart">实际开始</th><th data-i18n="actualEnd">实际结束</th><th data-i18n="queueWaitMinutes">队列等待</th><th data-i18n="wipAfterStart">开工后 WIP</th><th data-i18n="wipAfterEnd">完工后 WIP</th><th data-i18n="eventStatus">事件状态</th></tr></thead><tbody id="simio-adherence-body"></tbody></table></div>
+              <div class="orders-toolbar simulation-orders-toolbar">
+                <div class="schedule-toolbar compact-toolbar orders-filters simulation-filters">
+                  <label><span data-i18n="simioOrderFilter">工单筛选</span><input id="simio-adherence-search" type="search" data-i18n-placeholder="simioOrderFilterPlaceholder" placeholder="搜索工单"></label>
+                  <label><span data-i18n="eventStatus">事件状态</span><select id="simio-adherence-event-filter"><option value="" data-i18n="allSimulationEvents">全部事件</option><option value="OrderStarted" data-i18n="simioEvent_OrderStarted">工单开始</option><option value="OperationStarted" data-i18n="simioEvent_OperationStarted">工序开始</option><option value="OperationCompleted" data-i18n="simioEvent_OperationCompleted">工序完成</option><option value="OrderCompleted" data-i18n="simioEvent_OrderCompleted">工单完成</option></select></label>
+                  <label><span data-i18n="simioQueueWaitFilter">等待时间</span><select id="simio-adherence-wait-filter"><option value="" data-i18n="allWaitTimes">全部等待</option><option value="gt0" data-i18n="waitGreaterThanZero">等待 > 0 分钟</option><option value="gt30" data-i18n="waitGreaterThan30">等待 > 30 分钟</option><option value="gt60" data-i18n="waitGreaterThan60">等待 > 60 分钟</option></select></label>
+                </div>
+              </div>
+              <div class="table-scroll"><table class="data-table"><thead><tr><th><button type="button" data-simio-sort="OrderID" data-i18n="workOrder">工单</button></th><th><button type="button" data-simio-sort="ActualStartTime" data-i18n="actualStart">实际开始</button></th><th><button type="button" data-simio-sort="ActualEndTime" data-i18n="actualEnd">实际结束</button></th><th><button type="button" data-simio-sort="QueueWaitMinutes" data-i18n="queueWaitMinutes">队列等待</button></th><th><button type="button" data-simio-sort="DurationMinutes" data-i18n="durationMinutes">加工/停留时间</button></th><th><button type="button" data-simio-sort="WipAfterStart" data-i18n="wipAfterStart">开工后 WIP</button></th><th><button type="button" data-simio-sort="WipAfterEnd" data-i18n="wipAfterEnd">完工后 WIP</button></th><th><button type="button" data-simio-sort="EventStatus" data-i18n="eventStatus">事件状态</button></th></tr></thead><tbody id="simio-adherence-body"></tbody></table></div>
+              <div class="pagination-bar" id="simio-adherence-pagination">
+                <span id="simio-adherence-page-summary">-</span>
+                <label><span data-i18n="rowsPerPage">每页</span><select id="simio-adherence-page-size"><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label>
+                <button id="simio-adherence-previous" class="button secondary" type="button" data-i18n="previousPage">上一页</button>
+                <button id="simio-adherence-next" class="button secondary" type="button" data-i18n="nextPage">下一页</button>
+              </div>
               <div id="simio-result-issues" class="diagnostics-list"></div>
             </section>
 
@@ -520,6 +725,18 @@
           <section id="buffer-board-content" hidden>
             <div id="buffer-context-summary" class="buffer-context-summary"></div>
             <div id="buffer-board-matrix" class="buffer-board-matrix" aria-label="两阶段五区域缓冲矩阵" data-i18n-aria-label="bufferMatrix"></div>
+          </section>
+        </div>
+
+        <div id="dispatch-suggestions-view" class="dispatch-suggestions-view" hidden>
+          <section class="result-context-bar" aria-label="派工建议" data-i18n-aria-label="dispatchContext">
+            <label><span data-i18n="planningRun">排程任务</span><select id="dispatch-run-select"></select></label>
+            <label><span data-i18n="evaluatedAt">评估时间</span><input id="dispatch-evaluated-at" type="datetime-local"></label>
+            <button id="refresh-dispatch-suggestions" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+          </section>
+          <div id="dispatch-suggestions-error" class="persistent-error" role="alert" hidden><strong data-i18n="dispatchLoadFailed">无法读取派工建议</strong><span data-i18n="dispatchRetryAdvice">请选择包含已完成计划和释放数据的排程任务。</span></div>
+          <div id="dispatch-suggestions-empty" class="table-empty" hidden><strong data-i18n="noDispatchRuns">没有可用的已完成计划</strong></div>
+          <section id="dispatch-suggestions-content" hidden>
             <section id="mes-dispatch-priority-panel" class="dispatch-priority-panel" aria-labelledby="mes-dispatch-priority-title">
               <div class="panel-heading compact-heading">
                 <div><span class="panel-kicker" data-i18n="mesDispatch">MES 派工</span><h2 id="mes-dispatch-priority-title" data-i18n="mesDispatchQueue">MES 派工队列</h2></div>
@@ -813,6 +1030,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260624-friendly-feedback" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260626-config-font-density" defer></script>
 </body>
 </html>

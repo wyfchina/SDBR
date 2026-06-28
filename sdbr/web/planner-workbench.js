@@ -4,21 +4,24 @@ const SCHEDULE_VIEW_STORAGE_KEY = "sdbr.scheduleViews";
 const I18N = {
   zh: {
     primaryNavigation: "主导航", planningContext: "计划上下文", toggleNavigation: "切换导航",
-    productName: "需求驱动计划员工作台", navOverview: "计划总览", navData: "数据就绪",
-    navRuns: "排程任务", navResults: "排程结果", navRelease: "释放管理", navBuffer: "缓冲执行",
+    productName: "需求驱动计划员工作台", navOverview: "计划总览", navOperationalMetrics: "运营指标", navData: "数据就绪", navMaterials: "物料计划",
+    navRuns: "排程任务", navResults: "排程结果", navRelease: "释放管理", navBuffer: "缓冲执行", navDispatch: "派工建议",
     navExceptions: "异常中心", navCalendar: "日历配置", navAdmin: "管理后台", noUnreadExceptions: "无未读异常",
     apiConnected: "本地服务已连接", planningScope: "计划范围", defaultFactory: "默认工厂",
     masterDataVersionLabel: "主数据版本", snapshotLabel: "运行快照", systemHealthLabel: "系统健康",
     notSelected: "未选择", checking: "检查中", healthy: "健康", unavailable: "不可用",
     language: "语言", planner: "计划员", workspaceEyebrow: "计划员工作台",
-    pageOverview: "计划总览", pageData: "数据就绪", pageRuns: "排程任务",
-    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
+    pageOverview: "计划总览", pageOperationalMetrics: "运营指标", pageData: "数据就绪", pageMaterials: "物料计划", pageRuns: "排程任务",
+    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageDispatch: "派工建议", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
     descriptionOverview: "集中查看排程范围、异常和下一步工作。",
+    descriptionOperationalMetrics: "按可靠性、稳定性和流速检查 DDOM 日常运行表现。",
     descriptionData: "检查主数据版本与运行状态快照。",
+    descriptionMaterials: "按 DDMRP 缓冲状态处理物料净流和补货建议。",
     descriptionRuns: "创建、跟踪和恢复排程任务。",
     descriptionResults: "检查排程结果、负荷、甘特图和诊断。",
     descriptionRelease: "依据绳长、物料、WIP 和缓冲管理工单释放。",
     descriptionBuffer: "按约束缓冲阶段和时间区域协同工单接收与开工。",
+    descriptionDispatch: "按缓冲颜色、渗透率和现场状态生成资源级派工建议。",
     descriptionExceptions: "集中处理失败、死信和执行偏差。",
     descriptionCalendar: "检查日历事项、冲突优先级和 CP-SAT 最终可用窗口。",
     descriptionAdmin: "管理主数据、求解器、集成和权限配置。",
@@ -48,6 +51,34 @@ const I18N = {
     operationalSnapshotGenerated: "运行快照已生成。",
     operationalSnapshotGenerateFailed: "运行快照生成失败。",
     operationalSnapshotMissing: "没有可复制的运行状态快照。",
+    ddmrpRuntime: "DDMRP 运行", ddmrpRuntimeStatus: "DDMRP 运行状态", ddmrpRuntimeSummary: "DDMRP 运行状态摘要",
+    decouplingPoints: "解耦点", redZone: "红区", yellowZone: "黄区", greenZone: "绿区", aboveGreenZone: "高于绿区",
+    replenishmentSuggestions: "补货建议", missingData: "缺失数据", viewDdmrpDetails: "解耦点明细",
+    item: "物料", onHand: "在手量", netFlowPosition: "净流位置", planningBufferZone: "计划缓冲区",
+    executionBufferZone: "在手执行区", suggestedReplenishmentQty: "建议补货量",
+    ddmrpReady: "DDMRP 运行数据可用", ddmrpMissingData: "DDMRP 输入存在缺失", ddmrpNoData: "尚无 DDMRP 解耦点数据。",
+    action_Replenish: "建议补货", action_Monitor: "保持观察",
+    zone_Red: "红区：需要行动", zone_Yellow: "黄区：需要关注", zone_Green: "绿区：正常", zone_AboveGreen: "高于绿区：暂不补货",
+    materialPlanningSummary: "物料计划摘要", criticalPriority: "紧急", attentionPriority: "关注", normalPriority: "正常",
+    materialPlanningWorkbench: "物料计划工作台", searchItemOrLocation: "搜索物料或地点", sortBy: "排序",
+    planningPriority: "计划优先级", bufferPercent: "缓冲百分比", openSupply: "在途供应", qualifiedDemand: "合格需求",
+    materialPlanningLoadFailed: "无法读取物料计划工作台", materialPlanningRetryAdvice: "请确认 DDMRP 运行数据可用后重试。",
+    materialPlanningNoRows: "没有符合条件的物料计划记录", materialPlanningNoRowsAdvice: "请调整筛选条件或检查 DDMRP 输入数据。",
+    materialDetail: "物料详情", selectMaterialForDetails: "选择一条物料查看详情",
+    materialDetailAdvice: "详情显示当前快照的缓冲边界、需求/供应构成和趋势占位。",
+    topOfRed: "红区顶部", topOfYellow: "黄区顶部", topOfGreen: "绿区顶部",
+    supplyDemandComponents: "需求与供应构成", trendPlaceholder: "趋势分析",
+    trendPlaceholderMessage: "第一版显示当前快照；历史缓冲、在手和净流趋势将在后续版本补充。",
+    demandComponentsCount: "合格需求 {count} 条", supplyComponentsCount: "有效在途 {count} 条",
+    operationalMetricsContext: "运营指标范围", operationalMetricsOverview: "运营指标总览",
+    operationalMetricsLoadFailed: "无法读取运营指标", operationalMetricsRetryAdvice: "请确认已存在完成的排程任务和本地服务可用后重试。",
+    ddomMetricSet: "DDOM 流动指标", overallScore: "综合得分", varianceFeedback: "偏差反馈",
+    feedbackForDDSOP: "给上层战术协同的运行表现反馈", metricAppliesTo: "适用范围", metricDoesNotApplyTo: "不适用范围",
+    dataCoverageIssues: "数据覆盖缺口", noDataCoverageIssues: "当前指标没有明显数据覆盖缺口。",
+    recommendedActions: "建议动作", metricQuestion: "核心问题", metricFocus: "关注重点",
+    metricCoverage: "数据覆盖", metricStatusGreen: "绿色：按模型运行", metricStatusYellow: "黄色：需要关注", metricStatusRed: "红色：需要干预", metricStatusUnavailable: "数据不足",
+    coverage_Available: "数据可用", coverage_NoActiveBufferOrders: "暂无活动缓冲工单", coverage_NoReleaseCandidates: "暂无释放候选",
+    coverage_NoScheduledOrders: "暂无计划工单", coverage_NoExecutionEvents: "暂无执行事件", coverage_NoArrivalEvents: "暂无到达事件", coverage_NoDispatchableOperations: "暂无可派工工序",
     issue_MASTER_DATA_VERSION_MISSING: "尚未创建主数据版本。", issue_OPERATIONAL_STATE_SNAPSHOT_MISSING: "尚未创建运行状态快照。",
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "最新运行状态快照已经过期。", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "最新运行状态快照时间晚于当前时间。",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "运行状态快照未提供来源系统。", issue_RESOURCE_STATUS_NOT_CAPTURED: "当前快照尚未包含资源运行状态。",
@@ -87,6 +118,15 @@ const I18N = {
     enqueue: "入队", execute: "直接执行", processQueue: "处理队列", cancel: "取消", recover: "人工恢复", openResults: "查看结果", view: "查看",
     seconds: "秒", notStarted: "未开始", frozenInputs: "冻结输入", solverParameters: "求解参数", workerLease: "Worker 与租约",
     timeline: "状态时间线", diagnostics: "求解诊断", auditEvents: "审计事件", noWorker: "尚未分配 Worker",
+    businessDiagnosis: "业务判断", technicalDetails: "技术详情",
+    diag_ORTOOLS_TIME_LIMIT_CONFIGURED: "排程计算已设置时间上限，超过上限会返回当前可行结果或超时诊断。",
+    diag_ORTOOLS_CP_SAT_MODEL: "本次排程已考虑可选资源、工序顺序、有限产能、换型、并行资源、时间窗口和能力日历。",
+    diag_ORTOOLS_OBJECTIVE_STRATEGY: "本次排程采用平衡策略，在交期、流动时间和瓶颈保护之间折中。",
+    diag_ORTOOLS_SETUP_TRANSITIONS_ENABLED: "本次排程已考虑产品族切换带来的换型时间。",
+    diag_ORTOOLS_RESOURCE_EFFICIENCY_ENABLED: "本次排程已考虑资源效率对加工时长的影响。",
+    diag_ORTOOLS_OPERATION_TIME_WINDOWS_ENABLED: "本次排程已考虑工序最早开始和最晚完成窗口。",
+    diag_ORTOOLS_CAPACITY_BUCKETS_ENABLED: "本次排程已考虑日历和能力桶限制。",
+    diag_ORTOOLS_CUSTOM_OBJECTIVE_WEIGHTS_ENABLED: "本次排程使用了自定义目标权重。",
     dataUpdated: "数据已更新，请重新加载后再操作。", runCreated: "排程任务已创建", submissionFailed: "排程任务创建失败",
     confirmEnqueue: "确认将此排程任务加入队列？", confirmExecute: "确认立即调用 OR-Tools CP-SAT 执行此排程任务？",
     confirmProcessQueue: "确认由交互式 Worker 领取并计算此排程任务？", queueProcessed: "队列任务已处理。",
@@ -141,7 +181,12 @@ const I18N = {
     simioOptionalValidation: "计划完成后可在仿真结果页运行", simioValidationRequested: "Simio 仿真验证已完成。",
     noSimulationResult: "尚未请求 Simio 仿真验证。", busyMinutes: "忙碌分钟", starvedMinutes: "饥饿分钟", evidence: "数据来源",
     actualStart: "实际开始", actualEnd: "实际结束", queueWaitMinutes: "队列等待", wipAfterStart: "开工后 WIP",
-    wipAfterEnd: "完工后 WIP", eventStatus: "事件状态", parsedSources: "已用数据", unavailableSources: "未取得数据",
+    wipAfterEnd: "完工后 WIP", eventStatus: "事件状态", durationMinutes: "加工/停留时间",
+    simioOrderFilter: "工单筛选", simioOrderFilterPlaceholder: "搜索工单",
+    simioQueueWaitFilter: "等待时间", allSimulationEvents: "全部事件", allWaitTimes: "全部等待",
+    waitGreaterThanZero: "等待 > 0 分钟", waitGreaterThan30: "等待 > 30 分钟", waitGreaterThan60: "等待 > 60 分钟",
+    simulationRowsRange: "显示 {start}-{end} / 共 {total} 条", noSimulationRows: "没有符合条件的工单仿真记录",
+    parsedSources: "已用数据", unavailableSources: "未取得数据",
     simioSourceParsedFromSDBROutputRows: "来自工单输出记录", simioSourceParsedFromPostRunLogs: "来自 Simio 运行日志",
     simioSourceParsedFromInteractiveStatistics: "来自 Simio 交互统计", simioSourceParsed: "已完整解析",
     simioSourcePartialResultParsed: "已解析部分仿真结果", simioSourceUnavailable: "暂不可用",
@@ -214,6 +259,7 @@ const I18N = {
     dailyLoad: "当日总负荷", lastScheduled: "最近排程时间", hours: "小时", yetToBeReceived: "待接收", received: "已接收",
     Early: "提前", Green: "绿区", Yellow: "黄区", Red: "红区", Late: "逾期", orderCount: "工单数", totalLoad: "总负荷",
     mesDispatch: "MES 派工", mesDispatchQueue: "MES 派工队列", mesDispatchBoundary: "此处只展示内部派工队列，不执行真实 MES 投递。",
+    dispatchContext: "派工建议", dispatchLoadFailed: "无法读取派工建议", dispatchRetryAdvice: "请选择包含已完成计划和释放数据的排程任务。", noDispatchRuns: "没有可用的已完成计划",
     dispatchableOperations: "可正式派工工序", candidateWarnings: "候选/预警", queueJumpSuggestions: "插队建议", plannerConfirmations: "需调度员确认",
     replanSuggestions: "重排建议", dispatchRank: "派工顺序", planSequence: "计划顺序", conflictResult: "冲突结果",
     plannerConfirmation: "调度员确认", mesDispatchUnavailable: "MES 派工队列暂不可用", noDispatchRows: "当前没有可正式派工工序。",
@@ -293,21 +339,24 @@ const I18N = {
   },
   en: {
     primaryNavigation: "Primary navigation", planningContext: "Planning context", toggleNavigation: "Toggle navigation",
-    productName: "Demand-Driven Planner Workbench", navOverview: "Planning Overview", navData: "Data Readiness",
-    navRuns: "Planning Runs", navResults: "Schedule Results", navRelease: "Release Management", navBuffer: "Buffer Execution",
+    productName: "Demand-Driven Planner Workbench", navOverview: "Planning Overview", navOperationalMetrics: "Operational Metrics", navData: "Data Readiness", navMaterials: "Materials Planning",
+    navRuns: "Planning Runs", navResults: "Schedule Results", navRelease: "Release Management", navBuffer: "Buffer Execution", navDispatch: "Dispatch Suggestions",
     navExceptions: "Exceptions", navCalendar: "Calendar Configuration", navAdmin: "Administration", noUnreadExceptions: "No unread exceptions",
     apiConnected: "Local service connected", planningScope: "Planning scope", defaultFactory: "Default factory",
     masterDataVersionLabel: "Master data version", snapshotLabel: "Operational snapshot", systemHealthLabel: "System health",
     notSelected: "Not selected", checking: "Checking", healthy: "Healthy", unavailable: "Unavailable",
     language: "Language", planner: "Planner", workspaceEyebrow: "Planner Workbench",
-    pageOverview: "Planning Overview", pageData: "Data Readiness", pageRuns: "Planning Runs",
-    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageExceptions: "Exceptions", pageCalendar: "Calendar Configuration", pageAdmin: "Administration",
+    pageOverview: "Planning Overview", pageOperationalMetrics: "Operational Metrics", pageData: "Data Readiness", pageMaterials: "Materials Planning", pageRuns: "Planning Runs",
+    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageDispatch: "Dispatch Suggestions", pageExceptions: "Exceptions", pageCalendar: "Calendar Configuration", pageAdmin: "Administration",
     descriptionOverview: "Review planning context, exceptions, and the next work to perform.",
+    descriptionOperationalMetrics: "Review DDOM daily performance by reliability, stability, and flow velocity.",
     descriptionData: "Check master data versions and operational snapshots.",
+    descriptionMaterials: "Review DDMRP net flow and replenishment suggestions by buffer priority.",
     descriptionRuns: "Create, track, and recover planning runs.",
     descriptionResults: "Inspect schedules, load, Gantt views, and diagnostics.",
     descriptionRelease: "Control release using rope time, material, WIP, and buffers.",
     descriptionBuffer: "Coordinate order receipt and start by constraint-buffer stage and time zone.",
+    descriptionDispatch: "Generate resource-level dispatch suggestions by buffer color, penetration, and shop-floor state.",
     descriptionExceptions: "Handle failures, dead letters, and execution variance.",
     descriptionCalendar: "Review calendar elements, conflict priority, and final CP-SAT availability windows.",
     descriptionAdmin: "Manage master data, solvers, integrations, and access.",
@@ -337,6 +386,34 @@ const I18N = {
     operationalSnapshotGenerated: "Operational snapshot generated.",
     operationalSnapshotGenerateFailed: "Operational snapshot generation failed.",
     operationalSnapshotMissing: "No operational snapshot is available to copy.",
+    ddmrpRuntime: "DDMRP runtime", ddmrpRuntimeStatus: "DDMRP runtime status", ddmrpRuntimeSummary: "DDMRP runtime summary",
+    decouplingPoints: "Decoupling points", redZone: "Red", yellowZone: "Yellow", greenZone: "Green", aboveGreenZone: "Above green",
+    replenishmentSuggestions: "Replenishment suggestions", missingData: "Missing data", viewDdmrpDetails: "Decoupling point details",
+    item: "Item", onHand: "On hand", netFlowPosition: "Net flow position", planningBufferZone: "Planning buffer zone",
+    executionBufferZone: "On-hand execution zone", suggestedReplenishmentQty: "Suggested replenishment qty",
+    ddmrpReady: "DDMRP runtime data is available", ddmrpMissingData: "DDMRP inputs have missing data", ddmrpNoData: "No DDMRP decoupling points are available.",
+    action_Replenish: "Replenish", action_Monitor: "Monitor",
+    zone_Red: "Red: action required", zone_Yellow: "Yellow: watch", zone_Green: "Green: normal", zone_AboveGreen: "Above green: no replenishment",
+    materialPlanningSummary: "Materials planning summary", criticalPriority: "Critical", attentionPriority: "Attention", normalPriority: "Normal",
+    materialPlanningWorkbench: "Materials planning workbench", searchItemOrLocation: "Search item or location", sortBy: "Sort by",
+    planningPriority: "Planning priority", bufferPercent: "% of buffer", openSupply: "Open supply", qualifiedDemand: "Qualified demand",
+    materialPlanningLoadFailed: "Materials planning workbench could not be loaded", materialPlanningRetryAdvice: "Check that DDMRP runtime data is available and retry.",
+    materialPlanningNoRows: "No material planning rows match the filters", materialPlanningNoRowsAdvice: "Adjust filters or check DDMRP input data.",
+    materialDetail: "Material detail", selectMaterialForDetails: "Select a material to view details",
+    materialDetailAdvice: "Details show the current snapshot boundaries, demand/supply components, and a trend placeholder.",
+    topOfRed: "Top of red", topOfYellow: "Top of yellow", topOfGreen: "Top of green",
+    supplyDemandComponents: "Demand and supply components", trendPlaceholder: "Trend analysis",
+    trendPlaceholderMessage: "V1 shows the current snapshot. Historical buffer, on-hand, and net-flow trends will be added later.",
+    demandComponentsCount: "{count} qualified demand rows", supplyComponentsCount: "{count} effective open supply rows",
+    operationalMetricsContext: "Operational metrics scope", operationalMetricsOverview: "Operational metrics overview",
+    operationalMetricsLoadFailed: "Operational metrics could not be loaded", operationalMetricsRetryAdvice: "Check that a completed planning run and the local service are available, then retry.",
+    ddomMetricSet: "DDOM flow metrics", overallScore: "Overall score", varianceFeedback: "Variance feedback",
+    feedbackForDDSOP: "Operating performance feedback for DDS&OP", metricAppliesTo: "Applies to", metricDoesNotApplyTo: "Does not apply to",
+    dataCoverageIssues: "Data coverage gaps", noDataCoverageIssues: "No obvious data coverage gaps.",
+    recommendedActions: "Recommended actions", metricQuestion: "Core question", metricFocus: "Focus",
+    metricCoverage: "Data coverage", metricStatusGreen: "Green: running to model", metricStatusYellow: "Yellow: needs attention", metricStatusRed: "Red: intervention needed", metricStatusUnavailable: "Insufficient data",
+    coverage_Available: "Available", coverage_NoActiveBufferOrders: "No active buffer orders", coverage_NoReleaseCandidates: "No release candidates",
+    coverage_NoScheduledOrders: "No scheduled orders", coverage_NoExecutionEvents: "No execution events", coverage_NoArrivalEvents: "No arrival events", coverage_NoDispatchableOperations: "No dispatchable operations",
     issue_MASTER_DATA_VERSION_MISSING: "No master data version has been created.", issue_OPERATIONAL_STATE_SNAPSHOT_MISSING: "No operational state snapshot has been created.",
     issue_OPERATIONAL_STATE_SNAPSHOT_STALE: "The latest operational snapshot is stale.", issue_OPERATIONAL_STATE_SNAPSHOT_IN_FUTURE: "The latest operational snapshot is dated after the evaluation time.",
     issue_OPERATIONAL_SOURCE_NOT_PROVIDED: "The operational snapshot has no source system.", issue_RESOURCE_STATUS_NOT_CAPTURED: "The current snapshot does not include resource runtime status.",
@@ -376,6 +453,15 @@ const I18N = {
     enqueue: "Enqueue", execute: "Execute now", processQueue: "Process queue", cancel: "Cancel", recover: "Recover", openResults: "Open results", view: "View",
     seconds: "sec", notStarted: "Not started", frozenInputs: "Frozen inputs", solverParameters: "Solver parameters", workerLease: "Worker and lease",
     timeline: "Status timeline", diagnostics: "Solver diagnostics", auditEvents: "Audit events", noWorker: "No worker assigned",
+    businessDiagnosis: "Business diagnosis", technicalDetails: "Technical details",
+    diag_ORTOOLS_TIME_LIMIT_CONFIGURED: "The planning calculation has a time limit; it will return the best available result or a timeout diagnosis.",
+    diag_ORTOOLS_CP_SAT_MODEL: "This schedule considered optional resources, operation sequence, finite capacity, setup, parallel resources, time windows, and calendar capacity.",
+    diag_ORTOOLS_OBJECTIVE_STRATEGY: "This schedule used a balanced strategy across delivery, flow time, and bottleneck protection.",
+    diag_ORTOOLS_SETUP_TRANSITIONS_ENABLED: "This schedule considered setup time between product families.",
+    diag_ORTOOLS_RESOURCE_EFFICIENCY_ENABLED: "This schedule considered resource efficiency when calculating operation duration.",
+    diag_ORTOOLS_OPERATION_TIME_WINDOWS_ENABLED: "This schedule considered earliest-start and latest-finish windows.",
+    diag_ORTOOLS_CAPACITY_BUCKETS_ENABLED: "This schedule considered calendar and capacity-bucket limits.",
+    diag_ORTOOLS_CUSTOM_OBJECTIVE_WEIGHTS_ENABLED: "This schedule used custom objective weights.",
     dataUpdated: "Data was updated. Reload before trying again.", runCreated: "Planning run created", submissionFailed: "Planning run creation failed",
     confirmEnqueue: "Enqueue this planning run?", confirmExecute: "Run this planning task with OR-Tools CP-SAT now?",
     confirmProcessQueue: "Let the interactive worker claim and calculate this planning run?", queueProcessed: "Queued planning run processed.",
@@ -430,7 +516,12 @@ const I18N = {
     simioOptionalValidation: "Available after the plan is completed on the simulation results tab.", simioValidationRequested: "Simio simulation validation completed.",
     noSimulationResult: "Simio simulation validation has not been requested.", busyMinutes: "Busy minutes", starvedMinutes: "Starved minutes", evidence: "Data source",
     actualStart: "Actual start", actualEnd: "Actual end", queueWaitMinutes: "Queue wait", wipAfterStart: "WIP after start",
-    wipAfterEnd: "WIP after end", eventStatus: "Event status", parsedSources: "Data used", unavailableSources: "Data not available",
+    wipAfterEnd: "WIP after end", eventStatus: "Event status", durationMinutes: "Processing / dwell time",
+    simioOrderFilter: "Work-order filter", simioOrderFilterPlaceholder: "Search work order",
+    simioQueueWaitFilter: "Wait time", allSimulationEvents: "All events", allWaitTimes: "All wait times",
+    waitGreaterThanZero: "Wait > 0 minutes", waitGreaterThan30: "Wait > 30 minutes", waitGreaterThan60: "Wait > 60 minutes",
+    simulationRowsRange: "Showing {start}-{end} / {total} rows", noSimulationRows: "No simulation work-order records match the filters",
+    parsedSources: "Data used", unavailableSources: "Data not available",
     simioSourceParsedFromSDBROutputRows: "From work-order output rows", simioSourceParsedFromPostRunLogs: "From Simio run logs",
     simioSourceParsedFromInteractiveStatistics: "From Simio interactive statistics", simioSourceParsed: "Fully parsed",
     simioSourcePartialResultParsed: "Partial simulation result parsed", simioSourceUnavailable: "Unavailable",
@@ -503,6 +594,7 @@ const I18N = {
     dailyLoad: "Daily load", lastScheduled: "Last scheduled", hours: "hours", yetToBeReceived: "Yet to be received", received: "Received",
     Early: "Early", Green: "Green", Yellow: "Yellow", Red: "Red", Late: "Late", orderCount: "Orders", totalLoad: "Total load",
     mesDispatch: "MES dispatch", mesDispatchQueue: "MES dispatch queue", mesDispatchBoundary: "This area shows the internal dispatch queue only; it does not send to MES.",
+    dispatchContext: "Dispatch suggestions", dispatchLoadFailed: "Dispatch suggestions could not be loaded", dispatchRetryAdvice: "Select a completed planning run with release data.", noDispatchRuns: "No completed planning run is available",
     dispatchableOperations: "Dispatchable operations", candidateWarnings: "Candidates / warnings", queueJumpSuggestions: "Queue-jump suggestions", plannerConfirmations: "Planner confirmations",
     replanSuggestions: "Replan suggestions", dispatchRank: "Dispatch rank", planSequence: "Plan sequence", conflictResult: "Conflict result",
     plannerConfirmation: "Planner confirmation", mesDispatchUnavailable: "MES dispatch queue unavailable", noDispatchRows: "No dispatchable operations.",
@@ -584,11 +676,14 @@ const I18N = {
 
 const ROUTES = {
   overview: ["pageOverview", "descriptionOverview"],
+  "operational-metrics": ["pageOperationalMetrics", "descriptionOperationalMetrics"],
   "data-readiness": ["pageData", "descriptionData"],
+  "material-planning": ["pageMaterials", "descriptionMaterials"],
   "planning-runs": ["pageRuns", "descriptionRuns"],
   "schedule-results": ["pageResults", "descriptionResults"],
   "release-management": ["pageRelease", "descriptionRelease"],
   "buffer-board": ["pageBuffer", "descriptionBuffer"],
+  "dispatch-suggestions": ["pageDispatch", "descriptionDispatch"],
   exceptions: ["pageExceptions", "descriptionExceptions"],
   calendar: ["pageCalendar", "descriptionCalendar"],
   administration: ["pageAdmin", "descriptionAdmin"]
@@ -596,7 +691,12 @@ const ROUTES = {
 
 let currentLanguage = "zh";
 let caseAcceptanceData = null;
+let operationalMetricsData = null;
+let selectedOperationalMetricsRunID = null;
 let dataReadiness = null;
+let materialPlanningData = null;
+let materialPlanningSortKey = "PriorityRank";
+let selectedMaterialPlanningKey = null;
 let planningRunWorkbench = null;
 let planningRunWizardStep = 1;
 let scheduleResultData = null;
@@ -610,6 +710,8 @@ let activeGanttMode = "resource";
 let scheduledOrdersData = null;
 let scheduledOrdersPage = 1;
 let scheduledOrdersSort = { key: "PlannedStartAt", direction: "asc" };
+let simioAdherencePage = 1;
+let simioAdherenceSort = { key: "ActualStartTime", direction: "asc" };
 let selectedScheduledOrderIDs = new Set();
 let visibleScheduledOrderColumns = new Set(["OrderID", "ProductID", "PlannedReleaseAt", "PromiseDate", "OnTimeStatus", "ReleaseStatus", "ExecutionPriority", "RoutingID", "ResourceIDs"]);
 let releaseManagementData = null;
@@ -619,6 +721,7 @@ let bufferBoardData = null;
 let dispatchPriorityData = null;
 let mesDispatchIssueData = null;
 let selectedBufferRunID = null;
+let selectedDispatchRunID = null;
 let selectedBufferOrder = null;
 let exceptionCenterData = null;
 let calendarPreviewData = null;
@@ -671,9 +774,15 @@ function applyLanguage(language) {
   document.querySelectorAll("[data-i18n-title]").forEach((element) => {
     element.setAttribute("title", translate(element.dataset.i18nTitle));
   });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    element.setAttribute("placeholder", translate(element.dataset.i18nPlaceholder));
+  });
   document.getElementById("language-select").value = currentLanguage;
   renderRoute();
   refreshNavigationHelp();
+  refreshDdmrpDetailsAction();
+  renderMaterialPlanningTable();
+  renderOperationalMetrics();
 }
 
 function currentRoute() {
@@ -692,31 +801,40 @@ function renderRoute(focusWorkspace = false) {
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
+  const isOperationalMetrics = route === "operational-metrics";
   const isDataReadiness = route === "data-readiness";
+  const isMaterialPlanning = route === "material-planning";
   const isOverview = route === "overview";
   const isPlanningRuns = route === "planning-runs";
   const isScheduleResults = route === "schedule-results";
   const isReleaseManagement = route === "release-management";
   const isBufferBoard = route === "buffer-board";
+  const isDispatchSuggestions = route === "dispatch-suggestions";
   const isExceptions = route === "exceptions";
   const isCalendar = route === "calendar";
   const isAdministration = route === "administration";
-  document.getElementById("generic-workspace").hidden = isOverview || isDataReadiness || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isExceptions || isCalendar || isAdministration;
+  document.getElementById("generic-workspace").hidden = isOverview || isOperationalMetrics || isDataReadiness || isMaterialPlanning || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isDispatchSuggestions || isExceptions || isCalendar || isAdministration;
   document.getElementById("overview-view").hidden = !isOverview;
+  document.getElementById("operational-metrics-view").hidden = !isOperationalMetrics;
   document.getElementById("data-readiness-view").hidden = !isDataReadiness;
+  document.getElementById("material-planning-view").hidden = !isMaterialPlanning;
   document.getElementById("planning-runs-view").hidden = !isPlanningRuns;
   document.getElementById("schedule-results-view").hidden = !isScheduleResults;
   document.getElementById("release-management-view").hidden = !isReleaseManagement;
   document.getElementById("buffer-board-view").hidden = !isBufferBoard;
+  document.getElementById("dispatch-suggestions-view").hidden = !isDispatchSuggestions;
   document.getElementById("exceptions-view").hidden = !isExceptions;
   document.getElementById("calendar-view").hidden = !isCalendar;
   document.getElementById("administration-view").hidden = !isAdministration;
   if (isOverview) loadCaseAcceptance();
+  if (isOperationalMetrics) loadOperationalMetricsRuns();
   if (isDataReadiness) loadDataReadiness();
+  if (isMaterialPlanning) loadMaterialPlanning();
   if (isPlanningRuns) loadPlanningRuns();
   if (isScheduleResults) loadScheduleResultRuns();
   if (isReleaseManagement) loadReleaseManagementRuns();
   if (isBufferBoard) loadBufferBoardRuns();
+  if (isDispatchSuggestions) loadDispatchSuggestionRuns();
   if (isExceptions) loadExceptionCenter();
   if (isCalendar) loadCalendarWorkspace();
   if (isAdministration) loadAdministration();
@@ -871,6 +989,33 @@ function formatNumber(value) {
   }).format(number);
 }
 
+function toNumericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function minutesBetween(startValue, endValue) {
+  if (!startValue || !endValue) return null;
+  const start = new Date(startValue).getTime();
+  const end = new Date(endValue).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, Math.round((end - start) / 60000));
+}
+
+function simioAdherenceDuration(row) {
+  return minutesBetween(row?.ActualStartTime, row?.ActualEndTime);
+}
+
+function simioUtilizationRiskClass(value) {
+  const percent = toNumericValue(value);
+  if (percent === null) return "";
+  if (percent >= 100) return "utilization-risk-full";
+  if (percent > 90) return "utilization-risk-critical";
+  if (percent > 80) return "utilization-risk-warning";
+  return "";
+}
+
 function formatSimioThroughput(throughput) {
   if (!throughput) return null;
   const completed = formatNumber(throughput.CompletedOrderCount);
@@ -925,6 +1070,59 @@ function formatDate(value) {
   return new Intl.DateTimeFormat(currentLanguage === "zh" ? "zh-CN" : "en-US", {
     dateStyle: "medium", timeStyle: "short"
   }).format(new Date(value));
+}
+
+function operationalMetricStatusLabel(status) {
+  return translate({
+    Green: "metricStatusGreen",
+    Yellow: "metricStatusYellow",
+    Red: "metricStatusRed",
+    Unavailable: "metricStatusUnavailable"
+  }[status] || "metricStatusUnavailable");
+}
+
+function operationalMetricStatusClass(status) {
+  return {
+    Green: "is-green",
+    Yellow: "is-yellow",
+    Red: "is-red",
+    Unavailable: "is-unavailable"
+  }[status] || "is-unavailable";
+}
+
+function dataCoverageLabel(value) {
+  return translate(`coverage_${value || "Available"}`);
+}
+
+function operationalApplicabilityLabel(value) {
+  const zh = {
+    "DDOM daily operations": "DDOM 日常运营执行",
+    "Release gating and buffer execution": "释放门控与缓冲执行",
+    "MES dispatch suggestion review": "MES 派工建议复核",
+    "Execution variance feedback to DDS&OP": "给 DDS&OP 的执行偏差反馈",
+    "Financial cost attribution": "财务成本归因",
+    "DDS&OP model configuration or scenario governance": "DDS&OP 模型配置或情景治理",
+    "MES second-by-second machine control": "MES 秒级设备控制",
+    "Long-term capacity investment decisions": "长期产能投资决策"
+  };
+  const en = {
+    "DDOM daily operations": "DDOM daily operations",
+    "Release gating and buffer execution": "Release gating and buffer execution",
+    "MES dispatch suggestion review": "MES dispatch suggestion review",
+    "Execution variance feedback to DDS&OP": "Execution variance feedback to DDS&OP",
+    "Financial cost attribution": "Financial cost attribution",
+    "DDS&OP model configuration or scenario governance": "DDS&OP model configuration or scenario governance",
+    "MES second-by-second machine control": "MES second-by-second machine control",
+    "Long-term capacity investment decisions": "Long-term capacity investment decisions"
+  };
+  return (currentLanguage === "zh" ? zh : en)[value] || value || "-";
+}
+
+function metricDisplayValue(metric) {
+  if (metric.Value === null || metric.Value === undefined) return "-";
+  if (metric.Unit === "Percent") return `${formatNumber(metric.Value)}%`;
+  if (metric.Unit === "Minutes") return `${formatNumber(metric.Value)}m`;
+  return formatNumber(metric.Value);
 }
 
 function setStatusChip(element, text, state) {
@@ -1148,6 +1346,248 @@ function renderDataReadiness(payload) {
   document.getElementById("readiness-error").hidden = true;
 }
 
+function ddmrpZoneLabel(value) {
+  const translated = translate(`zone_${value}`);
+  return String(translated).startsWith("zone_") ? displayValue(value) : translated;
+}
+
+function ddmrpActionLabel(value) {
+  const translated = translate(`action_${value}`);
+  return String(translated).startsWith("action_") ? displayValue(value) : translated;
+}
+
+function renderDdmrpStatus(payload) {
+  const summary = payload?.Summary || {};
+  document.querySelectorAll("#ddmrp-status-summary [data-ddmrp-summary]").forEach((element) => {
+    const value = summary[element.dataset.ddmrpSummary];
+    element.textContent = value === null || value === undefined ? "-" : String(value);
+  });
+  const missingCount = Number(summary.MissingDataCount || 0);
+  const lineCount = Number(summary.LineCount || 0);
+  setStatusChip(
+    document.getElementById("ddmrp-status-chip"),
+    lineCount ? translate(missingCount ? "ddmrpMissingData" : "ddmrpReady") : translate("notAvailable"),
+    lineCount ? (missingCount ? "is-warning" : "is-valid") : "neutral"
+  );
+  const body = document.getElementById("ddmrp-status-table-body");
+  body.replaceChildren();
+  (payload?.Lines || []).forEach((line) => {
+    const row = document.createElement("tr");
+    [
+      line.ItemID,
+      line.LocationID,
+      formatNumber(line.OnHandQty),
+      formatNumber(line.NetFlowPosition),
+      ddmrpZoneLabel(line.PlanningStatus),
+      ddmrpZoneLabel(line.ExecutionStatus),
+      formatNumber(line.SuggestedReplenishmentQty),
+      ddmrpActionLabel(line.RecommendedAction)
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    });
+    body.append(row);
+  });
+  if (!body.children.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 8;
+    cell.textContent = translate("ddmrpNoData");
+    row.append(cell);
+    body.append(row);
+  }
+  const source = payload?.Source?.VersionID ? `${translate("version")}: ${payload.Source.VersionID}` : "";
+  setText("ddmrp-status-message", source);
+}
+
+function ddmrpZoneRank(value) {
+  return { Red: 1, Yellow: 2, Green: 3, AboveGreen: 4 }[value] || 9;
+}
+
+function ddmrpPriorityLabel(value) {
+  return {
+    Red: translate("criticalPriority"),
+    Yellow: translate("attentionPriority"),
+    Green: translate("normalPriority"),
+    AboveGreen: translate("aboveGreenZone")
+  }[value] || displayValue(value);
+}
+
+function ddmrpZoneClass(value) {
+  return {
+    Red: "is-red",
+    Yellow: "is-yellow",
+    Green: "is-green",
+    AboveGreen: "is-above-green"
+  }[value] || "";
+}
+
+function materialPlanningRows() {
+  return (materialPlanningData?.Lines || []).map((line) => {
+    const topOfGreen = Number(line.TopOfGreen || 0);
+    const netFlow = Number(line.NetFlowPosition || 0);
+    const bufferPercent = topOfGreen > 0 ? (netFlow / topOfGreen) * 100 : null;
+    return {
+      ...line,
+      BufferPercent: bufferPercent,
+      BufferPercentText: bufferPercent === null ? "-" : `${formatNumber(bufferPercent)}%`,
+      PriorityRank: ddmrpZoneRank(line.PlanningStatus),
+      RowKey: `${line.ItemID}@@${line.LocationID}`
+    };
+  });
+}
+
+function filteredMaterialPlanningRows() {
+  const query = document.getElementById("material-planning-search")?.value.trim().toLowerCase() || "";
+  const zone = document.getElementById("material-planning-zone-filter")?.value || "All";
+  const rows = materialPlanningRows().filter((row) => {
+    const matchesQuery = !query || `${row.ItemID} ${row.LocationID}`.toLowerCase().includes(query);
+    const matchesZone = zone === "All" || row.PlanningStatus === zone;
+    return matchesQuery && matchesZone;
+  });
+  rows.sort((left, right) => {
+    const key = materialPlanningSortKey;
+    const leftValue = Number(left[key]);
+    const rightValue = Number(right[key]);
+    if (Number.isFinite(leftValue) && Number.isFinite(rightValue) && leftValue !== rightValue) {
+      return leftValue - rightValue;
+    }
+    if (left.PriorityRank !== right.PriorityRank) return left.PriorityRank - right.PriorityRank;
+    const leftPercent = Number(left.BufferPercent);
+    const rightPercent = Number(right.BufferPercent);
+    if (Number.isFinite(leftPercent) && Number.isFinite(rightPercent) && leftPercent !== rightPercent) {
+      return leftPercent - rightPercent;
+    }
+    return String(left.ItemID).localeCompare(String(right.ItemID));
+  });
+  if (materialPlanningSortKey === "SuggestedReplenishmentQty") rows.reverse();
+  return rows;
+}
+
+function renderMaterialPlanningSummary(summary = {}) {
+  document.querySelectorAll("[data-material-summary]").forEach((element) => {
+    const value = summary[element.dataset.materialSummary];
+    element.textContent = value === null || value === undefined ? "-" : String(value);
+  });
+}
+
+function renderMaterialPlanningTable() {
+  const body = document.getElementById("material-planning-table-body");
+  if (!body) return;
+  const rows = filteredMaterialPlanningRows();
+  body.replaceChildren();
+  rows.forEach((rowData) => {
+    const row = document.createElement("tr");
+    const itemButton = document.createElement("button");
+    itemButton.type = "button";
+    itemButton.className = "run-link";
+    itemButton.textContent = rowData.ItemID;
+    itemButton.addEventListener("click", () => selectMaterialPlanningRow(rowData.RowKey));
+
+    const priority = document.createElement("span");
+    priority.className = `material-priority ${ddmrpZoneClass(rowData.PlanningStatus)}`;
+    priority.textContent = ddmrpPriorityLabel(rowData.PlanningStatus);
+
+    const action = document.createElement("span");
+    action.className = `material-action ${rowData.RecommendedAction === "Replenish" ? "is-replenish" : ""}`;
+    action.textContent = ddmrpActionLabel(rowData.RecommendedAction);
+
+    [
+      nodeCell(itemButton),
+      textCell(rowData.LocationID),
+      nodeCell(priority),
+      textCell(ddmrpZoneLabel(rowData.PlanningStatus)),
+      textCell(rowData.BufferPercentText),
+      textCell(formatNumber(rowData.OnHandQty)),
+      textCell(formatNumber(rowData.QualifiedOpenSupplyQty)),
+      textCell(formatNumber(rowData.QualifiedDemandQty)),
+      textCell(formatNumber(rowData.NetFlowPosition)),
+      textCell(formatNumber(rowData.SuggestedReplenishmentQty)),
+      nodeCell(action)
+    ].forEach((cell) => row.append(cell));
+    body.append(row);
+  });
+  document.getElementById("material-planning-empty").hidden = rows.length !== 0;
+  if (selectedMaterialPlanningKey && !materialPlanningRows().some((row) => row.RowKey === selectedMaterialPlanningKey)) {
+    selectedMaterialPlanningKey = null;
+  }
+  renderMaterialPlanningDetail();
+}
+
+function renderMaterialPlanningDetail() {
+  const rows = materialPlanningRows();
+  const selected = rows.find((row) => row.RowKey === selectedMaterialPlanningKey);
+  document.getElementById("material-detail-empty").hidden = Boolean(selected);
+  document.getElementById("material-detail-content").hidden = !selected;
+  setText("material-detail-heading", selected ? `${selected.ItemID} · ${selected.LocationID}` : translate("selectMaterialForDetails"));
+  setStatusChip(
+    document.getElementById("material-detail-status"),
+    selected ? ddmrpPriorityLabel(selected.PlanningStatus) : translate("notSelected"),
+    selected ? (selected.PlanningStatus === "Red" ? "is-invalid" : selected.PlanningStatus === "Yellow" ? "is-warning" : "is-valid") : "neutral"
+  );
+  if (!selected) return;
+  document.querySelectorAll("[data-material-detail]").forEach((element) => {
+    const key = element.dataset.materialDetail;
+    element.textContent = key === "BufferPercentText" ? selected.BufferPercentText : formatNumber(selected[key]);
+  });
+  const demandCount = selected.DemandComponents?.length || 0;
+  const supplyCount = selected.SupplyComponents?.length || 0;
+  setText(
+    "material-detail-components",
+    `${translateWith("demandComponentsCount", { count: demandCount })} · ${translateWith("supplyComponentsCount", { count: supplyCount })}`
+  );
+}
+
+function selectMaterialPlanningRow(rowKey) {
+  selectedMaterialPlanningKey = rowKey;
+  renderMaterialPlanningDetail();
+  document.getElementById("material-planning-detail").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function renderMaterialPlanning(payload) {
+  materialPlanningData = payload || null;
+  renderMaterialPlanningSummary(payload?.Summary || {});
+  const source = payload?.Source?.VersionID ? `${translate("version")}: ${payload.Source.VersionID}` : "";
+  setText("material-planning-source", source);
+  document.getElementById("material-planning-error").hidden = true;
+  renderMaterialPlanningTable();
+}
+
+async function loadMaterialPlanning() {
+  try {
+    const response = await fetch("/planner/workbench/ddmrp/status", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    renderMaterialPlanning((await response.json()).Data);
+  } catch (_error) {
+    materialPlanningData = null;
+    renderMaterialPlanningSummary({});
+    setText("material-planning-source", "");
+    document.getElementById("material-planning-table-body").replaceChildren();
+    document.getElementById("material-planning-empty").hidden = false;
+    document.getElementById("material-planning-error").hidden = false;
+    selectedMaterialPlanningKey = null;
+    renderMaterialPlanningDetail();
+  }
+}
+
+function refreshDdmrpDetailsAction() {
+  const details = document.getElementById("ddmrp-details");
+  const action = document.querySelector("[data-ddmrp-details-action]");
+  if (!details || !action) return;
+  action.textContent = translate(details.open ? "hideDetails" : "showDetails");
+}
+
+async function loadDdmrpStatus() {
+  try {
+    const response = await fetch("/planner/workbench/ddmrp/status", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    renderDdmrpStatus((await response.json()).Data);
+  } catch (_error) {
+    renderDdmrpStatus(null);
+  }
+}
+
 function issueMessage(issue) {
   const localized = translate(`issue_${issue.Code}`);
   return localized.startsWith("issue_") ? issue.Message : localized;
@@ -1212,6 +1652,7 @@ async function loadDataReadiness() {
     if (!response.ok) throw new Error(String(response.status));
     const payload = await response.json();
     renderDataReadiness(payload.Data);
+    await loadDdmrpStatus();
   } catch (_error) {
     banner.className = "readiness-banner is-blocked";
     document.getElementById("generate-operational-snapshot").disabled = true;
@@ -1750,6 +2191,123 @@ async function loadScheduleResultRuns() {
   }
 }
 
+async function loadOperationalMetricsRuns() {
+  try {
+    const response = await fetch("/planner/workbench/planning-runs/workbench", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    const workbench = (await response.json()).Data;
+    const runs = workbench.Rows.filter((run) => run.Status === "Completed");
+    const select = document.getElementById("operational-metrics-run-select");
+    replaceSelectOptions(select, runs, { valueKey: "RunID", labelKey: "RunID" });
+    if (!runs.length) throw new Error("No completed planning runs");
+    const preferred = selectedOperationalMetricsRunID || selectedDispatchRunID || selectedBufferRunID || selectedReleaseRunID || selectedScheduleRunID;
+    selectedOperationalMetricsRunID = runs.some((run) => run.RunID === preferred) ? preferred : runs[0].RunID;
+    select.value = selectedOperationalMetricsRunID;
+    if (!document.getElementById("operational-metrics-evaluated-at").value) {
+      document.getElementById("operational-metrics-evaluated-at").value = toLocalDateTimeInput(new Date());
+    }
+    await loadOperationalMetrics();
+  } catch (_error) {
+    document.getElementById("operational-metrics-error").hidden = false;
+    document.getElementById("operational-metrics-content").hidden = true;
+  }
+}
+
+async function loadOperationalMetrics() {
+  const runId = document.getElementById("operational-metrics-run-select").value;
+  if (!runId) return;
+  selectedOperationalMetricsRunID = runId;
+  const evaluatedAt = document.getElementById("operational-metrics-evaluated-at").value;
+  const query = new URLSearchParams({
+    run_id: runId,
+    evaluated_at: new Date(evaluatedAt || Date.now()).toISOString(),
+    use_latest_operational_state: "true"
+  });
+  try {
+    const response = await fetch(`/planner/workbench/ddom/operational-metrics?${query}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    operationalMetricsData = (await response.json()).Data;
+    renderOperationalMetrics();
+    document.getElementById("operational-metrics-error").hidden = true;
+    document.getElementById("operational-metrics-content").hidden = false;
+  } catch (_error) {
+    document.getElementById("operational-metrics-error").hidden = false;
+    document.getElementById("operational-metrics-content").hidden = true;
+  }
+}
+
+function renderOperationalMetrics() {
+  if (!operationalMetricsData) return;
+  setText("operational-metrics-status", operationalMetricStatusLabel(operationalMetricsData.OverallStatus));
+  document.getElementById("operational-metrics-status").className = `metric-status-text ${operationalMetricStatusClass(operationalMetricsData.OverallStatus)}`;
+  setText("operational-metrics-score", operationalMetricsData.OverallScore === null || operationalMetricsData.OverallScore === undefined ? "-" : formatNumber(operationalMetricsData.OverallScore));
+  const applies = (operationalMetricsData.Applicability?.AppliesTo || []).map(operationalApplicabilityLabel).join(" · ");
+  const notApplies = (operationalMetricsData.Applicability?.DoesNotApplyTo || []).map(operationalApplicabilityLabel).join(" · ");
+  setText("operational-metrics-scope", `${translate("metricAppliesTo")}: ${applies || "-"} / ${translate("metricDoesNotApplyTo")}: ${notApplies || "-"}`);
+  const categories = document.getElementById("operational-metrics-categories");
+  categories.replaceChildren();
+  (operationalMetricsData.Categories || []).forEach((category) => {
+    const card = document.createElement("section");
+    card.className = `operational-category-card ${operationalMetricStatusClass(category.Status)}`;
+    const heading = document.createElement("div");
+    heading.className = "operational-category-heading";
+    const title = document.createElement("h2");
+    title.textContent = category.NameZh || category.NameEn || category.CategoryID;
+    const chip = document.createElement("span");
+    chip.className = `status-chip ${operationalMetricStatusClass(category.Status)}`;
+    chip.textContent = operationalMetricStatusLabel(category.Status);
+    const question = document.createElement("p");
+    question.textContent = `${translate("metricQuestion")}: ${category.QuestionZh || "-"} · ${translate("metricFocus")}: ${category.FocusZh || "-"}`;
+    heading.append(title, chip, question);
+    const list = document.createElement("div");
+    list.className = "operational-metric-list";
+    (category.Metrics || []).forEach((metric) => list.append(operationalMetricRow(metric)));
+    card.append(heading, list);
+    categories.append(card);
+  });
+  renderOperationalFeedback();
+}
+
+function operationalMetricRow(metric) {
+  const row = document.createElement("article");
+  row.className = `operational-metric-row ${operationalMetricStatusClass(metric.Status)}`;
+  const main = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = metric.NameZh || metric.MetricID;
+  const definition = document.createElement("p");
+  definition.textContent = metric.DefinitionZh || "-";
+  main.append(name, definition);
+  const value = document.createElement("div");
+  value.className = "operational-metric-value";
+  const number = document.createElement("strong");
+  number.textContent = metricDisplayValue(metric);
+  const coverage = document.createElement("span");
+  coverage.textContent = `${translate("metricCoverage")}: ${dataCoverageLabel(metric.DataCoverage)}`;
+  value.append(number, coverage);
+  row.append(main, value);
+  return row;
+}
+
+function operationalMetricDisplayName(metricId) {
+  for (const category of operationalMetricsData?.Categories || []) {
+    const metric = (category.Metrics || []).find((item) => item.MetricID === metricId);
+    if (metric) return metric.NameZh || metric.NameEn || metric.MetricID;
+  }
+  return metricId || "-";
+}
+
+function renderOperationalFeedback() {
+  const container = document.getElementById("operational-feedback-list");
+  container.replaceChildren();
+  const feedback = operationalMetricsData?.VarianceFeedback || {};
+  const actions = feedback.RecommendedActions || [];
+  const issues = feedback.DataCoverageIssues || [];
+  container.append(detailSection("recommendedActions", actions.map((item) => [operationalMetricDisplayName(item.MetricID), item.ActionZh || "-"])));
+  container.append(detailSection("dataCoverageIssues", issues.length
+    ? issues.map((item) => [operationalMetricDisplayName(item.MetricID), item.MessageZh || dataCoverageLabel(item.Coverage)])
+    : [["status", translate("noDataCoverageIssues")]]));
+}
+
 async function loadScheduleResult(runId) {
   if (!runId) return;
   try {
@@ -1757,6 +2315,7 @@ async function loadScheduleResult(runId) {
     if (!response.ok) throw new Error(String(response.status));
     scheduleResultData = (await response.json()).Data;
     selectedScheduleRunID = runId;
+    simioAdherencePage = 1;
     renderScheduleResult();
     await loadScheduledOrders(runId);
     await loadPlanPublication(runId);
@@ -2052,12 +2611,27 @@ function renderScheduleDiagnostics() {
     const item = document.createElement("div");
     item.className = `diagnostic-item${diagnostic.Severity === "Error" ? " is-error" : ""}`;
     const strong = document.createElement("strong");
-    strong.textContent = diagnostic.Code;
+    strong.textContent = translate("businessDiagnosis");
     const detail = document.createElement("span");
-    detail.textContent = diagnostic.Message;
-    item.append(strong, detail);
+    detail.textContent = solverDiagnosticBusinessText(diagnostic);
+    const technical = document.createElement("details");
+    technical.className = "technical-detail";
+    const summary = document.createElement("summary");
+    summary.textContent = translate("technicalDetails");
+    const code = document.createElement("code");
+    code.textContent = diagnostic.Code;
+    const message = document.createElement("span");
+    message.textContent = diagnostic.Message;
+    technical.append(summary, code, message);
+    item.append(strong, detail, technical);
     container.append(item);
   });
+}
+
+function solverDiagnosticBusinessText(diagnostic) {
+  const translated = translate(`diag_${diagnostic?.Code}`);
+  if (!String(translated).startsWith("diag_")) return translated;
+  return businessValue(diagnostic?.Message || diagnostic?.Code);
 }
 
 async function loadPlanPublication(runId) {
@@ -2316,6 +2890,107 @@ function simioBusinessStatusLabel(value) {
   return (currentLanguage === "zh" ? zh : en)[value] || displayValue(value);
 }
 
+function simioAdherenceMinuteLabel(value) {
+  const number = toNumericValue(value);
+  if (number === null) return "-";
+  return currentLanguage === "zh" ? `${formatNumber(number)} 分钟` : `${formatNumber(number)} min`;
+}
+
+function simioAdherenceSortValue(row, key) {
+  if (key === "DurationMinutes") return simioAdherenceDuration(row);
+  if (key === "ActualStartTime" || key === "ActualEndTime") {
+    const value = row?.[key];
+    if (!value) return null;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+  if (key === "QueueWaitMinutes" || key === "WipAfterStart" || key === "WipAfterEnd") {
+    return toNumericValue(row?.[key]);
+  }
+  if (key === "EventStatus") {
+    return simioEventStatusLabel(row?.EventStatus).toLowerCase();
+  }
+  return String(row?.[key] ?? "").toLowerCase();
+}
+
+function compareSimioAdherenceRows(left, right) {
+  const direction = simioAdherenceSort.direction === "desc" ? -1 : 1;
+  const leftValue = simioAdherenceSortValue(left, simioAdherenceSort.key);
+  const rightValue = simioAdherenceSortValue(right, simioAdherenceSort.key);
+  if (leftValue === null && rightValue === null) return 0;
+  if (leftValue === null) return 1;
+  if (rightValue === null) return -1;
+  if (leftValue < rightValue) return -1 * direction;
+  if (leftValue > rightValue) return 1 * direction;
+  return 0;
+}
+
+function filteredSimioAdherenceRows(rows) {
+  const search = (document.getElementById("simio-adherence-search")?.value || "").trim().toLowerCase();
+  const eventStatus = document.getElementById("simio-adherence-event-filter")?.value || "";
+  const waitFilter = document.getElementById("simio-adherence-wait-filter")?.value || "";
+  return rows.filter((row) => {
+    if (search && !String(row.OrderID || "").toLowerCase().includes(search)) return false;
+    if (eventStatus && row.EventStatus !== eventStatus) return false;
+    const wait = toNumericValue(row.QueueWaitMinutes);
+    if (waitFilter === "gt0" && !(wait !== null && wait > 0)) return false;
+    if (waitFilter === "gt30" && !(wait !== null && wait > 30)) return false;
+    if (waitFilter === "gt60" && !(wait !== null && wait > 60)) return false;
+    return true;
+  });
+}
+
+function renderSimioAdherenceRows(simio) {
+  const body = document.getElementById("simio-adherence-body");
+  const pageSummary = document.getElementById("simio-adherence-page-summary");
+  const previous = document.getElementById("simio-adherence-previous");
+  const next = document.getElementById("simio-adherence-next");
+  const pageSize = Number(document.getElementById("simio-adherence-page-size")?.value || 10);
+  if (!body) return;
+  body.replaceChildren();
+  const rows = simio?.ScheduleAdherence?.Rows || [];
+  const filteredRows = filteredSimioAdherenceRows(rows).sort(compareSimioAdherenceRows);
+  const pages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  simioAdherencePage = Math.min(Math.max(1, simioAdherencePage), pages);
+  const startIndex = filteredRows.length ? (simioAdherencePage - 1) * pageSize : 0;
+  const pageRows = filteredRows.slice(startIndex, startIndex + pageSize);
+  if (!pageRows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 8;
+    cell.className = "table-empty";
+    cell.textContent = rows.length ? translate("noSimulationRows") : displayValue(simio?.ScheduleAdherence?.Message || translate("noSimulationRows"));
+    row.append(cell);
+    body.append(row);
+  } else {
+    pageRows.forEach((item) => {
+      const row = document.createElement("tr");
+      [
+        item.OrderID,
+        item.ActualStartTime,
+        item.ActualEndTime,
+        simioAdherenceMinuteLabel(item.QueueWaitMinutes),
+        simioAdherenceMinuteLabel(simioAdherenceDuration(item)),
+        item.WipAfterStart,
+        item.WipAfterEnd,
+        simioEventStatusLabel(item.EventStatus)
+      ].forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = displayValue(value);
+        row.append(cell);
+      });
+      body.append(row);
+    });
+  }
+  if (pageSummary) {
+    const start = filteredRows.length ? startIndex + 1 : 0;
+    const end = filteredRows.length ? Math.min(startIndex + pageSize, filteredRows.length) : 0;
+    pageSummary.textContent = translateWith("simulationRowsRange", { start, end, total: filteredRows.length });
+  }
+  if (previous) previous.disabled = simioAdherencePage <= 1;
+  if (next) next.disabled = simioAdherencePage >= pages;
+}
+
 function renderSimulationResults() {
   const summary = document.getElementById("simio-result-summary");
   const utilizationBody = document.getElementById("simio-resource-utilization-body");
@@ -2331,6 +3006,7 @@ function renderSimulationResults() {
     summary.append(detailSection("simioValidation", [
       ["simioValidationStatus", translate("noSimulationResult")]
     ]));
+    renderSimioAdherenceRows({ ScheduleAdherence: { Rows: [], Message: translate("noSimulationResult") } });
     return;
   }
   const coverage = simio.ResultCoverage || {};
@@ -2368,14 +3044,18 @@ function renderSimulationResults() {
   } else {
     utilizationRows.forEach((item) => {
       const row = document.createElement("tr");
+      const riskClass = simioUtilizationRiskClass(item.UtilizationPercent);
       [
         item.ResourceID,
         item.UtilizationPercent === null || item.UtilizationPercent === undefined ? "-" : `${formatNumber(item.UtilizationPercent)}%`,
         item.BusyMinutes,
         item.StarvedMinutes,
         item.MetricBasis ? simioDataSourceLabel(item.MetricBasis) : ((item.SourceLogs || []).map(simioDataSourceLabel).join(", ") || simioSourceLabel(simio.ResourceUtilization?.Status))
-      ].forEach((value) => {
+      ].forEach((value, index) => {
         const cell = document.createElement("td");
+        if (index === 1 && riskClass) {
+          cell.classList.add("utilization-cell", riskClass);
+        }
         cell.textContent = displayValue(value);
         row.append(cell);
       });
@@ -2383,34 +3063,7 @@ function renderSimulationResults() {
     });
   }
 
-  const adherenceRows = simio.ScheduleAdherence?.Rows || [];
-  if (!adherenceRows.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 7;
-    cell.className = "table-empty";
-    cell.textContent = displayValue(simio.ScheduleAdherence?.Message);
-    row.append(cell);
-    adherenceBody.append(row);
-  } else {
-    adherenceRows.forEach((item) => {
-      const row = document.createElement("tr");
-      [
-        item.OrderID,
-        item.ActualStartTime,
-        item.ActualEndTime,
-        item.QueueWaitMinutes,
-        item.WipAfterStart,
-        item.WipAfterEnd,
-        simioEventStatusLabel(item.EventStatus)
-      ].forEach((value) => {
-        const cell = document.createElement("td");
-        cell.textContent = displayValue(value);
-        row.append(cell);
-      });
-      adherenceBody.append(row);
-    });
-  }
+  renderSimioAdherenceRows(simio);
 
   const issues = simio.Issues || [];
   if (!issues.length) {
@@ -3088,7 +3741,6 @@ async function loadBufferBoard() {
     if (!response.ok) throw new Error(String(response.status));
     bufferBoardData = (await response.json()).Data;
     renderBufferBoard();
-    await loadMesDispatchPriority(runId, evaluatedValue);
     document.getElementById("buffer-board-content").hidden = false;
     document.getElementById("buffer-board-error").hidden = true;
   } catch (_error) {
@@ -3138,6 +3790,44 @@ async function loadMesDispatchPriority(runId, evaluatedValue) {
     dispatchPriorityData = null;
   }
   renderMesDispatchPriority();
+}
+
+async function loadDispatchSuggestionRuns() {
+  try {
+    const response = await fetch("/planner/workbench/planning-runs/workbench");
+    if (!response.ok) throw new Error(String(response.status));
+    const runs = (await response.json()).Data.Rows.filter((run) => run.Status === "Completed");
+    const select = document.getElementById("dispatch-run-select");
+    replaceSelectOptions(select, runs, { valueKey: "RunID", labelKey: "RunID" });
+    if (!runs.length) {
+      document.getElementById("dispatch-suggestions-empty").hidden = false;
+      document.getElementById("dispatch-suggestions-content").hidden = true;
+      return;
+    }
+    const preferred = selectedDispatchRunID || selectedBufferRunID || selectedReleaseRunID || selectedScheduleRunID;
+    selectedDispatchRunID = runs.some((run) => run.RunID === preferred) ? preferred : runs[0].RunID;
+    select.value = selectedDispatchRunID;
+    if (!document.getElementById("dispatch-evaluated-at").value) document.getElementById("dispatch-evaluated-at").value = toLocalDateTimeInput(new Date());
+    document.getElementById("dispatch-suggestions-empty").hidden = true;
+    await loadDispatchSuggestions();
+  } catch (_error) {
+    document.getElementById("dispatch-suggestions-error").hidden = false;
+  }
+}
+
+async function loadDispatchSuggestions() {
+  const runId = document.getElementById("dispatch-run-select").value;
+  const evaluatedValue = document.getElementById("dispatch-evaluated-at").value;
+  if (!runId || !evaluatedValue) return;
+  selectedDispatchRunID = runId;
+  try {
+    await loadMesDispatchPriority(runId, evaluatedValue);
+    document.getElementById("dispatch-suggestions-content").hidden = false;
+    document.getElementById("dispatch-suggestions-error").hidden = true;
+  } catch (_error) {
+    document.getElementById("dispatch-suggestions-content").hidden = true;
+    document.getElementById("dispatch-suggestions-error").hidden = false;
+  }
 }
 
 function renderMesDispatchPriority() {
@@ -3264,8 +3954,8 @@ function dispatchOperationCard(row, isWarning) {
 }
 
 async function issueMesDispatchSuggestions() {
-  const runId = document.getElementById("buffer-run-select").value;
-  const evaluatedValue = document.getElementById("buffer-evaluated-at").value;
+  const runId = document.getElementById("dispatch-run-select").value;
+  const evaluatedValue = document.getElementById("dispatch-evaluated-at").value;
   const button = document.getElementById("issue-mes-dispatch-suggestions");
   if (!runId || !evaluatedValue || !button) return;
   button.disabled = true;
@@ -4350,6 +5040,17 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refresh-case-acceptance").addEventListener("click", loadCaseAcceptance);
   document.getElementById("reset-all-cases").addEventListener("click", resetAllAcceptanceCases);
   document.getElementById("refresh-data-readiness").addEventListener("click", loadDataReadiness);
+  document.getElementById("ddmrp-details").addEventListener("toggle", refreshDdmrpDetailsAction);
+  document.getElementById("refresh-material-planning").addEventListener("click", loadMaterialPlanning);
+  document.getElementById("material-planning-search").addEventListener("input", renderMaterialPlanningTable);
+  document.getElementById("material-planning-zone-filter").addEventListener("change", renderMaterialPlanningTable);
+  document.getElementById("material-planning-sort").addEventListener("change", (event) => {
+    materialPlanningSortKey = event.target.value;
+    renderMaterialPlanningTable();
+  });
+  document.getElementById("operational-metrics-run-select").addEventListener("change", loadOperationalMetrics);
+  document.getElementById("operational-metrics-evaluated-at").addEventListener("change", loadOperationalMetrics);
+  document.getElementById("refresh-operational-metrics").addEventListener("click", loadOperationalMetrics);
   document.getElementById("generate-operational-snapshot").addEventListener("click", generateOperationalSnapshotFromLatest);
   document.getElementById("view-readiness-issues").addEventListener("click", openIssuesDrawer);
   document.getElementById("close-issues-drawer").addEventListener("click", closeIssuesDrawer);
@@ -4381,6 +5082,21 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("[data-schedule-tab]").forEach((button) => button.addEventListener("click", () => setScheduleTab(button.dataset.scheduleTab)));
   document.getElementById("run-simio-validation").addEventListener("click", runSimioValidation);
   document.getElementById("refresh-simio-validation").addEventListener("click", () => loadScheduleOutputGovernance(selectedScheduleRunID));
+  document.getElementById("simio-adherence-search").addEventListener("input", () => { simioAdherencePage = 1; renderSimulationResults(); });
+  ["simio-adherence-event-filter", "simio-adherence-wait-filter", "simio-adherence-page-size"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => { simioAdherencePage = 1; renderSimulationResults(); });
+  });
+  document.querySelectorAll("[data-simio-sort]").forEach((button) => button.addEventListener("click", () => {
+    const key = button.dataset.simioSort;
+    simioAdherenceSort = {
+      key,
+      direction: simioAdherenceSort.key === key && simioAdherenceSort.direction === "asc" ? "desc" : "asc"
+    };
+    simioAdherencePage = 1;
+    renderSimulationResults();
+  }));
+  document.getElementById("simio-adherence-previous").addEventListener("click", () => { simioAdherencePage -= 1; renderSimulationResults(); });
+  document.getElementById("simio-adherence-next").addEventListener("click", () => { simioAdherencePage += 1; renderSimulationResults(); });
   document.querySelectorAll("[data-gantt-mode]").forEach((button) => button.addEventListener("click", () => setGanttMode(button.dataset.ganttMode)));
   ["gantt-resource-filter", "gantt-order-filter", "gantt-type-filter", "gantt-zone-filter", "gantt-from-date", "gantt-to-date", "gantt-zoom"].forEach((id) => document.getElementById(id).addEventListener("change", renderGanttBoard));
   document.querySelectorAll("[data-load-view]").forEach((button) => button.addEventListener("click", () => setLoadView(button.dataset.loadView)));
@@ -4417,6 +5133,9 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refresh-release-management").addEventListener("click", reevaluateReleaseManagementWithLatestState);
   document.getElementById("buffer-run-select").addEventListener("change", loadBufferBoard);
   document.getElementById("refresh-buffer-board").addEventListener("click", loadBufferBoard);
+  document.getElementById("dispatch-run-select").addEventListener("change", loadDispatchSuggestions);
+  document.getElementById("dispatch-evaluated-at").addEventListener("change", loadDispatchSuggestions);
+  document.getElementById("refresh-dispatch-suggestions").addEventListener("click", loadDispatchSuggestions);
   document.getElementById("issue-mes-dispatch-suggestions").addEventListener("click", issueMesDispatchSuggestions);
   document.getElementById("close-buffer-order-detail").addEventListener("click", () => closeSideDrawer("buffer-order-detail"));
   document.getElementById("close-buffer-transaction-dialog").addEventListener("click", () => document.getElementById("buffer-transaction-dialog").close());

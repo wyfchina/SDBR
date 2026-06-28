@@ -25,6 +25,18 @@
 - Gurobi must retain historical-result compatibility, but new Gurobi planning runs are paused and must be shown as unavailable for execution.
 - Simio must retain the product path defined by `UI-RUN-002`; the current implemented scope is optional post-schedule validation through Mock Runner or local Headless Runner. Simio Portal, Server Connector, Experiment automation, and any publication hard gate remain deferred until explicitly implemented.
 
+## Product scope
+
+- Maintain SDBR as a DDOM / S-DBR execution system only. Its responsibility is MRP/material feasibility, finite-capacity scheduling, release management, buffer execution, MES dispatch suggestions, execution feedback, variance capture, and optional Simio validation.
+- Do not implement DDS&OP workflows in this repository unless explicitly requested. DDS&OP / DDAE owns model governance and configuration decisions, including scenario governance, master-setting approval, Buffer Profile governance, adjustment-factor approval, and strategic what-if simulation.
+- DDAE-approved operating-model configuration must flow through this lifecycle: receive, validate, freeze, execute, and feed back. Do not recalculate or govern DDAE-owned master parameters in SDBR pages.
+- Planning Run work must freeze the `OperatingModelConfigurationID` used for that run so results can always be traced back to the DDS&OP/DDAE configuration version in force at scheduling time.
+- Time buffers, control points, DDMRP parameters, resource roles, and other DDAE-origin settings must be consumed according to the contract only. Do not silently extend their meaning or add implicit fields in SDBR.
+- Feedback from SDBR to DDAE must include configuration version, run version, timestamp, data source, exception reason, and a traceable ID.
+- Existing ERP/MES mock interfaces may remain inside SDBR, but DDAE connectivity must be governed separately by the Contract Agent and the contracts under `D:\Documents\DDAE_INTERFACE_CONTRACT`.
+- If the execution layer discovers that a DDAE contract is insufficient, submit a contract change request. Do not first implement hidden SDBR-only fields or UI-side parameter workarounds.
+- DDMRP capability belongs inside the DDOM runtime path, but do not build DDMRP parameter configuration, Buffer Profile governance, adjustment-factor approval, or DDS&OP scenario-governance UI here. Those settings are external inputs until a later explicit scope change.
+
 ## Simio integration work
 
 - Record every Simio model generation or mutation process in a durable repository document so the workflow can later be promoted into a Codex Skill.

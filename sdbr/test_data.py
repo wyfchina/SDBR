@@ -28,6 +28,7 @@ BASELINE_MASTER_DATA_VERSION_ID = "TST-MDV-BASELINE-20260619"
 BASELINE_OPERATIONAL_STATE_ID = "TST-OPS-BASELINE-20260619"
 MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID = "TST-OPS-MATERIAL-SHORTAGE-20260619"
 WIP_LIMIT_OPERATIONAL_STATE_ID = "TST-OPS-WIP-LIMIT-20260619"
+DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID = "TST-DDMRP-MDV-NET-FLOW-20260625"
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +343,31 @@ def test_case_catalog_payload() -> dict[str, object]:
         "DatasetID": "TST-DATASET-BASELINE-20260619",
         "MasterDataVersionID": BASELINE_MASTER_DATA_VERSION_ID,
         "CaseCount": len(test_case_catalog()),
+        "DdmrpRuntimeCases": [
+            {
+                "CaseID": "TST-DDMRP-NET-FLOW",
+                "CaseGroup": "DDMRPRuntimeCases",
+                "NameZh": "DDMRP 净流与库存缓冲",
+                "MasterDataVersionID": DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
+                "PurposeZh": "展示同一时间点下红区、黄区、绿区和高于绿区四类解耦点的净流位置、在手执行状态和补货建议。",
+                "ExpectedSummary": {
+                    "RedCount": 1,
+                    "YellowCount": 1,
+                    "GreenCount": 1,
+                    "AboveGreenCount": 1,
+                    "ReplenishmentSuggestionCount": 2,
+                },
+                "CoveredSpecIDs": [
+                    "BE-DDMRP-001",
+                    "BE-DDMRP-002",
+                    "BE-DDMRP-003",
+                    "BE-DDMRP-004",
+                    "BE-DDMRP-005",
+                    "BE-DDMRP-006",
+                    "UI-DDMRP-001",
+                ],
+            }
+        ],
         "Cases": [case.to_dict() for case in test_case_catalog()],
     }
 
@@ -456,6 +482,7 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             requested_at=captured_at,
         )
     _seed_cp_sat_business_cases(store=store, captured_at=captured_at)
+    _seed_ddmrp_net_flow_case(store=store, captured_at=captured_at + timedelta(days=6))
 
     store.audit_events.append(
         {
@@ -617,6 +644,133 @@ def _reset_cp_sat_case(
     )
     for override in run_options.get("FrozenCalendarOverrides", []):
         store.calendar_overrides[str(override["OverrideID"])] = dict(override)
+
+
+def _seed_ddmrp_net_flow_case(
+    *,
+    store: WorkbenchStateStore,
+    captured_at: datetime,
+) -> None:
+    resources = _baseline_resources()
+    routings = _baseline_routings()
+    orders = _baseline_orders()
+    inventory_buffers = import_inventory_buffers_from_rows(
+        [
+            InventoryBufferImportRow("TST-DDMRP-RED", "TST-MAIN", 40, 50, 50, 100),
+            InventoryBufferImportRow("TST-DDMRP-YELLOW", "TST-MAIN", 80, 50, 50, 100),
+            InventoryBufferImportRow("TST-DDMRP-GREEN", "TST-MAIN", 140, 50, 50, 100),
+            InventoryBufferImportRow("TST-DDMRP-ABOVE", "TST-MAIN", 230, 50, 50, 100),
+        ]
+    )
+    validation = validate_master_data(
+        resources=resources,
+        routings=routings,
+        orders=orders,
+        inventory_buffers=inventory_buffers,
+        material_requirements=[],
+        calendar_timezone=None,
+    )
+    store.master_data_versions[DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID] = {
+        "VersionID": DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
+        "CapturedAt": captured_at.isoformat(),
+        "SourceSystem": "SDBR-DDMRP-TestData",
+        "CreatedBy": "sdbr-test-data",
+        "CalendarTimezone": None,
+        "Status": "Valid" if validation.is_valid else "Invalid",
+        "Resources": _resources_to_dict(resources),
+        "Routings": _routings_to_dict(routings),
+        "Orders": _orders_to_dict(orders),
+        "InventoryBuffers": _inventory_buffers_to_dict(inventory_buffers),
+        "MaterialRequirements": [],
+        "DdmrpDecouplingPoints": [
+            {
+                "ItemID": "TST-DDMRP-RED",
+                "LocationID": "TST-MAIN",
+                "BufferProfileID": "BP-HIGH-VARIABILITY",
+                "DLTMinutes": 1440,
+                "OrderMultipleQty": 10,
+                "MinimumOrderQty": 40,
+                "Status": "Active",
+            },
+            {
+                "ItemID": "TST-DDMRP-YELLOW",
+                "LocationID": "TST-MAIN",
+                "BufferProfileID": "BP-MEDIUM-VARIABILITY",
+                "DLTMinutes": 1440,
+                "OrderMultipleQty": 10,
+                "MinimumOrderQty": 30,
+                "Status": "Active",
+            },
+            {
+                "ItemID": "TST-DDMRP-GREEN",
+                "LocationID": "TST-MAIN",
+                "BufferProfileID": "BP-LOW-VARIABILITY",
+                "DLTMinutes": 1440,
+                "OrderMultipleQty": 10,
+                "MinimumOrderQty": 20,
+                "Status": "Active",
+            },
+            {
+                "ItemID": "TST-DDMRP-ABOVE",
+                "LocationID": "TST-MAIN",
+                "BufferProfileID": "BP-STABLE",
+                "DLTMinutes": 1440,
+                "OrderMultipleQty": 10,
+                "MinimumOrderQty": 20,
+                "Status": "Active",
+            },
+        ],
+        "DdmrpDemandSignals": [
+            {
+                "ItemID": "TST-DDMRP-RED",
+                "LocationID": "TST-MAIN",
+                "DemandQty": 30,
+                "DemandDueAt": datetime(2026, 6, 25, 12, tzinfo=timezone.utc).isoformat(),
+                "DemandType": "CustomerOrder",
+                "IsQualifiedSpike": False,
+            },
+            {
+                "ItemID": "TST-DDMRP-YELLOW",
+                "LocationID": "TST-MAIN",
+                "DemandQty": 10,
+                "DemandDueAt": datetime(2026, 6, 25, 12, tzinfo=timezone.utc).isoformat(),
+                "DemandType": "CustomerOrder",
+                "IsQualifiedSpike": False,
+            },
+            {
+                "ItemID": "TST-DDMRP-GREEN",
+                "LocationID": "TST-MAIN",
+                "DemandQty": 10,
+                "DemandDueAt": datetime(2026, 6, 25, 12, tzinfo=timezone.utc).isoformat(),
+                "DemandType": "CustomerOrder",
+                "IsQualifiedSpike": False,
+            },
+        ],
+        "DdmrpOpenSupply": [
+            {
+                "ItemID": "TST-DDMRP-RED",
+                "LocationID": "TST-MAIN",
+                "SupplyQty": 10,
+                "ExpectedAt": datetime(2026, 6, 25, 16, tzinfo=timezone.utc).isoformat(),
+                "Status": "Open",
+            }
+        ],
+        "Validation": _validation_to_dict(validation),
+    }
+    store.audit_events.append(
+        {
+            "EventID": "AUD-TST-DDMRP-NET-FLOW-SEED",
+            "RunID": "TST-DDMRP-NET-FLOW",
+            "Action": "DdmrpRuntimeCaseSeeded",
+            "ActorID": "sdbr-test-data",
+            "OccurredAt": captured_at.isoformat(),
+            "Details": {
+                "SpecIDs": ["BE-DDMRP-001", "BE-DDMRP-006", "UI-DDMRP-001"],
+                "MasterDataVersionID": DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
+                "ExpectedZones": ["Red", "Yellow", "Green", "AboveGreen"],
+            },
+        }
+    )
 
 
 def _remove_case_runtime_state(

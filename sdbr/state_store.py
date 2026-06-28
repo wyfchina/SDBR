@@ -44,11 +44,20 @@ class WorkbenchStateStore:
     resource_calendar_assignments: dict[str, dict[str, object]] = field(default_factory=dict)
     calendar_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
     scheduling_strategy_versions: dict[str, dict[str, object]] = field(default_factory=dict)
+    ddsop_config_inbound_messages: list[dict[str, object]] = field(default_factory=list)
+    operating_model_configurations: dict[str, dict[str, object]] = field(default_factory=dict)
+    ddsop_feedback_outbound_messages: list[dict[str, object]] = field(default_factory=list)
+    supplier_identity_source_inbound_messages: list[dict[str, object]] = field(default_factory=list)
+    production_inventory_quality_inbound_messages: list[dict[str, object]] = field(default_factory=list)
+    execution_object_evidence_inbound_messages: list[dict[str, object]] = field(default_factory=list)
     integration_messages: list[dict[str, object]] = field(default_factory=list)
     test_case_acceptance_decisions: list[dict[str, object]] = field(default_factory=list)
     simio_validation_runs: dict[str, dict[str, object]] = field(default_factory=dict)
     simio_template_registry: dict[str, dict[str, object]] = field(default_factory=dict)
     active_simio_template_id: str | None = None
+    ddmrp_decoupling_points: list[dict[str, object]] = field(default_factory=list)
+    ddmrp_demand_signals: list[dict[str, object]] = field(default_factory=list)
+    ddmrp_open_supply: list[dict[str, object]] = field(default_factory=list)
     master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
     audit_events: list[dict[str, object]] = field(default_factory=list)
@@ -118,11 +127,20 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "resource_calendar_assignments": self.resource_calendar_assignments,
             "calendar_overrides": self.calendar_overrides,
             "scheduling_strategy_versions": self.scheduling_strategy_versions,
+            "ddsop_config_inbound_messages": self.ddsop_config_inbound_messages,
+            "operating_model_configurations": self.operating_model_configurations,
+            "ddsop_feedback_outbound_messages": self.ddsop_feedback_outbound_messages,
+            "supplier_identity_source_inbound_messages": self.supplier_identity_source_inbound_messages,
+            "production_inventory_quality_inbound_messages": self.production_inventory_quality_inbound_messages,
+            "execution_object_evidence_inbound_messages": self.execution_object_evidence_inbound_messages,
             "integration_messages": self.integration_messages,
             "test_case_acceptance_decisions": self.test_case_acceptance_decisions,
             "simio_validation_runs": self.simio_validation_runs,
             "simio_template_registry": self.simio_template_registry,
             "active_simio_template_id": self.active_simio_template_id,
+            "ddmrp_decoupling_points": self.ddmrp_decoupling_points,
+            "ddmrp_demand_signals": self.ddmrp_demand_signals,
+            "ddmrp_open_supply": self.ddmrp_open_supply,
             "master_data_versions": self.master_data_versions,
             "planning_runs": self.planning_runs,
             "audit_events": self.audit_events,
@@ -297,6 +315,24 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.scheduling_strategy_versions.update(
             payloads.get("scheduling_strategy_versions", {})
         )
+        self.ddsop_config_inbound_messages.extend(
+            payloads.get("ddsop_config_inbound_messages", [])
+        )
+        self.operating_model_configurations.update(
+            payloads.get("operating_model_configurations", {})
+        )
+        self.ddsop_feedback_outbound_messages.extend(
+            payloads.get("ddsop_feedback_outbound_messages", [])
+        )
+        self.supplier_identity_source_inbound_messages.extend(
+            payloads.get("supplier_identity_source_inbound_messages", [])
+        )
+        self.production_inventory_quality_inbound_messages.extend(
+            payloads.get("production_inventory_quality_inbound_messages", [])
+        )
+        self.execution_object_evidence_inbound_messages.extend(
+            payloads.get("execution_object_evidence_inbound_messages", [])
+        )
         self.integration_messages.extend(payloads.get("integration_messages", []))
         self.test_case_acceptance_decisions.extend(
             payloads.get("test_case_acceptance_decisions", [])
@@ -306,6 +342,11 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             payloads.get("simio_template_registry", {})
         )
         self.active_simio_template_id = payloads.get("active_simio_template_id")
+        self.ddmrp_decoupling_points.extend(
+            payloads.get("ddmrp_decoupling_points", [])
+        )
+        self.ddmrp_demand_signals.extend(payloads.get("ddmrp_demand_signals", []))
+        self.ddmrp_open_supply.extend(payloads.get("ddmrp_open_supply", []))
         self.master_data_versions.update(payloads.get("master_data_versions", {}))
         self.planning_runs.update(payloads.get("planning_runs", {}))
         self.audit_events.extend(payloads.get("audit_events", []))
@@ -332,11 +373,20 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.resource_calendar_assignments.clear()
         self.calendar_overrides.clear()
         self.scheduling_strategy_versions.clear()
+        self.ddsop_config_inbound_messages.clear()
+        self.operating_model_configurations.clear()
+        self.ddsop_feedback_outbound_messages.clear()
+        self.supplier_identity_source_inbound_messages.clear()
+        self.production_inventory_quality_inbound_messages.clear()
+        self.execution_object_evidence_inbound_messages.clear()
         self.integration_messages.clear()
         self.test_case_acceptance_decisions.clear()
         self.simio_validation_runs.clear()
         self.simio_template_registry.clear()
         self.active_simio_template_id = None
+        self.ddmrp_decoupling_points.clear()
+        self.ddmrp_demand_signals.clear()
+        self.ddmrp_open_supply.clear()
         self.master_data_versions.clear()
         self.planning_runs.clear()
         self.audit_events.clear()
@@ -365,10 +415,25 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "ResourceCalendarAssignments": len(store.resource_calendar_assignments),
         "CalendarOverrides": len(store.calendar_overrides),
         "SchedulingStrategyVersions": len(store.scheduling_strategy_versions),
+        "DdsopConfigInboundMessages": len(store.ddsop_config_inbound_messages),
+        "OperatingModelConfigurations": len(store.operating_model_configurations),
+        "DdsopFeedbackOutboundMessages": len(store.ddsop_feedback_outbound_messages),
+        "SupplierIdentitySourceInboundMessages": len(
+            store.supplier_identity_source_inbound_messages
+        ),
+        "ProductionInventoryQualityInboundMessages": len(
+            store.production_inventory_quality_inbound_messages
+        ),
+        "ExecutionObjectEvidenceInboundMessages": len(
+            store.execution_object_evidence_inbound_messages
+        ),
         "IntegrationMessages": len(store.integration_messages),
         "TestCaseAcceptanceDecisions": len(store.test_case_acceptance_decisions),
         "SimioValidationRuns": len(store.simio_validation_runs),
         "SimioTemplateRegistry": len(store.simio_template_registry),
+        "DdmrpDecouplingPoints": len(store.ddmrp_decoupling_points),
+        "DdmrpDemandSignals": len(store.ddmrp_demand_signals),
+        "DdmrpOpenSupply": len(store.ddmrp_open_supply),
         "MasterDataVersions": len(store.master_data_versions),
         "PlanningRuns": len(store.planning_runs),
         "AuditEvents": len(store.audit_events),

@@ -1,0 +1,56 @@
+{
+  "EvidencePackageID": "SDBR-MREP-PART-FPGA-SPACE-20260627-001",
+  "EvidencePackageType": "ControlledMaterialRequirementEvidence",
+  "EvidencePackageStatus": "CreatedForContractAgentReview",
+  "CreatedAt": "2026-06-27T20:00:00+08:00",
+  "CreatedBy": "SDBR Agent",
+  "RequirementSource": {
+    "RequirementContextType": "DemandContext",
+    "ParentContextID": "CTRL-DEMAND-SUB-AVIONICS-COMPUTE-20260627-001",
+    "ParentItemOrProductID": "SUB-AVIONICS-COMPUTE",
+    "ParentDemandQty": 20,
+    "ParentDemandUom": "EA",
+    "ConsumedItemID": "PART-FPGA-SPACE",
+    "RequirementLocationID": "WH-ELEC-QA",
+    "RequirementUom": "EA",
+    "RequiredQty": 63,
+    "RequiredQtyDerivation": "ParentDemandQty 20 * BOM QuantityPer 3 * scrap factor adjustment 1.05",
+    "RequiredAt": "2026-07-20T00:00:00+08:00",
+    "SourceSystem": "UserProvidedControlledValidationSet",
+    "SourceRecordID": "USER-FPGA-REQ-20260627-001",
+    "SourceMarker": "UserAuthorizedControlledRequirementEvidence",
+    "TraceableID": "TRACE-SUB-AVIONICS-COMPUTE-PART-FPGA-SPACE-REQ-20260627-001"
+  },
+  "RelatedAvailabilityBaseline": {
+    "RelatedAvailabilityPackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+    "RelatedAvailabilitySnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+    "ItemID": "PART-FPGA-SPACE",
+    "LocationID": "WH-ELEC-QA",
+    "PlanningUom": "EA",
+    "AvailableQty": 120,
+    "AllocatedQty": 30,
+    "InboundQty": 80,
+    "InboundExpectedAt": "2026-07-15T00:00:00+08:00"
+  },
+  "CoverageSignal": {
+    "CoverageSignalType": "CoveredByAvailableAfterAllocation",
+    "AvailableAfterAllocationQty": 90,
+    "RequiredQty": 63,
+    "CoverageDeltaQty": 27,
+    "InboundQtyNotRequiredForCoverage": true,
+    "Interpretation": "Controlled validation signal only: available quantity after allocation covers the asserted requirement quantity."
+  },
+  "Boundaries": {
+    "UsesFixtureWorkOrder": false,
+    "UsesFixtureMaterialRequirement": false,
+    "MapsToTstRmElec": false,
+    "MapsToTstMain": false,
+    "CreatesExecutableWorkOrder": false,
+    "CreatesExecutableMaterialRequirement": false,
+    "CreatesRouting": false,
+    "CreatesOperation": false,
+    "CreatesSupplierExecution": false,
+    "ClaimsProductionValidated": false,
+    "ClaimsBusinessGoldenLoopReady": false
+  }
+}

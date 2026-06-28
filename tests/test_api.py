@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import get_ident
 from time import sleep
 
@@ -417,6 +418,192 @@ def test_be_data_012_light_mrp_endpoint_returns_first_version_readiness():
         "Available",
         "CoveredByInbound",
     ]
+
+
+def test_be_ddmrp_net_flow_endpoint_returns_runtime_status():
+    # BE-DDMRP-001 / BE-DDMRP-002 / BE-DDMRP-003 / BE-DDMRP-004 / BE-DDMRP-005
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/planner/workbench/ddmrp/net-flow/evaluate",
+        json={
+            "EvaluatedAt": "2026-06-25T08:00:00+00:00",
+            "DecouplingPoints": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "BufferProfileID": "BP-MEDIUM",
+                    "DLTMinutes": 1440,
+                    "OrderMultipleQty": 10,
+                    "MinimumOrderQty": 20,
+                    "Status": "Active",
+                }
+            ],
+            "StockBuffers": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "OnHandQty": 40,
+                    "RedZoneQty": 20,
+                    "YellowZoneQty": 30,
+                    "GreenZoneQty": 50,
+                }
+            ],
+            "DemandSignals": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "DemandQty": 30,
+                    "DemandDueAt": "2026-06-25T12:00:00+00:00",
+                    "DemandType": "CustomerOrder",
+                }
+            ],
+            "OpenSupply": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "SupplyQty": 15,
+                    "ExpectedAt": "2026-06-25T18:00:00+00:00",
+                    "Status": "Open",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["EvaluationMode"] == "DDMRPNetFlowV1"
+    assert data["Summary"]["DecouplingPointCount"] == 1
+    assert data["Summary"]["ReplenishmentSuggestionCount"] == 1
+    assert data["Lines"][0]["NetFlowPosition"] == 25
+    assert data["Lines"][0]["PlanningStatus"] == "Yellow"
+    assert data["Lines"][0]["ExecutionStatus"] == "Yellow"
+    assert data["Lines"][0]["SuggestedReplenishmentQty"] == 80
+
+
+def test_be_ddmrp_import_endpoints_persist_runtime_inputs():
+    # BE-DDMRP-001 / BE-DDMRP-003
+    store = WorkbenchStateStore()
+    client = TestClient(create_app(state_store=store))
+
+    decoupling_response = client.post(
+        "/planner/workbench/ddmrp/decoupling-points/import",
+        json={
+            "Rows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "BufferProfileID": "BP-MEDIUM",
+                    "DLTMinutes": 1440,
+                }
+            ]
+        },
+    )
+    demand_response = client.post(
+        "/planner/workbench/ddmrp/demand-signals/import",
+        json={
+            "Rows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "DemandQty": 30,
+                    "DemandDueAt": "2026-06-25T12:00:00+00:00",
+                }
+            ]
+        },
+    )
+    supply_response = client.post(
+        "/planner/workbench/ddmrp/open-supply/import",
+        json={
+            "Rows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "SupplyQty": 15,
+                    "ExpectedAt": "2026-06-25T18:00:00+00:00",
+                }
+            ]
+        },
+    )
+
+    assert decoupling_response.status_code == 200
+    assert demand_response.status_code == 200
+    assert supply_response.status_code == 200
+    assert store.ddmrp_decoupling_points[0]["BufferProfileID"] == "BP-MEDIUM"
+    assert store.ddmrp_demand_signals[0]["DemandQty"] == 30
+    assert store.ddmrp_open_supply[0]["SupplyQty"] == 15
+
+
+def test_be_ddmrp_status_reads_frozen_master_data_version():
+    # BE-DDMRP-001 / BE-DDMRP-002 / BE-DDMRP-006
+    client = TestClient(create_app())
+    request_payload = _master_data_import_calculate_payload()
+    request_payload.pop("ProblemID")
+    request_payload.pop("ScheduleStartAt")
+    request_payload.update(
+        {
+            "VersionID": "MDV-DDMRP-1",
+            "CapturedAt": "2026-06-25T07:00:00+00:00",
+            "SourceSystem": "DDSOP",
+            "CreatedBy": "planner-1",
+            "InventoryBufferRows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "OnHandQty": 40,
+                    "RedZoneQty": 20,
+                    "YellowZoneQty": 30,
+                    "GreenZoneQty": 50,
+                }
+            ],
+            "DdmrpDecouplingPointRows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "BufferProfileID": "BP-MEDIUM",
+                    "DLTMinutes": 1440,
+                    "OrderMultipleQty": 10,
+                    "MinimumOrderQty": 20,
+                    "Status": "Active",
+                }
+            ],
+            "DdmrpDemandSignalRows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "DemandQty": 30,
+                    "DemandDueAt": "2026-06-25T12:00:00+00:00",
+                    "DemandType": "CustomerOrder",
+                }
+            ],
+            "DdmrpOpenSupplyRows": [
+                {
+                    "ItemID": "RM-STEEL",
+                    "LocationID": "MAIN",
+                    "SupplyQty": 15,
+                    "ExpectedAt": "2026-06-25T18:00:00+00:00",
+                    "Status": "Open",
+                }
+            ],
+        }
+    )
+
+    create_response = client.post(
+        "/planner/workbench/master-data/versions", json=request_payload
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()["Data"]["Version"]
+    assert created["DdmrpDecouplingPoints"][0]["BufferProfileID"] == "BP-MEDIUM"
+
+    status_response = client.get(
+        "/planner/workbench/ddmrp/status?EvaluatedAt=2026-06-25T08:00:00%2B00:00"
+    )
+
+    assert status_response.status_code == 200
+    data = status_response.json()["Data"]
+    assert data["Source"]["VersionID"] == "MDV-DDMRP-1"
+    assert data["Summary"]["LineCount"] == 1
+    assert data["Lines"][0]["SuggestedReplenishmentQty"] == 80
 
 
 def test_planner_workbench_material_availability_import_rejects_negative_qty():
@@ -1834,14 +2021,17 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'id="top-context"' in html
     assert 'id="workspace"' in html
     assert 'data-route="overview"' in html
+    assert 'data-route="operational-metrics"' in html
     assert 'data-route="data-readiness"' in html
+    assert 'data-route="material-planning"' in html
     assert 'data-route="planning-runs"' in html
     assert 'data-route="schedule-results"' in html
     assert 'data-route="release-management"' in html
     assert 'data-route="calendar"' in html
+    assert 'data-route="dispatch-suggestions"' in html
     assert 'data-route="exceptions"' in html
     assert 'data-route="administration"' in html
-    assert html.count("data-nav-help") == 9
+    assert html.count("data-nav-help") == 12
     assert 'id="nav-business-tooltip"' in html
     assert 'role="tooltip"' in html
     assert 'id="master-data-version"' in html
@@ -1859,6 +2049,10 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert "showNavigationHelp" in script
     assert "refreshNavigationHelp" in script
     assert "descriptionData" in script
+    assert "descriptionDispatch" in script
+    assert "solverDiagnosticBusinessText" in script
+    assert "diag_ORTOOLS_TIME_LIMIT_CONFIGURED" in script
+    assert "technical-detail" in script
     assert 'processQueue: "处理队列"' in script
 
 
@@ -1907,7 +2101,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260624-friendly-feedback"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260626-config-font-density"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -1929,12 +2123,25 @@ def test_planner_workbench_page_exposes_data_readiness_workspace_without_raw_jso
     assert 'id="select-planning-inputs"' in html
     assert 'id="generate-operational-snapshot"' in html
     assert 'id="create-master-data-version"' in html
+    assert 'id="ddmrp-status-heading"' in html
+    assert 'id="ddmrp-status-summary"' in html
+    assert 'id="ddmrp-status-table-body"' in html
+    assert 'data-i18n="ddmrpRuntimeStatus"' in html
     assert "/planner/workbench/data-readiness" in script
+    assert "/planner/workbench/ddmrp/status" in script
     assert "/planner/workbench/operational-state/snapshots/" in script
     assert "generateOperationalSnapshotFromLatest" in script
     assert "loadDataReadiness" in script
+    assert "loadDdmrpStatus" in script
+    assert "renderDdmrpStatus" in script
+    assert "refreshDdmrpDetailsAction" in script
     assert "renderReadinessIssues" in script
     assert "readiness-issue-group" in script
+    assert 'ddmrpRuntimeStatus: "DDMRP 运行状态"' in script
+    assert 'viewDdmrpDetails: "解耦点明细"' in script
+    assert 'data-ddmrp-details-action' in html
+    assert 'class="muted ddmrp-source-note"' in html
+    assert 'class="collapsible-detail ddmrp-details"' in html
     assert 'errors: "阻塞问题"' in script
     assert 'warnings: "警告"' in script
     assert "function localizedSeverity" in script
@@ -1954,6 +2161,51 @@ def test_planner_workbench_page_exposes_data_readiness_workspace_without_raw_jso
         "/planner/assets/planner-workbench.css"
     ).text
     assert "DEFAULT_MASTER_DATA" not in script
+    assert "Buffer Profile 治理" not in html
+    assert "调整因子审批" not in html
+
+
+def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
+    client = TestClient(create_app())
+
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'href="#material-planning"' in html
+    assert 'data-route="material-planning"' in html
+    assert 'data-i18n="navMaterials"' in html
+    assert 'id="material-planning-view"' in html
+    assert 'id="material-planning-search"' in html
+    assert 'id="material-planning-zone-filter"' in html
+    assert 'id="material-planning-sort"' in html
+    assert 'id="material-planning-table-body"' in html
+    assert 'data-i18n="bufferPercent"' in html
+    assert 'data-i18n="openSupply"' in html
+    assert 'data-i18n="qualifiedDemand"' in html
+    assert 'id="material-planning-detail"' in html
+    assert 'data-i18n="trendPlaceholderMessage"' in html
+
+    assert 'navMaterials: "物料计划"' in script
+    assert 'navMaterials: "Materials Planning"' in script
+    assert 'pageMaterials: "物料计划"' in script
+    assert 'descriptionMaterials: "按 DDMRP 缓冲状态处理物料净流和补货建议。"' in script
+    assert '"material-planning": ["pageMaterials", "descriptionMaterials"]' in script
+    assert "loadMaterialPlanning" in script
+    assert "renderMaterialPlanningTable" in script
+    assert "filteredMaterialPlanningRows" in script
+    assert "const bufferPercent = topOfGreen > 0 ? (netFlow / topOfGreen) * 100 : null" in script
+    assert "ddmrpZoneRank" in script
+    assert "SuggestedReplenishmentQty" in script
+    assert "materialPlanningSortKey" in script
+    assert "materialPlanningData" in script
+    assert "/planner/workbench/ddmrp/status" in script
+    assert 'action_Replenish: "建议补货"' in script
+    assert 'action_Monitor: "保持观察"' in script
+    assert "批准全部订单" not in html
+    assert "APPROVE ALL ORDERS" not in html
+    assert "生成 ERP" not in html
+    assert "Buffer Profile 治理" not in html
+    assert "调整因子审批" not in html
 
 
 def test_planning_run_workbench_endpoint_returns_safe_rows_and_capabilities():
@@ -2444,6 +2696,14 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'id="gantt-board"' in html
     assert 'data-gantt-mode="resource"' in html
     assert 'data-gantt-mode="order"' in html
+    assert 'id="simio-adherence-search"' in html
+    assert 'id="simio-adherence-event-filter"' in html
+    assert 'id="simio-adherence-wait-filter"' in html
+    assert 'id="simio-adherence-page-size"' in html
+    assert 'id="simio-adherence-previous"' in html
+    assert 'id="simio-adherence-next"' in html
+    assert 'data-simio-sort="QueueWaitMinutes"' in html
+    assert 'data-simio-sort="DurationMinutes"' in html
     assert 'id="system-load-view"' in html
     assert 'id="resource-load-view"' in html
     assert 'id="scenario-comparison"' in html
@@ -2454,9 +2714,18 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert "/output-package`" in script
     assert "simioValidation" in script
     assert "simioSourceLabel" in script
+    assert "filteredSimioAdherenceRows" in script
+    assert "renderSimioAdherenceRows" in script
+    assert "simioUtilizationRiskClass" in script
+    assert "utilization-risk-warning" in script
+    assert "utilization-risk-critical" in script
+    assert "utilization-risk-full" in script
     assert "externalDeliveryOwnedByIntegrations" in script
     assert "Partial simulation result parsed" in script
     assert "来自工单输出记录" in script
+    assert 'simioOrderFilter: "工单筛选"' in script
+    assert 'noSimulationRows: "没有符合条件的工单仿真记录"' in script
+    assert 'durationMinutes: "Processing / dwell time"' in script
     assert "ganttRowsByOrder" in script
     assert 'resourceOccupationView: "资源占用图"' in script
     assert 'workOrderFlowView: "工单流程图"' in script
@@ -2722,6 +2991,117 @@ def test_be_int_005_mes_dispatch_suggestions_package_and_mock_issue():
     assert issued["IntegrationMessage"]["Status"] in {"Accepted", "Duplicate"}
     assert store.integration_messages[-1]["MessageType"] == "DispatchQueueIssued"
     assert store.integration_messages[-1]["ContractID"] == "MES-OUTBOUND-V1"
+
+
+def test_be_ddom_operational_metrics_returns_flow_based_metric_set():
+    # BE-DDOM-001 / BE-DDOM-002 / BE-DDOM-003 / BE-DDOM-004
+    store = _schedule_result_test_store()
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client, current_wip=0)
+    authorization = create_release_authorization(
+        request_id="RUN-RESULT",
+        candidate={
+            "OrderID": "WO-1",
+            "ScheduledStart": "2026-06-19T08:00:00+00:00",
+            "ScheduledEnd": "2026-06-19T10:00:00+00:00",
+            "SuggestedReleaseAt": "2026-06-19T06:00:00+00:00",
+            "RecommendedAction": "ReadyForRelease",
+        },
+        released_by="planner-1",
+        released_at=datetime(2026, 6, 19, 7, 30, tzinfo=timezone.utc),
+        operational_state_snapshot_id="OPS-RESULT",
+    )
+    store.release_authorizations.append(authorization)
+    store.execution_events.extend(
+        [
+            {
+                "EventID": "EVT-ARRIVE-WO-1",
+                "AuthorizationID": authorization.authorization_id,
+                "EventType": "ArrivedBuffer",
+                "OrderID": "WO-1",
+                "OperationID": "CUT",
+                "ResourceID": "WC-DRUM",
+                "EventAt": "2026-06-19T07:45:00+00:00",
+            },
+            {
+                "EventID": "EVT-START-WO-1",
+                "AuthorizationID": authorization.authorization_id,
+                "EventType": "StartedOperation",
+                "OrderID": "WO-1",
+                "OperationID": "CUT",
+                "ResourceID": "WC-DRUM",
+                "EventAt": "2026-06-19T08:00:00+00:00",
+            },
+            {
+                "EventID": "EVT-COMPLETE-WO-1",
+                "AuthorizationID": authorization.authorization_id,
+                "EventType": "CompletedOperation",
+                "OrderID": "WO-1",
+                "OperationID": "CUT",
+                "ResourceID": "WC-DRUM",
+                "EventAt": "2026-06-19T10:00:00+00:00",
+            },
+        ]
+    )
+
+    response = client.get(
+        "/planner/workbench/ddom/operational-metrics",
+        params={
+            "run_id": "RUN-RESULT",
+            "evaluated_at": "2026-06-19T07:50:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["MetricSetID"] == "DDOM-FLOW-METRICS-V1"
+    assert data["RunID"] == "RUN-RESULT"
+    assert [category["CategoryID"] for category in data["Categories"]] == [
+        "Reliability",
+        "Stability",
+        "SpeedVelocity",
+    ]
+    assert sum(len(category["Metrics"]) for category in data["Categories"]) == 12
+    assert data["Applicability"]["DoesNotApplyTo"] == [
+        "Financial cost attribution",
+        "DDS&OP model configuration or scenario governance",
+        "MES second-by-second machine control",
+        "Long-term capacity investment decisions",
+    ]
+    reliability = data["Categories"][0]["Metrics"]
+    assert reliability[2]["MetricID"] == "ScheduledReleaseRate"
+    assert reliability[2]["Value"] == 100.0
+    assert data["VarianceFeedback"]["FeedbackScope"] == "DDOMPerformanceForDDSOP"
+
+
+def test_ui_ddom_001_operational_metrics_page_is_exposed():
+    # UI-DDOM-001
+    html = Path("sdbr/web/planner-workbench.html").read_text(encoding="utf-8")
+    script = Path("sdbr/web/planner-workbench.js").read_text(encoding="utf-8")
+    css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
+
+    assert 'href="#operational-metrics"' in html
+    assert 'id="operational-metrics-view"' in html
+    assert 'data-i18n="navOperationalMetrics"' in html
+    assert "/planner/workbench/ddom/operational-metrics" in script
+    assert "renderOperationalMetrics" in script
+    assert "operationalApplicabilityLabel" in script
+    assert "operationalMetricDisplayName" in script
+    assert "DDOM 日常运营执行" in script
+    assert "MES 秒级设备控制" in script
+    assert "给上层战术协同的运行表现反馈" in script
+    assert "operational-metrics-grid" in css
+
+
+def test_ui_calendar_and_admin_pages_use_compact_font_density():
+    # UI-CALENDAR-001 / UI-ADMIN-001 / UI-ADMIN-002
+    css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
+
+    assert ".admin-panel .panel-heading h2" in css
+    assert ".calendar-config-workspace .panel-heading h2" in css
+    assert ".admin-object-card strong { font-size: 13px" in css
+    assert ".calendar-config-card h3 { font-size: 13px" in css
+    assert ".policy-group strong, .calendar-layer strong { font-size: 12px" in css
 
 
 def test_be_out_010_output_package_rejects_incomplete_or_unscoped_runs():
@@ -3423,16 +3803,38 @@ def test_ui_buffer_001_workbench_exposes_bilingual_buffer_execution_board():
     assert 'data-route="buffer-board"' in html
     assert 'id="buffer-board-view"' in html
     assert 'id="buffer-board-matrix"' in html
-    assert 'id="mes-dispatch-priority-panel"' in html
-    assert 'id="mes-dispatch-resources"' in html
-    assert 'id="issue-mes-dispatch-suggestions"' in html
     assert 'id="buffer-order-detail"' in html
     assert 'id="buffer-transaction-dialog"' in html
     assert 'navBuffer: "缓冲执行"' in script
     assert 'navBuffer: "Buffer Execution"' in script
     assert "/planner/workbench/buffer-board/runs/" in script
+    assert "if (isBufferBoard) loadBufferBoardRuns();" in script
+    assert "if (isDispatchSuggestions) loadDispatchSuggestionRuns();" in script
+
+
+def test_ui_dispatch_001_workbench_exposes_independent_dispatch_suggestions_page():
+    client = TestClient(create_app())
+
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+    css = client.get("/planner/assets/planner-workbench.css").text
+
+    assert 'data-route="dispatch-suggestions"' in html
+    assert 'id="dispatch-suggestions-view"' in html
+    assert 'id="dispatch-run-select"' in html
+    assert 'id="dispatch-evaluated-at"' in html
+    assert 'id="refresh-dispatch-suggestions"' in html
+    assert 'id="dispatch-suggestions-content"' in html
+    assert 'id="mes-dispatch-priority-panel"' in html
+    assert 'id="mes-dispatch-resources"' in html
+    assert 'id="issue-mes-dispatch-suggestions"' in html
+    assert 'navDispatch: "派工建议"' in script
+    assert 'navDispatch: "Dispatch Suggestions"' in script
+    assert 'descriptionDispatch' in script
     assert "/planner/workbench/dispatch-priority/runs/" in script
     assert "/planner/workbench/mes/dispatch-suggestions/runs/" in script
+    assert "loadDispatchSuggestionRuns" in script
+    assert "loadDispatchSuggestions" in script
     assert "issueMesDispatchSuggestions" in script
     assert 'mesDispatchQueue: "MES 派工队列"' in script
     assert 'mesDispatchQueue: "MES dispatch queue"' in script
@@ -3443,6 +3845,10 @@ def test_ui_buffer_001_workbench_exposes_bilingual_buffer_execution_board():
     assert 'Hold: "暂不派工"' in script
     assert 'QueueJump: "建议插队"' in script
     assert 'ReviewAndReplan: "复核并考虑重排"' in script
+    assert ".dispatch-priority-panel .panel-heading h2" in css
+    assert "font-size: 14px" in css
+    assert ".dispatch-resource-heading strong" in css
+    assert ".dispatch-priority-panel .button" in css
 
 
 def _exception_center_test_store() -> WorkbenchStateStore:

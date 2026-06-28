@@ -1,0 +1,95 @@
+{
+  "ContractID": "SUPPLIER-EXECUTION-EVIDENCE-V1",
+  "ContractVersion": "1.0.0",
+  "Direction": "SDBR_OR_APPROVED_SOURCE_TO_DDAE",
+  "MessageID": "SDBR-SEEV1-MSG-PART-FPGA-SPACE-SHIPMENT-20260701-001",
+  "EvidencePackageID": "SDBR-SEEP-PART-FPGA-SPACE-SHIPMENT-20260701-001",
+  "EvidencePackageStatus": "Submitted",
+  "IdempotencyKey": "SUPPLIER-EXECUTION-EVIDENCE-V1:UserProvidedControlledValidationSet:CTRL-ASN-FPGA-20260627-001:001:ShipmentCreated:1",
+  "CreatedAt": "2026-07-01T09:10:00+08:00",
+  "ProducerSystem": "UserProvidedControlledValidationSet",
+  "ConsumerSystem": "DDAE",
+  "Scope": {
+    "ItemID": "PART-FPGA-SPACE",
+    "LocationID": "WH-ELEC-QA",
+    "PlanningUom": "EA",
+    "BusinessFocus": "Controlled shipment-created evidence for PART-FPGA-SPACE"
+  },
+  "RelatedReferences": {
+    "MasterDataAlignmentPackageID": "MDA-PART-FPGA-SPACE-20260627-001",
+    "MaterialAvailabilityPackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+    "MaterialAvailabilitySnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+    "MaterialRequirementPackageID": "SDBR-MREP-PART-FPGA-SPACE-20260627-001",
+    "DemandContextID": "CTRL-DEMAND-SUB-AVIONICS-COMPUTE-20260627-001"
+  },
+  "Events": [
+    {
+      "EventID": "SDBR-SEEVT-PART-FPGA-SPACE-SHIPMENT-20260701-001",
+      "EventVersion": 1,
+      "EventType": "ShipmentCreated",
+      "EventStatus": "Shipped",
+      "Supplier": {
+        "SupplierID": "SUP-MICROCHIP",
+        "SupplierName": "Microchip Space",
+        "SupplierIdentitySourceSystem": "DDAE SupplierSource / controlled validation",
+        "SupplierIdentityConfidence": "Reviewed"
+      },
+      "ItemID": "PART-FPGA-SPACE",
+      "LocationID": "WH-ELEC-QA",
+      "Quantity": {
+        "SupplierExecutionQty": 80,
+        "SupplierExecutionUom": "EA",
+        "AcceptedQty": null,
+        "RejectedQty": null,
+        "RemainingOpenQty": 80,
+        "QuantitySourceBasis": "Shipped"
+      },
+      "SourceDocument": {
+        "SourceSystem": "UserProvidedControlledValidationSet",
+        "SourceRecordID": "USER-FPGA-SHIPMENT-EVENT-20260627-001",
+        "SourceDocumentType": "ASN",
+        "SourceDocumentID": "CTRL-ASN-FPGA-20260627-001",
+        "SourceDocumentLineID": "001",
+        "SourceDocumentStatus": "Shipped",
+        "SourceMarker": "UserAuthorizedControlledShipmentEvidence"
+      },
+      "Timestamps": {
+        "EventTimestamp": "2026-07-01T09:00:00+08:00",
+        "ExpectedAt": "2026-07-15T00:00:00+08:00",
+        "OriginalExpectedAt": "2026-07-15T00:00:00+08:00",
+        "CommittedAt": null,
+        "ShippedAt": "2026-07-01T09:00:00+08:00",
+        "ReceivedAt": null,
+        "QualityReleasedAt": null,
+        "RegisteredAt": "2026-07-01T09:10:00+08:00"
+      },
+      "Traceability": {
+        "TraceableID": "TRACE-SUP-MICROCHIP-PART-FPGA-SPACE-SHIP-20260701-001",
+        "RawPayloadReference": "D:\\Documents\\SDBR\\data\\contract-target-evidence\\part-fpga-space-shipment-created-evidence-20260701.json",
+        "PreviousEventID": "SDBR-SEEVT-PART-FPGA-SPACE-20260627-001",
+        "SupersedesEventID": null
+      },
+      "RelatedReferences": {
+        "MasterDataAlignmentPackageID": "MDA-PART-FPGA-SPACE-20260627-001",
+        "MaterialAvailabilityPackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+        "MaterialAvailabilitySnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+        "MaterialRequirementPackageID": "SDBR-MREP-PART-FPGA-SPACE-20260627-001",
+        "DemandContextID": "CTRL-DEMAND-SUB-AVIONICS-COMPUTE-20260627-001"
+      },
+      "Notes": "Controlled ShipmentCreated evidence only. This does not prove receipt, quality release, delivery validation, lead-time validation, ProductionValidated, or Business Golden Loop readiness."
+    }
+  ],
+  "BoundaryFlags": {
+    "InboundQuantityUsedAsExecutionProof": false,
+    "CreatesWorkOrder": false,
+    "CreatesMaterialRequirement": false,
+    "CreatesRouting": false,
+    "CreatesOperation": false,
+    "ClaimsProductionValidated": false,
+    "ClaimsBusinessGoldenLoopReady": false
+  },
+  "ChangeReason": {
+    "ReasonCode": "CONTROLLED_VALIDATION",
+    "Description": "User authorized controlled ShipmentCreated event source for SUP-MICROCHIP shipping 80 EA of PART-FPGA-SPACE."
+  }
+}

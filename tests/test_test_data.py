@@ -9,6 +9,7 @@ from sdbr.state_store import SQLiteWorkbenchStateStore, WorkbenchStateStore
 from sdbr.test_data import (
     BASELINE_MASTER_DATA_VERSION_ID,
     BASELINE_OPERATIONAL_STATE_ID,
+    DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
     MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID,
     WIP_LIMIT_OPERATIONAL_STATE_ID,
     main,
@@ -30,6 +31,7 @@ def test_seed_baseline_test_data_builds_business_readable_state():
     assert BASELINE_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert WIP_LIMIT_OPERATIONAL_STATE_ID in store.operational_state_snapshots
+    assert DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID in store.master_data_versions
     assert {
         "TST-RUN-BASELINE-001",
         "TST-RUN-MATERIAL-SHORTAGE-001",
@@ -45,6 +47,14 @@ def test_seed_baseline_test_data_builds_business_readable_state():
         order["OrderID"].startswith("TST-")
         for order in store.master_data_versions[BASELINE_MASTER_DATA_VERSION_ID]["Orders"]
     )
+    ddmrp_version = store.master_data_versions[DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID]
+    assert len(ddmrp_version["DdmrpDecouplingPoints"]) == 4
+    assert {item["ItemID"] for item in ddmrp_version["DdmrpDecouplingPoints"]} == {
+        "TST-DDMRP-RED",
+        "TST-DDMRP-YELLOW",
+        "TST-DDMRP-GREEN",
+        "TST-DDMRP-ABOVE",
+    }
 
 
 def test_test_case_catalog_documents_business_acceptance_cases():
@@ -53,6 +63,16 @@ def test_test_case_catalog_documents_business_acceptance_cases():
 
     assert payload["DatasetID"] == "TST-DATASET-BASELINE-20260619"
     assert payload["CaseCount"] == 9
+    assert payload["DdmrpRuntimeCases"][0]["MasterDataVersionID"] == (
+        DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
+    )
+    assert payload["DdmrpRuntimeCases"][0]["ExpectedSummary"] == {
+        "RedCount": 1,
+        "YellowCount": 1,
+        "GreenCount": 1,
+        "AboveGreenCount": 1,
+        "ReplenishmentSuggestionCount": 2,
+    }
     cases = {case["CaseID"]: case for case in payload["Cases"]}
     assert cases["TST-CASE-BASELINE"]["PlanningRunID"] == "TST-RUN-BASELINE-001"
     assert cases["TST-CASE-BASELINE"]["InputSummaryZh"].startswith("使用基准主数据")
@@ -132,14 +152,56 @@ def test_seeded_test_database_feeds_data_readiness_endpoint(tmp_path):
 
     assert response.status_code == 200
     data = response.json()["Data"]
-    assert data["LatestMasterDataVersion"]["VersionID"] == BASELINE_MASTER_DATA_VERSION_ID
-    assert data["Selection"]["MasterDataVersionID"] == BASELINE_MASTER_DATA_VERSION_ID
+    assert data["LatestMasterDataVersion"]["VersionID"] == DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
+    assert data["Selection"]["MasterDataVersionID"] == DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
     assert data["Selection"]["OperationalStateSnapshotID"] in {
         BASELINE_OPERATIONAL_STATE_ID,
         MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID,
         WIP_LIMIT_OPERATIONAL_STATE_ID,
     }
     assert data["CanCreatePlanningRun"] is True
+
+
+def test_seeded_test_database_feeds_ddmrp_runtime_status(tmp_path):
+    # BE-DDMRP-001 / BE-DDMRP-006 / UI-DDMRP-001
+    database_path = tmp_path / "workbench-state.db"
+    reset_test_database(database_path=database_path)
+    runtime_environment = resolve_runtime_environment(
+        environment_id="test",
+        database_path=database_path,
+    )
+    client = TestClient(
+        create_app(
+            state_store=SQLiteWorkbenchStateStore(database_path),
+            runtime_environment=runtime_environment,
+        )
+    )
+
+    response = client.get(
+        "/planner/workbench/ddmrp/status",
+        params={"EvaluatedAt": "2026-06-25T08:00:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["Source"]["VersionID"] == DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
+    assert data["Summary"] == {
+        "DecouplingPointCount": 4,
+        "LineCount": 4,
+        "RedCount": 1,
+        "YellowCount": 1,
+        "GreenCount": 1,
+        "AboveGreenCount": 1,
+        "ReplenishmentSuggestionCount": 2,
+        "MissingDataCount": 0,
+        "ReadyForRuntime": True,
+    }
+    lines = {line["ItemID"]: line for line in data["Lines"]}
+    assert lines["TST-DDMRP-RED"]["PlanningStatus"] == "Red"
+    assert lines["TST-DDMRP-YELLOW"]["PlanningStatus"] == "Yellow"
+    assert lines["TST-DDMRP-GREEN"]["PlanningStatus"] == "Green"
+    assert lines["TST-DDMRP-GREEN"]["SuggestedReplenishmentQty"] == 0
+    assert lines["TST-DDMRP-ABOVE"]["PlanningStatus"] == "AboveGreen"
 
 
 def test_test_case_catalog_endpoint_exposes_environment_metadata(tmp_path):
@@ -159,6 +221,7 @@ def test_test_case_catalog_endpoint_exposes_environment_metadata(tmp_path):
     assert response.status_code == 200
     data = response.json()["Data"]
     assert data["CaseCount"] == 9
+    assert data["DdmrpRuntimeCases"][0]["CaseGroup"] == "DDMRPRuntimeCases"
     assert data["Environment"]["EnvironmentID"] == "test"
     assert data["Cases"][0]["CoveredSpecIDs"]
 

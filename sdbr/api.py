@@ -37,6 +37,20 @@ from sdbr.dispatch_priority import (
     build_mes_dispatch_priority_queue,
     build_mes_dispatch_suggestion_package,
 )
+from sdbr.ddom_operational_metrics import build_ddom_operational_metrics
+from sdbr.ddmrp import (
+    DecouplingPoint,
+    DemandSignal,
+    OpenSupply,
+    evaluate_ddmrp_net_flow,
+)
+from sdbr.ddsop_contracts import (
+    build_planning_run_feedback_message,
+    build_variance_analysis_feedback_message,
+    process_ddsop_config_message,
+    validate_required_master_data_references,
+)
+from sdbr.ddsop_delivery import deliver_ddsop_feedback_message
 from sdbr.buffer_execution_view import (
     build_buffer_execution_workbench,
     build_buffer_order_detail,
@@ -295,6 +309,53 @@ class MaterialRequirementImportRowPayload(BaseModel):
     RequiredQty: float
 
 
+class DdmrpDecouplingPointPayload(BaseModel):
+    ItemID: str
+    LocationID: str
+    BufferProfileID: str
+    DLTMinutes: int = Field(ge=0)
+    OrderMultipleQty: float = Field(default=0.0, ge=0)
+    MinimumOrderQty: float = Field(default=0.0, ge=0)
+    Status: Literal["Draft", "Active", "Retired"] = "Active"
+
+
+class DdmrpDemandSignalPayload(BaseModel):
+    ItemID: str
+    LocationID: str
+    DemandQty: float = Field(ge=0)
+    DemandDueAt: datetime
+    DemandType: str = "CustomerOrder"
+    IsQualifiedSpike: bool = False
+
+
+class DdmrpOpenSupplyPayload(BaseModel):
+    ItemID: str
+    LocationID: str
+    SupplyQty: float = Field(ge=0)
+    ExpectedAt: datetime | None = None
+    Status: str = "Open"
+
+
+class DdmrpDecouplingPointImportPayload(BaseModel):
+    Rows: list[DdmrpDecouplingPointPayload]
+
+
+class DdmrpDemandSignalImportPayload(BaseModel):
+    Rows: list[DdmrpDemandSignalPayload]
+
+
+class DdmrpOpenSupplyImportPayload(BaseModel):
+    Rows: list[DdmrpOpenSupplyPayload]
+
+
+class DdmrpNetFlowEvaluationPayload(BaseModel):
+    EvaluatedAt: datetime
+    DecouplingPoints: list[DdmrpDecouplingPointPayload]
+    StockBuffers: list[InventoryBufferPayload]
+    DemandSignals: list[DdmrpDemandSignalPayload] = []
+    OpenSupply: list[DdmrpOpenSupplyPayload] = []
+
+
 class PlannerWorkbenchCalculatePayload(BaseModel):
     ProblemID: str
     ScheduleStartAt: datetime
@@ -413,6 +474,9 @@ class MasterDataImportPayload(BaseModel):
     OrderRows: list[OrderImportRowPayload]
     InventoryBufferRows: list[InventoryBufferImportRowPayload] = []
     MaterialRequirementRows: list[MaterialRequirementImportRowPayload] = []
+    DdmrpDecouplingPointRows: list[DdmrpDecouplingPointPayload] = []
+    DdmrpDemandSignalRows: list[DdmrpDemandSignalPayload] = []
+    DdmrpOpenSupplyRows: list[DdmrpOpenSupplyPayload] = []
     CalendarTimezone: str | None = None
 
 
@@ -506,6 +570,7 @@ class PlanningRunPayload(BaseModel):
     ProblemID: str
     MasterDataVersionID: str
     OperationalStateSnapshotID: str
+    OperatingModelConfigurationID: str | None = None
     SourceRunID: str | None = None
     ReleasePolicyVersionID: str | None = None
     ScheduleStartAt: datetime
@@ -527,6 +592,13 @@ class PlanningRunExecutionPayload(BaseModel):
     CompletedAt: datetime | None = None
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
     LeaseToken: str | None = None
+
+
+class DdsopFeedbackDeliveryPayload(BaseModel):
+    TargetEndpoint: str
+    DeliveredBy: str = "sdbr-contract-fixture"
+    DeliveredAt: datetime | None = None
+    TimeoutSeconds: int = Field(default=10, ge=1, le=60)
 
 
 class PlanningRunEnqueuePayload(BaseModel):
@@ -830,6 +902,27 @@ def _planning_run_public_record(
     return public_record
 
 
+def _operating_model_configuration_summary(
+    configuration: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "OperatingModelConfigurationID": configuration.get(
+            "OperatingModelConfigurationID"
+        ),
+        "ConfigurationVersion": configuration.get("ConfigurationVersion"),
+        "Status": configuration.get("Status"),
+        "ProcessingStatus": configuration.get("ProcessingStatus"),
+        "UsableForPlanningRun": configuration.get("UsableForPlanningRun", False),
+        "Fingerprint": configuration.get("Fingerprint"),
+        "SchedulingConfigurationID": configuration.get("SchedulingConfigurationID"),
+        "DDMRPConfigurationID": configuration.get("DDMRPConfigurationID"),
+        "EffectiveFrom": configuration.get("EffectiveFrom"),
+        "EffectiveTo": configuration.get("EffectiveTo"),
+        "PendingReferences": configuration.get("PendingReferences", []),
+        "ReceivedAt": configuration.get("ReceivedAt"),
+    }
+
+
 def _lease_token_hash(lease_token: str) -> str:
     return sha256(lease_token.encode("utf-8")).hexdigest()
 
@@ -884,6 +977,32 @@ def _append_planning_run_audit_event(
     )
 
 
+def _latest_completed_run_id(
+    planning_runs: dict[str, dict[str, object]],
+) -> str | None:
+    completed = [
+        run
+        for run in planning_runs.values()
+        if run.get("Status") == "Completed" and isinstance(run.get("Schedule"), dict)
+    ]
+    if not completed:
+        return None
+    completed.sort(
+        key=lambda run: str(
+            run.get("CompletedAt")
+            or (
+                run.get("Schedule", {}).get("GeneratedAt")
+                if isinstance(run.get("Schedule"), dict)
+                else None
+            )
+            or run.get("RequestedAt")
+            or ""
+        ),
+        reverse=True,
+    )
+    return str(completed[0].get("RunID"))
+
+
 def _enrich_test_case_openability(cases: list[dict[str, object]]) -> None:
     for case in cases:
         actual = case.get("Actual") if isinstance(case.get("Actual"), dict) else {}
@@ -929,10 +1048,16 @@ def create_app(
     resource_calendar_assignments = active_store.resource_calendar_assignments
     calendar_overrides = active_store.calendar_overrides
     scheduling_strategy_versions = active_store.scheduling_strategy_versions
+    ddsop_config_inbound_messages = active_store.ddsop_config_inbound_messages
+    operating_model_configurations = active_store.operating_model_configurations
+    ddsop_feedback_outbound_messages = active_store.ddsop_feedback_outbound_messages
     integration_messages = active_store.integration_messages
     test_case_acceptance_decisions = active_store.test_case_acceptance_decisions
     simio_validation_runs = active_store.simio_validation_runs
     simio_template_registry = active_store.simio_template_registry
+    ddmrp_decoupling_points = active_store.ddmrp_decoupling_points
+    ddmrp_demand_signals = active_store.ddmrp_demand_signals
+    ddmrp_open_supply = active_store.ddmrp_open_supply
     master_data_versions = active_store.master_data_versions
     planning_runs = active_store.planning_runs
     audit_events = active_store.audit_events
@@ -1156,6 +1281,122 @@ def create_app(
             ),
         }
 
+    @app.post("/planner/workbench/ddmrp/decoupling-points/import")
+    def planner_workbench_ddmrp_decoupling_points_import(
+        payload: DdmrpDecouplingPointImportPayload,
+    ) -> dict[str, object]:
+        rows = _ddmrp_decoupling_points_to_payload_dict(
+            _ddmrp_decoupling_points_from_payload(payload.Rows)
+        )
+        ddmrp_decoupling_points.clear()
+        ddmrp_decoupling_points.extend(rows)
+        return {
+            "Endpoint": "/planner/workbench/ddmrp/decoupling-points/import",
+            "StatusCode": 200,
+            "Data": {"DecouplingPoints": rows},
+        }
+
+    @app.post("/planner/workbench/ddmrp/demand-signals/import")
+    def planner_workbench_ddmrp_demand_signals_import(
+        payload: DdmrpDemandSignalImportPayload,
+    ) -> dict[str, object]:
+        rows = _ddmrp_demand_signals_to_payload_dict(
+            _ddmrp_demand_signals_from_payload(payload.Rows)
+        )
+        ddmrp_demand_signals.clear()
+        ddmrp_demand_signals.extend(rows)
+        return {
+            "Endpoint": "/planner/workbench/ddmrp/demand-signals/import",
+            "StatusCode": 200,
+            "Data": {"DemandSignals": rows},
+        }
+
+    @app.post("/planner/workbench/ddmrp/open-supply/import")
+    def planner_workbench_ddmrp_open_supply_import(
+        payload: DdmrpOpenSupplyImportPayload,
+    ) -> dict[str, object]:
+        rows = _ddmrp_open_supply_to_payload_dict(
+            _ddmrp_open_supply_from_payload(payload.Rows)
+        )
+        ddmrp_open_supply.clear()
+        ddmrp_open_supply.extend(rows)
+        return {
+            "Endpoint": "/planner/workbench/ddmrp/open-supply/import",
+            "StatusCode": 200,
+            "Data": {"OpenSupply": rows},
+        }
+
+    @app.post("/planner/workbench/ddmrp/net-flow/evaluate")
+    def planner_workbench_ddmrp_net_flow_evaluate(
+        payload: DdmrpNetFlowEvaluationPayload,
+    ):
+        endpoint = "/planner/workbench/ddmrp/net-flow/evaluate"
+        try:
+            data = evaluate_ddmrp_net_flow(
+                decoupling_points=_ddmrp_decoupling_points_from_payload(
+                    payload.DecouplingPoints
+                ),
+                stock_buffers=_inventory_buffers_from_payload(payload.StockBuffers),
+                demand_signals=_ddmrp_demand_signals_from_payload(
+                    payload.DemandSignals
+                ),
+                open_supply=_ddmrp_open_supply_from_payload(payload.OpenSupply),
+                evaluated_at=payload.EvaluatedAt,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {"Status": "DdmrpNetFlowInvalid", "Message": str(error)},
+                },
+            )
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": data}
+
+    @app.get("/planner/workbench/ddmrp/status")
+    def planner_workbench_ddmrp_status(
+        evaluated_at: datetime | None = Query(default=None, alias="EvaluatedAt"),
+    ):
+        endpoint = "/planner/workbench/ddmrp/status"
+        effective_evaluated_at = evaluated_at or datetime.now(timezone.utc)
+        master_data = _latest_ddmrp_master_data_version(master_data_versions)
+        if master_data is not None:
+            points_payload = master_data.get("DdmrpDecouplingPoints", [])
+            demand_payload = master_data.get("DdmrpDemandSignals", [])
+            supply_payload = master_data.get("DdmrpOpenSupply", [])
+            stock_payload = master_data.get("InventoryBuffers", [])
+            source = {
+                "SourceType": "MasterDataVersion",
+                "VersionID": master_data.get("VersionID"),
+                "CapturedAt": master_data.get("CapturedAt"),
+            }
+        else:
+            points_payload = ddmrp_decoupling_points
+            demand_payload = ddmrp_demand_signals
+            supply_payload = ddmrp_open_supply
+            stock_payload = []
+            source = {"SourceType": "ImportedRuntimeLedger", "VersionID": None}
+        try:
+            data = evaluate_ddmrp_net_flow(
+                decoupling_points=_ddmrp_decoupling_points_from_dicts(points_payload),
+                stock_buffers=_inventory_buffers_from_dicts(stock_payload),
+                demand_signals=_ddmrp_demand_signals_from_dicts(demand_payload),
+                open_supply=_ddmrp_open_supply_from_dicts(supply_payload),
+                evaluated_at=effective_evaluated_at,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {"Status": "DdmrpStatusInvalid", "Message": str(error)},
+                },
+            )
+        data["Source"] = source
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": data}
+
     @app.post("/planner/workbench/wip-limits/import")
     def planner_workbench_wip_limits_import(payload: WipLimitImportPayload):
         endpoint = "/planner/workbench/wip-limits/import"
@@ -1281,6 +1522,182 @@ def create_app(
             "Endpoint": "/planner/workbench/environment",
             "StatusCode": 200,
             "Data": active_environment.to_dict(),
+        }
+
+    @app.post("/planner/workbench/ddsop/config-inbound")
+    def planner_workbench_ddsop_config_inbound(payload: dict[str, object]):
+        endpoint = "/planner/workbench/ddsop/config-inbound"
+        duplicate_record = next(
+            (
+                record
+                for record in ddsop_config_inbound_messages
+                if record.get("IdempotencyKey") == payload.get("IdempotencyKey")
+            ),
+            None,
+        )
+        result = process_ddsop_config_message(
+            payload,
+            received_at=datetime.now(timezone.utc),
+            duplicate_record=duplicate_record,
+            release_policy_ids=set(dbr_release_policies.keys()),
+            calendar_ids=set(base_calendars.keys()),
+            scheduling_strategy_ids=set(scheduling_strategy_versions.keys()),
+            planning_priority_policy_ids={
+                "DDMRP-PRIORITY-RED-YELLOW-GREEN-001"
+            },
+            scheduling_priority_classes={"Standard"},
+        )
+        ddsop_config_inbound_messages.append(result.inbound_message_record)
+        if result.configuration_record is not None:
+            operating_model_configurations[
+                str(result.configuration_record["OperatingModelConfigurationID"])
+            ] = result.configuration_record
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Ack": result.ack},
+        }
+
+    @app.get("/planner/workbench/ddsop/configurations")
+    def planner_workbench_ddsop_configurations() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/ddsop/configurations",
+            "StatusCode": 200,
+            "Data": {
+                "Configurations": [
+                    _operating_model_configuration_summary(record)
+                    for record in operating_model_configurations.values()
+                ],
+                "InboundMessageCount": len(ddsop_config_inbound_messages),
+            },
+        }
+
+    @app.get("/planner/workbench/ddsop/feedback/planning-runs/{run_id}")
+    def planner_workbench_ddsop_planning_run_feedback(run_id: str):
+        endpoint = f"/planner/workbench/ddsop/feedback/planning-runs/{run_id}"
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        try:
+            message = build_planning_run_feedback_message(
+                planning_run,
+                generated_at=datetime.now(timezone.utc),
+                release_authorizations=release_authorizations,
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "OperatingModelConfigurationNotFrozen",
+                        "Message": str(error),
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Message": message},
+        }
+
+    @app.get("/planner/workbench/ddsop/feedback/variance-analysis/{run_id}")
+    def planner_workbench_ddsop_variance_feedback(run_id: str):
+        endpoint = f"/planner/workbench/ddsop/feedback/variance-analysis/{run_id}"
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        try:
+            message = build_variance_analysis_feedback_message(
+                planning_run,
+                generated_at=datetime.now(timezone.utc),
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "OperatingModelConfigurationNotFrozen",
+                        "Message": str(error),
+                    },
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Message": message},
+        }
+
+    @app.post("/planner/workbench/ddsop/feedback/runs/{run_id}/deliver")
+    def planner_workbench_ddsop_feedback_deliver(
+        run_id: str,
+        payload: DdsopFeedbackDeliveryPayload,
+    ):
+        endpoint = f"/planner/workbench/ddsop/feedback/runs/{run_id}/deliver"
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        delivered_at = payload.DeliveredAt or datetime.now(timezone.utc)
+        try:
+            messages = [
+                build_planning_run_feedback_message(
+                    planning_run,
+                    generated_at=delivered_at,
+                    release_authorizations=release_authorizations,
+                ),
+                build_variance_analysis_feedback_message(
+                    planning_run,
+                    generated_at=delivered_at,
+                ),
+            ]
+        except ValueError as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "OperatingModelConfigurationNotFrozen",
+                        "Message": str(error),
+                    },
+                },
+            )
+        delivery_records = [
+            deliver_ddsop_feedback_message(
+                message,
+                target_endpoint=payload.TargetEndpoint,
+                attempted_at=delivered_at,
+                timeout_seconds=payload.TimeoutSeconds,
+            )
+            | {"DeliveredBy": payload.DeliveredBy}
+            for message in messages
+        ]
+        ddsop_feedback_outbound_messages.extend(delivery_records)
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "RunID": run_id,
+                "TargetEndpoint": payload.TargetEndpoint,
+                "DeliveryRecords": delivery_records,
+            },
+        }
+
+    @app.get("/planner/workbench/ddsop/feedback/delivery-ledger")
+    def planner_workbench_ddsop_feedback_delivery_ledger() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/ddsop/feedback/delivery-ledger",
+            "StatusCode": 200,
+            "Data": {
+                "DeliveryRecords": ddsop_feedback_outbound_messages,
+                "RecordCount": len(ddsop_feedback_outbound_messages),
+            },
         }
 
     @app.get("/planner/workbench/test-data/cases")
@@ -2560,6 +2977,75 @@ def create_app(
                         },
                     },
                 )
+        operating_model_configuration_record = None
+        if payload.OperatingModelConfigurationID is not None:
+            operating_model_configuration_record = operating_model_configurations.get(
+                payload.OperatingModelConfigurationID
+            )
+            if operating_model_configuration_record is None:
+                return _planning_run_reference_error(
+                    endpoint=endpoint,
+                    entity_id=payload.OperatingModelConfigurationID,
+                    status="OperatingModelConfigurationNotFound",
+                    message=(
+                        "Operating model configuration "
+                        f"{payload.OperatingModelConfigurationID} was not found."
+                    ),
+                )
+            if operating_model_configuration_record.get("Status") not in {
+                "Approved",
+                "Active",
+            } or not operating_model_configuration_record.get(
+                "UsableForPlanningRun",
+                False,
+            ):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "OperatingModelConfigurationID": payload.OperatingModelConfigurationID,
+                            "Status": "OperatingModelConfigurationNotUsable",
+                            "ConfigurationStatus": operating_model_configuration_record.get(
+                                "Status"
+                            ),
+                            "ProcessingStatus": operating_model_configuration_record.get(
+                                "ProcessingStatus"
+                            ),
+                            "PendingReferences": operating_model_configuration_record.get(
+                                "PendingReferences",
+                                [],
+                            ),
+                            "Message": (
+                                "Only Approved or Active DDAE configurations with resolved references "
+                                "can be frozen into a Planning Run."
+                            ),
+                        },
+                    },
+                )
+            reference_errors = validate_required_master_data_references(
+                operating_model_configuration_record,
+                master_data_version,
+            )
+            if reference_errors:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "OperatingModelConfigurationID": payload.OperatingModelConfigurationID,
+                            "MasterDataVersionID": payload.MasterDataVersionID,
+                            "Status": "REFERENCE_NOT_FOUND",
+                            "Errors": reference_errors,
+                            "Message": (
+                                "DDAE Operating Model Configuration contains references "
+                                "that cannot be resolved in the selected Master Data Version."
+                            ),
+                        },
+                    },
+                )
         scheduling_strategy = _scheduling_strategy_snapshot_for_id(
             strategy_id=payload.ObjectiveStrategyID,
             scheduling_strategy_versions=scheduling_strategy_versions,
@@ -2591,6 +3077,7 @@ def create_app(
             operational_snapshot=operational_snapshot,
             release_policy=release_policy,
             scheduling_strategy=scheduling_strategy,
+            operating_model_configuration=operating_model_configuration_record,
             frozen_base_calendars=_active_base_calendars(base_calendars.values()),
             frozen_resource_calendar_assignments=_active_resource_calendar_assignments(
                 resource_calendar_assignments.values()
@@ -6424,6 +6911,140 @@ def create_app(
             },
         }
 
+    @app.get("/planner/workbench/ddom/operational-metrics")
+    def planner_workbench_ddom_operational_metrics(
+        evaluated_at: datetime,
+        run_id: str | None = None,
+        operational_state_max_age_minutes: int = Query(default=60, gt=0),
+        use_latest_operational_state: bool = True,
+        operational_state_snapshot_id: str | None = None,
+    ):
+        endpoint = "/planner/workbench/ddom/operational-metrics"
+        selected_run_id = run_id or _latest_completed_run_id(planning_runs)
+        if selected_run_id is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 404,
+                    "Data": {"Status": "CompletedPlanningRunNotFound"},
+                },
+            )
+        planning_run = planning_runs.get(selected_run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=selected_run_id)
+        if planning_run.get("Status") != "Completed" or not isinstance(
+            planning_run.get("Schedule"), dict
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": selected_run_id,
+                        "Status": "OperationalMetricsUnavailable",
+                    },
+                },
+            )
+        master_data = master_data_versions.get(
+            str(planning_run.get("MasterDataVersionID")), {}
+        )
+        buffer_workbench = build_buffer_execution_workbench(
+            planning_run=planning_run,
+            master_data_version=master_data,
+            authorizations=release_authorizations,
+            execution_events=execution_events,
+            evaluated_at=evaluated_at,
+        )
+        release_workbench: dict[str, object] = {
+            "Summary": {
+                "TotalCount": 0,
+                "ReadyCount": 0,
+                "BlockedCount": 0,
+                "AuthorizedCount": sum(
+                    1
+                    for authorization in release_authorizations
+                    if authorization.request_id == selected_run_id
+                    and authorization.status == "Authorized"
+                ),
+            },
+            "Candidates": [],
+            "OperationalStateStatus": "Unavailable",
+        }
+        dispatch_workbench: dict[str, object] = {
+            "Summary": {
+                "ResourceCount": 0,
+                "DispatchableOperationCount": 0,
+                "CandidateWarningCount": 0,
+                "QueueJumpSuggestionCount": 0,
+                "PlannerConfirmationCount": 0,
+                "ReplanSuggestionCount": 0,
+            },
+            "Resources": [],
+        }
+        snapshot = _operational_state_snapshot_for_release_evaluation(
+            planning_run=planning_run,
+            operational_state_snapshots=operational_state_snapshots,
+            evaluated_at=evaluated_at,
+            use_latest_operational_state=use_latest_operational_state,
+            requested_snapshot_id=operational_state_snapshot_id,
+        )
+        if snapshot is not None:
+            freshness = evaluate_operational_state_freshness(
+                snapshot=snapshot,
+                evaluated_at=evaluated_at,
+                max_age_minutes=operational_state_max_age_minutes,
+            )
+            release_policy = _release_policy_for_evaluation(
+                planning_run=planning_run,
+                requested_policy_id=None,
+                dbr_release_policies=dbr_release_policies,
+            )
+            release_workbench = build_release_management_workbench(
+                planning_run=planning_run,
+                evaluated_at=evaluated_at,
+                inventory_buffers=snapshot.inventory_buffers,
+                material_requirements=_material_requirements_from_payload(
+                    [
+                        MaterialRequirementPayload(**item)
+                        for item in master_data.get("MaterialRequirements", [])
+                        if isinstance(item, dict)
+                    ]
+                ),
+                wip_limits=snapshot.wip_limits,
+                material_availability=snapshot.material_availability,
+                operational_state_status=freshness.status,
+                operational_state_captured_at=snapshot.captured_at,
+                authorizations=release_authorizations,
+                operational_state_snapshot_id=snapshot.snapshot_id,
+                release_policy=release_policy,
+            )
+            dispatch_payload = _mes_dispatch_priority_payload(
+                endpoint=endpoint,
+                run_id=selected_run_id,
+                evaluated_at=evaluated_at,
+                operational_state_max_age_minutes=operational_state_max_age_minutes,
+                use_latest_operational_state=use_latest_operational_state,
+                operational_state_snapshot_id=operational_state_snapshot_id,
+            )
+            if not isinstance(dispatch_payload, JSONResponse):
+                dispatch_workbench = dispatch_payload
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_ddom_operational_metrics(
+                planning_run=planning_run,
+                master_data_version=master_data,
+                release_workbench=release_workbench,
+                buffer_workbench=buffer_workbench,
+                dispatch_workbench=dispatch_workbench,
+                authorizations=release_authorizations,
+                execution_events=execution_events,
+                evaluated_at=evaluated_at,
+            ),
+        }
+
     @app.get("/planner/workbench/release-authorizations/{authorization_id}/dispatch-package")
     def planner_workbench_release_authorization_dispatch_package(authorization_id: str):
         endpoint = (
@@ -6956,6 +7577,23 @@ def _inventory_buffer_import_rows_from_payload(
     ]
 
 
+def _inventory_buffers_from_dicts(rows: object) -> list[InventoryBufferPolicy]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        InventoryBufferPolicy(
+            item_id=str(row["ItemID"]),
+            location_id=str(row["LocationID"]),
+            on_hand_qty=float(row["OnHandQty"]),
+            red_zone_qty=float(row["RedZoneQty"]),
+            yellow_zone_qty=float(row["YellowZoneQty"]),
+            green_zone_qty=float(row["GreenZoneQty"]),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
 def _material_requirements_from_payload(
     rows: list[MaterialRequirementPayload],
 ) -> list[MaterialRequirement]:
@@ -6968,6 +7606,133 @@ def _material_requirements_from_payload(
         )
         for row in rows
     ]
+
+
+def _ddmrp_decoupling_points_from_payload(
+    rows: list[DdmrpDecouplingPointPayload],
+) -> list[DecouplingPoint]:
+    return [
+        DecouplingPoint(
+            item_id=row.ItemID,
+            location_id=row.LocationID,
+            buffer_profile_id=row.BufferProfileID,
+            dlt_minutes=row.DLTMinutes,
+            order_multiple_qty=row.OrderMultipleQty,
+            minimum_order_qty=row.MinimumOrderQty,
+            status=row.Status,
+        )
+        for row in rows
+    ]
+
+
+def _ddmrp_demand_signals_from_payload(
+    rows: list[DdmrpDemandSignalPayload],
+) -> list[DemandSignal]:
+    return [
+        DemandSignal(
+            item_id=row.ItemID,
+            location_id=row.LocationID,
+            demand_qty=row.DemandQty,
+            demand_due_at=row.DemandDueAt,
+            demand_type=row.DemandType,
+            is_qualified_spike=row.IsQualifiedSpike,
+        )
+        for row in rows
+    ]
+
+
+def _ddmrp_open_supply_from_payload(
+    rows: list[DdmrpOpenSupplyPayload],
+) -> list[OpenSupply]:
+    return [
+        OpenSupply(
+            item_id=row.ItemID,
+            location_id=row.LocationID,
+            supply_qty=row.SupplyQty,
+            expected_at=row.ExpectedAt,
+            status=row.Status,
+        )
+        for row in rows
+    ]
+
+
+def _ddmrp_decoupling_points_from_dicts(rows: object) -> list[DecouplingPoint]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        DecouplingPoint(
+            item_id=str(row["ItemID"]),
+            location_id=str(row["LocationID"]),
+            buffer_profile_id=str(row["BufferProfileID"]),
+            dlt_minutes=int(row["DLTMinutes"]),
+            order_multiple_qty=float(row.get("OrderMultipleQty", 0.0)),
+            minimum_order_qty=float(row.get("MinimumOrderQty", 0.0)),
+            status=str(row.get("Status", "Active")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+def _ddmrp_demand_signals_from_dicts(rows: object) -> list[DemandSignal]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        DemandSignal(
+            item_id=str(row["ItemID"]),
+            location_id=str(row["LocationID"]),
+            demand_qty=float(row["DemandQty"]),
+            demand_due_at=_datetime_from_value(row["DemandDueAt"]),
+            demand_type=str(row.get("DemandType", "CustomerOrder")),
+            is_qualified_spike=bool(row.get("IsQualifiedSpike", False)),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+def _ddmrp_open_supply_from_dicts(rows: object) -> list[OpenSupply]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        OpenSupply(
+            item_id=str(row["ItemID"]),
+            location_id=str(row["LocationID"]),
+            supply_qty=float(row["SupplyQty"]),
+            expected_at=(
+                _datetime_from_value(row["ExpectedAt"])
+                if row.get("ExpectedAt") is not None
+                else None
+            ),
+            status=str(row.get("Status", "Open")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+def _ddmrp_decoupling_points_to_payload_dict(
+    rows: list[DecouplingPoint],
+) -> list[dict[str, object]]:
+    return [row.to_dict() for row in rows]
+
+
+def _ddmrp_demand_signals_to_payload_dict(
+    rows: list[DemandSignal],
+) -> list[dict[str, object]]:
+    return [row.to_dict() for row in rows]
+
+
+def _ddmrp_open_supply_to_payload_dict(
+    rows: list[OpenSupply],
+) -> list[dict[str, object]]:
+    return [row.to_dict() for row in rows]
+
+
+def _datetime_from_value(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
 
 
 def _wip_limits_from_payload(rows: list[WipLimitPayload]) -> list[WipLimit]:
@@ -7414,6 +8179,15 @@ def _master_data_version_from_payload(
         "MaterialRequirements": _material_requirements_to_payload_dict(
             material_requirements
         ),
+        "DdmrpDecouplingPoints": _ddmrp_decoupling_points_to_payload_dict(
+            _ddmrp_decoupling_points_from_payload(payload.DdmrpDecouplingPointRows)
+        ),
+        "DdmrpDemandSignals": _ddmrp_demand_signals_to_payload_dict(
+            _ddmrp_demand_signals_from_payload(payload.DdmrpDemandSignalRows)
+        ),
+        "DdmrpOpenSupply": _ddmrp_open_supply_to_payload_dict(
+            _ddmrp_open_supply_from_payload(payload.DdmrpOpenSupplyRows)
+        ),
         "Validation": _master_data_validation_to_dict(validation),
     }
 
@@ -7694,6 +8468,7 @@ def _pending_planning_run(
     operational_snapshot: OperationalStateSnapshot,
     release_policy: dict[str, object] | None = None,
     scheduling_strategy: dict[str, object] | None = None,
+    operating_model_configuration: dict[str, object] | None = None,
     frozen_base_calendars: list[dict[str, object]] | None = None,
     frozen_resource_calendar_assignments: list[dict[str, object]] | None = None,
     frozen_calendar_overrides: list[dict[str, object]] | None = None,
@@ -7706,6 +8481,42 @@ def _pending_planning_run(
         "MasterDataCapturedAt": master_data_version["CapturedAt"],
         "OperationalStateSnapshotID": payload.OperationalStateSnapshotID,
         "OperationalStateCapturedAt": operational_snapshot.captured_at.isoformat(),
+        "ContractPath": (
+            "DDSOP-CONFIG-INBOUND-V1"
+            if operating_model_configuration
+            else "LegacyNonDdsopConfigInboundV1"
+        ),
+        "LegacyPlanningRunPath": operating_model_configuration is None,
+        "OperatingModelConfigurationID": (
+            operating_model_configuration.get("OperatingModelConfigurationID")
+            if operating_model_configuration
+            else payload.OperatingModelConfigurationID
+        ),
+        "OperatingModelFingerprint": (
+            operating_model_configuration.get("Fingerprint")
+            if operating_model_configuration
+            else None
+        ),
+        "SchedulingConfigurationID": (
+            operating_model_configuration.get("SchedulingConfigurationID")
+            if operating_model_configuration
+            else None
+        ),
+        "DDMRPConfigurationID": (
+            operating_model_configuration.get("DDMRPConfigurationID")
+            if operating_model_configuration
+            else None
+        ),
+        "FrozenOperatingModelConfiguration": (
+            dict(operating_model_configuration.get("Payload", {}))
+            if operating_model_configuration
+            else None
+        ),
+        "OperatingModelConfigurationVersion": (
+            operating_model_configuration.get("ConfigurationVersion")
+            if operating_model_configuration
+            else None
+        ),
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
         "FrozenReleasePolicy": dict(release_policy) if release_policy else None,
@@ -7758,6 +8569,9 @@ def _planning_run_payload_from_record(
         ProblemID=planning_run["ProblemID"],
         MasterDataVersionID=planning_run["MasterDataVersionID"],
         OperationalStateSnapshotID=planning_run["OperationalStateSnapshotID"],
+        OperatingModelConfigurationID=planning_run.get(
+            "OperatingModelConfigurationID"
+        ),
         SourceRunID=planning_run.get("SourceRunID"),
         ReleasePolicyVersionID=planning_run.get("ReleasePolicyVersionID"),
         ScheduleStartAt=planning_run["ScheduleStartAt"],
@@ -8467,6 +9281,23 @@ def _latest_master_data_resources(master_data_versions: object) -> list[Resource
         )
     except Exception:
         return []
+
+
+def _latest_ddmrp_master_data_version(
+    master_data_versions: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    versions = [
+        version
+        for version in master_data_versions.values()
+        if isinstance(version, dict)
+        and (
+            isinstance(version.get("DdmrpDecouplingPoints"), list)
+            or isinstance(version.get("InventoryBuffers"), list)
+        )
+    ]
+    if not versions:
+        return None
+    return max(versions, key=lambda item: str(item.get("CapturedAt", "")))
 
 
 def _calendar_preview_master_data_version(

@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.8 |
-| 日期 | 2026-06-20 |
+| 文档版本 | 2.57 |
+| 日期 | 2026-06-26 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
 | UI 规格 | `docs/ui-specification.md` |
@@ -55,8 +55,12 @@
 
 ## 3. 产品边界与总体流程
 
+本产品定位为 **DDOM（Demand Driven Operating Model，需求驱动运营执行模型）** 的计划、排程、释放、执行反馈与仿真验证系统。
+
+DDS&OP / Adaptive S&OP 不属于本系统的日常运行范围。本系统只接受 DDS&OP 下发的 Operating Model Configuration，并向 DDS&OP 输出其需要的偏差分析与运行表现数据。DDS&OP 负责模型治理和战术/战略决策，例如解耦点、控制点、主设置、缓冲参数、能力范围、季节性/促销/新品/停机等配置规则；DDOM 负责按照已生效配置每天运行、排程、释放、执行和反馈。
+
 ```text
-ERP / 主数据源
+ERP / 主数据源 / DDS&OP 配置
   -> 主数据版本 + 运行状态快照
   -> Planning Run
   -> OR-Tools CP-SAT（当前活动求解器）
@@ -71,11 +75,32 @@ ERP / 主数据源
 系统边界原则：
 
 - ERP 负责订单、BOM、库存、采购在途和基础主数据的权威来源。
+- DDS&OP 负责 DDOM 模型配置和治理，包括解耦点、控制点、Buffer Profile、主设置、调整因子、能力范围和重大调整建议；本系统不实现 DDS&OP 工作流、会议/审批、场景治理或模型重构决策。
+- 本系统负责 DDOM 日常运营执行：消费已生效配置，生成供应/制造建议，完成控制点有限排程、释放门控、缓冲执行、MES 派工建议、偏差与异常反馈。
+- 本系统需要补齐 DDOM 内部的 DDMRP 运行能力，但 **不做 DDMRP 参数配置**；DDMRP 参数、Buffer Profile、调整因子和解耦/控制点设置来自 DDS&OP 或外部主设置。
 - 本系统负责冻结排程输入、有限产能排程、DBR 缓冲与释放决策。
 - MES/SCADA 负责现场报工、设备状态和实际产量采集。
 - 本系统接收执行事件并形成偏差、预警和重排建议，不替代完整 MES。
 - Gurobi 与 OR-Tools 位于同一求解器抽象层；当前只允许 OR-Tools CP-SAT 执行新计划，Gurobi 保留历史结果读取路径但暂停新执行。
 - Simio 是可选验证步骤；不验证时求解结果直接进入计划输出，验证时可接受、拒绝或调整计划。
+
+DDAE / DDS&OP 配置契约原则：
+
+- 本系统持续维护为 DDOM / S-DBR 执行系统，只负责 MRP/物料可行性、有限能力排程、释放管理、缓冲执行、MES 派工建议、执行反馈和偏差采集。
+- DDAE 下发的已批准主设置必须按“接收、校验、冻结、执行、反馈”处理；本系统页面不得重新计算或治理这些主参数。
+- Planning Run 必须冻结使用的 `OperatingModelConfigurationID`，用于追溯本次排程使用的 DDS&OP / DDAE 配置版本。
+- 时间缓冲、控制点、DDMRP 参数、资源角色等若来自 DDAE，只能按接口契约消费，不能在 SDBR 中私自扩展字段或改变含义。
+- 向 DDAE 输出反馈时，必须带配置版本、运行版本、时间戳、数据来源、异常原因和可追溯 ID，并遵循 `D:\Documents\DDAE_INTERFACE_CONTRACT`。
+- ERP/MES mock 接口可继续作为 SDBR 第一版产品闭环；DDAE 连接必须单独纳入 Contract Agent 管控。
+- 若执行侧发现契约不足，只提交契约变更请求，不先在 SDBR 里做隐式字段或页面侧参数变通。
+
+DDOM 与 DDS&OP 分工：
+
+| 范围 | 本系统职责 | 不属于本系统第一版职责 |
+| --- | --- | --- |
+| DDOM 日常运行 | 实际需求驱动供应/制造建议、控制点有限排程、释放门控、缓冲颜色/渗透率、执行优先级、异常与偏差反馈 | 设计 DDOM 应该如何配置 |
+| DDMRP 运行能力 | 消费已冻结的 DDMRP/DDOM 参数，执行轻量 MRP、库存/物料可用判断、缓冲状态与同步预警 | DDMRP 参数配置、Buffer Profile 治理、调整因子审批 |
+| DDS&OP 协同 | 接收配置；输出交付表现、库存表现、缓冲表现、产能冲突、执行异常和流动表现 | DDS&OP 会议流程、战术协调、情景评估、模型重构建议审批 |
 
 ## 4. 主数据与运行状态
 
@@ -94,7 +119,20 @@ ERP / 主数据源
 | `BE-DATA-011` | 丰富资源属性 | `[PARTIAL]` | `C` `Resource` 已有约束标识、能力、日历、资源数量、效率、类型、缓冲标识、负责人和分类；`T` `tests/test_api.py` | 班组人数、固定偏移和更细换型属性仍需独立业务规则 |
 | `BE-DATA-012` | BOM、多级物料需求和替代料模型 | `[PARTIAL]` | `C` `sdbr/light_mrp.py`; `A` `/planner/workbench/light-mrp/evaluate`; `T` `tests/test_material_state.py`, `tests/test_api.py` | 第一版已确认由本系统执行轻量 MRP：按工单物料需求、库存缓冲、已分配库存、在途数量和物料检查窗口输出可用/在途覆盖/短缺/缺库存记录结论；完整 BOM 展开、多级 MRP、替代料、批次/效期分配和 ERP 库存账务仍未实现 |
 | `BE-DATA-013` | 主数据版本差异、发布和回滚 | `[VERIFIED]` | `C/A` `/master-data/version-comparison`、`/master-data/versions/{id}/publish|retire|rollback`; `T` `tests/test_api.py` | 已满足后台治理闭环；真实 ERP 主数据发布回写由 `BE-INT-*` 跟踪 |
-| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`, `sdbr/test_case_acceptance.py`; `D` `docs/cp-sat-business-case-acceptance.md`; `A` `/planner/workbench/test-data/cases`, `/planner/workbench/test-data/acceptance`, `/planner/workbench/test-data/acceptance/{case_id}/decision`, `/planner/workbench/test-data/acceptance/{case_id}/reset`, `/planner/workbench/test-data/acceptance/reset`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限、CP-SAT 有限产能/备用资源/日历覆盖/效率/换型/不可行诊断案例、测试库重建、单案例/全案例复位、自动验收包、预期/实际差异、排程结果可打开性状态和人工确认/驳回记录；当前场景可驱动 Planning Run 执行、计划输出、释放门控、发布治理与 CP-SAT 业务行为验收 |
+| `BE-DATA-014` | 版本化测试数据集、场景包与测试库重建 | `[VERIFIED]` | `C` `sdbr/test_data.py`, `sdbr/test_case_acceptance.py`; `D` `docs/cp-sat-business-case-acceptance.md`; `A` `/planner/workbench/test-data/cases`, `/planner/workbench/test-data/acceptance`, `/planner/workbench/test-data/acceptance/{case_id}/decision`, `/planner/workbench/test-data/acceptance/{case_id}/reset`, `/planner/workbench/test-data/acceptance/reset`; CLI `sdbr-reset-test-data --list-cases`; `T` `tests/test_test_data.py`, `tests/test_business_closure.py` | 已提供基准工厂、物料短缺、WIP 超限、CP-SAT 有限产能/备用资源/日历覆盖/效率/换型/不可行诊断案例、DDMRP 净流展示案例、测试库重建、单案例/全案例复位、自动验收包、预期/实际差异、排程结果可打开性状态和人工确认/驳回记录；当前场景可驱动 Planning Run 执行、计划输出、释放门控、发布治理、DDMRP 运行状态与 CP-SAT 业务行为验收 |
+
+## 4.1 DDMRP 运行能力
+
+本能力组属于 DDOM 日常运行，不属于 DDS&OP 模型治理。本系统消费外部已经配置并冻结的 DDMRP/DDOM 参数，计算净流位置、库存缓冲状态和补货建议；不提供 Buffer Profile、调整因子、解耦点设计或 DDMRP 参数审批界面。DDMRP 运行原则见 `docs/ddom-ddmrp-runtime-principles.md`。
+
+| ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
+| --- | --- | --- | --- | --- |
+| `BE-DDMRP-001` | 消费解耦点运行快照 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `sdbr/ddmrp.py`; `A` `/planner/workbench/ddmrp/decoupling-points/import`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 解耦点含 Item/Location、Buffer Profile、DLT、MOQ、倍量和状态；本系统只消费外部配置，不维护参数治理 |
+| `BE-DDMRP-002` | 消费库存缓冲红黄绿区快照 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `InventoryBufferPolicy` 复用库存缓冲输入；`A` `/planner/workbench/inventory-buffers/import`, `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 缓冲区数量来自外部已配置结果；不计算 Buffer Profile 参数 |
+| `BE-DDMRP-003` | 计算 Net Flow Position | `[VERIFIED]` | `C` `evaluate_ddmrp_net_flow`; `A` `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 第一版公式为在手 + DLT 窗口内有效在途 - 逾期/今日/合格尖峰需求 |
+| `BE-DDMRP-004` | 区分计划缓冲状态与在手执行状态 | `[VERIFIED]` | `C` `PlanningStatus`、`ExecutionStatus`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 计划状态基于净流位置，执行状态基于在手库存，二者不得混用 |
+| `BE-DDMRP-005` | 生成补货建议 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `SuggestedReplenishmentQty`; `A` `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 当净流处于红区或黄区时触发补货建议，建议量补到绿区顶部，并按 MOQ/订单倍量修正；净流高于黄区时不补货 |
+| `BE-DDMRP-006` | DDMRP 运行 read model | `[VERIFIED]` | `A` `/planner/workbench/ddmrp/status`; `UI` `UI-DDMRP-001`、`UI-DDMRP-002`; `T` `tests/test_api.py` | 数据就绪页只读显示健康摘要；物料计划工作台只读显示解耦点、缓冲颜色、缓冲百分比、净流位置、在手/在途/合格需求、补货建议和详情；不提供参数编辑 |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -109,6 +147,7 @@ ERP / 主数据源
 | `BE-RUN-007` | 乐观并发和跨实例冲突检测 | `[VERIFIED]` | `C` `sdbr/state_store.py`; `A` `If-Match`; `T/R` `tests/test_backend_readiness.py` | 多节点生产部署应迁移至支持行级事务的数据库 |
 | `BE-RUN-008` | 运行幂等键与重复请求去重 | `[PARTIAL]` | `C` 状态机和版本冲突可阻止部分重复写入 | 增加显式 idempotency key、请求摘要和重复响应语义 |
 | `BE-RUN-009` | 计划确认、发布和撤销发布生命周期 | `[VERIFIED]` | `C` `sdbr/plan_publication.py`; `A` `/planning-runs/{run_id}/publication/*`; `T` `tests/test_business_closure.py` | 已实现 Draft/Reviewed/Approved/Published/Superseded/PublicationRevoked 状态、权限、审计和非法跳转保护 |
+| `BE-RUN-010` | Planning Run 冻结 Operating Model Configuration | `[PARTIAL]` | `C/A` `sdbr/ddsop_contracts.py`, `/planner/workbench/ddsop/config-inbound`, `/planner/workbench/planning-runs`; `T` `tests/test_ddsop_contracts.py`; `R` `D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\SDBR-open-gates-report.md` | 已支持按 `D:\Documents\DDAE_INTERFACE_CONTRACT\contracts\ddsop-config-inbound-v1` 接收、校验、ACK 并保存 DDAE Operating Model Configuration；引用可用配置创建 Planning Run 时深度解析所选 `MasterDataVersionID` 下 ProductID、PrimaryRoutingID、ResourceID、ItemID、LocationID 等 required references，无法解析时拒绝创建并返回 `REFERENCE_NOT_FOUND`；成功时冻结 `OperatingModelConfigurationID`、`OperatingModelFingerprint`、`SchedulingConfigurationID`、`DDMRPConfigurationID` 和完整配置快照；旧 Planning Run 兼容路径仍允许不带配置，但标记为 `LegacyNonDdsopConfigInboundV1`，不作为 DDSOP-CONFIG-INBOUND-V1 合规路径；重排强制继承/替换 Operating Model Configuration 的策略仍需后续补齐 |
 
 ## 6. 求解器接口与排程模型
 
@@ -215,6 +254,7 @@ ERP / 主数据源
 | `BE-INT-005` | MES 出站派工与释放接口 | `[PARTIAL]` | `C/A` dispatch package、`sdbr/dispatch_priority.py`、`sdbr/integration_contracts.py` MES 出站契约；`A` `/planner/workbench/dispatch-priority/runs/{run_id}/workbench`, `/planner/workbench/mes/dispatch-suggestions/runs/{run_id}`, `/planner/workbench/mes/dispatch-suggestions/runs/{run_id}/issue`, `/planner/workbench/integrations/mock-api/status`; `T` `tests/test_integration_contracts.py`, `tests/test_release_authorization.py`, `tests/test_dispatch_priority.py`, `tests/test_api.py` | 第一版只生成 MES 派工建议，不真实下发 MES；已定义版本化派工/释放消息、资源/工作中心 + 工序级派工队列、Mock issue 台账、确认回执、撤销和重发边界；真实 MES 投递、确认回执和重发队列仍未实现 |
 | `BE-INT-006` | MES/SCADA 业务所有权 | `[EXTERNAL]` | MES/SCADA 负责现场采集和控制 | 本系统消费状态，不直接控制设备 |
 | `BE-INT-007` | 通用集成监控 | `[PARTIAL]` | `C/A` 集成消息台账、死信查询和重放请求接口；`T` `tests/test_integration_contracts.py` | 已提供契约层错误队列和人工重放占位；连接状态、延迟、最后成功时间、自动重试和外部系统健康检查仍未实现 |
+| `BE-INT-008` | DDAE / DDS&OP 配置输入与 DDOM 偏差反馈接口 | `[PARTIAL]` | `C/A` `sdbr/ddsop_contracts.py`, `sdbr/ddsop_delivery.py`, `/planner/workbench/ddsop/config-inbound`, `/planner/workbench/ddsop/configurations`, `/planner/workbench/ddsop/feedback/planning-runs/{run_id}`, `/planner/workbench/ddsop/feedback/variance-analysis/{run_id}`, `/planner/workbench/ddsop/feedback/runs/{run_id}/deliver`, `/planner/workbench/ddsop/feedback/delivery-ledger`; `T` `tests/test_ddsop_contracts.py`; `R` `D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\SDBR-implementation-report.md`, `D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\SDBR-open-gates-report.md`, `D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\SDBR-golden-loop-report.md` | 已以契约库 `ddsop-config-inbound-v1` 和 `ddsop-feedback-outbound-v1` 为唯一事实源，实现配置入站 ACK、Approved/Active 可用性校验、配置台账摘要、PlanningRunFeedback 与 VarianceAnalysisFeedback payload 生成并通过契约 schema；按 Contract Agent 裁定实现 fixture 级 `SDBR push to DDAE inbound endpoint with ACK`：SDBR 可将两条 feedback POST 到 DDAE inbound endpoint、校验返回 ACK schema，并记录 SDBR delivery ledger / ACK record；不实现 DDS&OP 配置治理、Buffer Profile 治理或战略情景模拟；当前结论仅为 `Accepted for Contract Fixtures, Not Business Production Data`，生产级 retry scheduler、dead-letter operator workflow、长期持久化与运维告警仍待后续 |
 
 ### 10.1 可替换集成架构原则
 
@@ -275,6 +315,78 @@ source/mes/{Plant}/{Area}/{Line}/{WorkCenter}/Execution/ExceptionReported
 - Direct 与 UNS 只允许出现在 Adapter 层。
 - 消息台账、幂等、确认回执、死信、人工重放和审计必须在 Integration Port 层统一处理。
 - Adapter 切换不得改变 Planning Run、释放门控、派工优先级和发布治理的核心业务代码。
+
+### 10.2 MES 与 SDBR 的事件驱动执行协同原则
+
+本系统不替代 MES 的秒级现场控制。第一版产品边界为：MES 负责现场实时执行、设备控制、操作员交互和无队列时的直接开工；SDBR 负责释放门控、缓冲风险、跨资源优先级、排队时的派工建议、异常反馈和重排建议。
+
+业务对象边界：
+
+| 概念 | 业务对象 | 回答的问题 | 主要系统 |
+| --- | --- | --- | --- |
+| 工单释放 | 工单整体，尤其首工序前 | 这个工单现在是否允许进入车间流动？ | SDBR |
+| 缓冲执行 | 已释放工单在约束缓冲中的到达、接收、红黄绿状态 | 工单是否按缓冲节奏接近约束资源？ | SDBR + MES 事件 |
+| 派工建议 | 某资源/工作中心前等待加工的工序队列 | 这台资源下一道先加工哪个工单工序？ | MES 请求，SDBR 建议 |
+| 现场开工 | 具体资源上的工序开工 | 没有排队或已有本地规则时是否直接加工？ | MES |
+
+时序原则：
+
+1. CP-SAT 生成全局计划，释放门控决定哪些工单可以进入现场流动。
+2. MES 接收已释放工单后，按现场状态推动工序流转。
+3. 如果某资源前没有排队，MES 可以直接开工，只需回传 `StartedOperation`、`CompletedOperation` 等执行事件。
+4. 如果某资源前出现排队，MES 可以按本地缓冲颜色 + 渗透率规则排序，也可以请求 SDBR 返回派工建议。
+5. 当出现红区/高渗透、约束资源冲突、插队风险、异常延误、缺料、停机或人工要求时，MES 应请求 SDBR 或回传事件，由 SDBR 生成排序、预警或重排建议。
+6. SDBR 的派工建议依赖最近执行事件和运行状态快照，不要求持续掌握工厂每一秒状态；触发重排或释放复核时必须使用足够新鲜的现场快照。
+7. 派工建议不得绕过释放门控。未释放、最新门控阻塞或物料/WIP 不通过的工序只能进入候选/预警，不得进入正式派工队列。
+
+说明时序：
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as SDBR 排程/释放
+    participant MES as MES 现场执行
+    participant Resource as 资源/设备
+    participant SDBR as SDBR 派工建议
+
+    Scheduler->>MES: 发布计划与已授权释放工单
+    MES->>Resource: 工单到达资源前
+    alt 资源前无排队
+        MES->>Resource: 直接开工
+        MES-->>SDBR: 回传 StartedOperation / CompletedOperation
+    else 资源前出现排队
+        MES-->>SDBR: 可选请求派工建议(资源、等待工序、现场状态)
+        SDBR-->>MES: 返回按缓冲颜色、渗透率、计划顺序排序的派工建议
+        MES->>Resource: 主管或规则确认后开工
+        MES-->>SDBR: 回传执行事件、拒绝、异常或完成
+    end
+    opt 红区、高渗透、约束冲突或异常延误
+        SDBR-->>Scheduler: 生成预警或重排建议
+    end
+```
+
+第一版实现约束：
+
+- `BE-INT-004` 负责接收 MES 入站执行事件，允许事件驱动刷新 SDBR 对现场状态的理解。
+- `BE-INT-005` / `BE-REL-011` 负责生成派工建议包，不真实控制 MES。
+- 未来 Direct MES Adapter 或 UNS Topic 必须保持同一语义：MES 可以低频事件回传、资源排队时请求排序、关键异常时触发 SDBR 复核。
+- 若客户要求 SDBR 秒级掌握全厂状态，需要另行定义高频事件吞吐、状态时效、去重、延迟容忍、队列缓存和降级策略；这不属于当前第一版范围。
+
+### 10.3 DDOM 运营指标与偏差反馈
+
+本指标组适用于 DDOM 日常运营执行，用于回答“是否按模型运行、波动是否被缓冲吸收、正确工作是否快速流动”。它不适用于 DDS&OP 模型配置、财务成本归因、MES 秒级设备控制或长期产能投资决策。
+
+第一版指标口径按用户提供的 Operational Flow-Based Metrics 图分为三类，每类四项：
+
+- 可靠性：战略缓冲完整率、供给信号及时处理率、制造订单按时释放率、控制点计划遵守率。
+- 稳定性：红区穿透率、同步告警数及账龄、缓冲晚到率、产能缓冲突破时间。
+- 速度/流速：正确优先级执行率、工单进度达成率、下一关键节点晚到率、WIP 超龄异常数。
+
+| ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
+| --- | --- | --- | --- | --- |
+| `BE-DDOM-001` | DDOM 运营可靠性指标 | `[PARTIAL]` | `C` `sdbr/ddom_operational_metrics.py`; `A` `/planner/workbench/ddom/operational-metrics` | 第一版聚合缓冲状态、释放候选/授权和执行偏差，输出战略缓冲完整率、供给信号处理率、按时释放率和控制点计划遵守率；完整口径需要 MES 持续执行事件和真实 DDMRP 供给信号处理台账 |
+| `BE-DDOM-002` | DDOM 运营稳定性指标 | `[PARTIAL]` | `C` `sdbr/ddom_operational_metrics.py`, `sdbr/shop_floor_execution.py`, `sdbr/buffer_execution_view.py`; `A` `/planner/workbench/ddom/operational-metrics` | 第一版聚合红/黄/绿缓冲、执行复核事件、晚到事件和资源超载分钟；告警账龄、同步预警生命周期和更细产能缓冲突破原因仍待执行事件历史完善 |
+| `BE-DDOM-003` | DDOM 速度/流速指标 | `[PARTIAL]` | `C` `sdbr/ddom_operational_metrics.py`, `sdbr/dispatch_priority.py`; `A` `/planner/workbench/ddom/operational-metrics` | 第一版聚合派工建议、执行完成反馈、迟到反馈和 WIP 阻塞原因；真实“正确优先级执行率”需要 MES 回传实际派工/开工顺序 |
+| `BE-DDOM-004` | DDS&OP 可消费的偏差反馈包 | `[PARTIAL]` | `C` `VarianceFeedback` read model; `A` `/planner/workbench/ddom/operational-metrics` | 第一版输出可靠性、稳定性、速度状态、建议动作和数据覆盖缺口；后续再定义 DDS&OP 出站契约、历史趋势和管理层复盘数据集 |
 
 ## 11. Simio 验证
 
@@ -550,6 +662,15 @@ Simio 集成工作约束：
 - 已知限制：真实 MES ACK、自动重发、队列撤销、调度员审批流和工厂级自定义优先级矩阵仍待后续开发。
 - 用户确认：待确认
 
+### BE-REL-011 / BE-INT-005 派工建议 UI 边界调整记录
+
+- 状态变更：`BE-REL-011`、`BE-INT-005` 保持 `[PARTIAL]`，后台 read model/API 契约不变。
+- 日期：2026-06-25
+- 实现范围：派工建议继续由 `GET /planner/workbench/dispatch-priority/runs/{run_id}/workbench` 与 `GET/POST /planner/workbench/mes/dispatch-suggestions/runs/{run_id}` 提供；UI 消费边界调整为独立 `UI-DISPATCH-001` 派工建议工作台，缓冲执行页只消费约束缓冲矩阵和工单缓冲状态。
+- 业务验收：缓冲执行不再承载 MES 派工控件；未来按渗透率、现场到达、释放授权和约束资源风险排序的派工队列在独立页面演进，避免与缓冲监控职责混淆。
+- 已知限制：派工建议仍为 Mock API 和内部台账，不真实下发 MES；真实 Direct Adapter / UNS Topic、回执对账和撤销/重发队列仍待后续开发。
+- 用户确认：待确认
+
 ### BE-DATA-014 案例验收体系验收记录
 
 - 状态变更：保持 `[VERIFIED]`，补充案例验收包、预期/实际差异、人工确认/驳回和持久化证据
@@ -674,6 +795,26 @@ Simio 集成工作约束：
 - 追溯：留待后续开发。
 - ERP 边界：库存账、采购订单和批次状态以 ERP 为权威；本系统负责计划分配和可行性判断，不替代 ERP 库存账务。
 
+### DDOM / DDS&OP 产品边界记录
+
+- 日期：2026-06-25
+- 范围：第 3 节产品边界、`BE-INT-008`
+- 状态变更：新增 `BE-INT-008 [NOT-STARTED]`，用于后续跟踪 DDS&OP 配置输入与 DDOM 偏差反馈契约。
+- 产品原则：当前系统方向明确为 DDOM 运营执行模型。DDS&OP 负责配置、调整和重构 DDOM；DDOM 负责按已生效配置进行日常运行、排程、释放、执行反馈和仿真验证。
+- DDMRP 边界：DDMRP 是 DDOM 内部需要补齐的运行能力，包括轻量 MRP、库存/物料可用判断、缓冲状态、同步预警和相对优先级；但本系统不做 DDMRP 参数配置、Buffer Profile 治理或调整因子审批。
+- 后续完成条件：定义 DDS&OP 下发配置的 Canonical Message、版本冻结方式、配置生效范围、回传指标清单和重放/审计机制；随后再实现 Mock API 或可替换 Adapter。
+
+### BE-DDMRP-001 至 BE-DDMRP-006 DDMRP 净流与库存缓冲验收记录
+
+- 日期：2026-06-25
+- 状态变更：新增 `BE-DDMRP-001` 至 `BE-DDMRP-006` 并推进到 `[VERIFIED]`。
+- 实现证据：新增 `sdbr/ddmrp.py`，实现解耦点、需求信号、开放供应和库存缓冲快照的只读运行计算；新增 `/planner/workbench/ddmrp/decoupling-points/import`、`/planner/workbench/ddmrp/demand-signals/import`、`/planner/workbench/ddmrp/open-supply/import`、`/planner/workbench/ddmrp/net-flow/evaluate` 和 `/planner/workbench/ddmrp/status`；`Master Data Version` 增加 `DdmrpDecouplingPoints`、`DdmrpDemandSignals`、`DdmrpOpenSupply` 冻结输入。
+- 业务验收：第一阶段公式为 `NetFlowPosition = OnHandQty + QualifiedOpenSupplyQty - QualifiedDemandQty`；合格需求包含逾期、今日到期和 DLT 窗口内合格尖峰需求；合格供应只计入 DLT 窗口内未关闭/未取消供应；计划缓冲状态基于净流位置，在手执行状态基于在手量，二者分离；净流处于红区或黄区时生成补货建议，并按 MOQ 与订单倍量修正补到绿区顶部；净流高于黄区时不补货。
+- UI 验收：数据就绪中心新增 `DDMRP 运行状态`只读区，显示解耦点数量、红黄绿/高于绿区数量、补货建议数量、缺失数据数量和可展开解耦点明细；不提供 DDMRP 参数配置、Buffer Profile 治理或调整因子审批入口。
+- 测试数据：新增 `TST-DDMRP-MDV-NET-FLOW-20260625`，包含 4 个解耦点，预期红/黄/绿/高于绿区各 1 个，补货建议 2 个，用于数据就绪页直观看到 DDMRP 净流效果；该案例不进入 Planning Run 执行队列。
+- 测试证据：`python -m compileall -q sdbr` 通过；`pytest tests/test_ddmrp.py tests/test_material_state.py tests/test_api.py -q -k "ddmrp or light_mrp or data_readiness_workspace" --basetemp .tmp/pytest-ddmrp-focused-2 -p no:cacheprovider`，10 passed，1 warning；`pytest tests/test_ddmrp.py tests/test_test_data.py tests/test_api.py -q -k "ddmrp or test_case_catalog or seeded_test_database or data_readiness_workspace" --basetemp .tmp/pytest-ddmrp-demo-case -p no:cacheprovider`，12 passed，1 warning；`pytest -q --basetemp .tmp/pytest-full-ddmrp -p no:cacheprovider`，359 passed，1 warning。
+- 已知限制：本阶段不实现多级 BOM 展开、替代料、批次/效期、Buffer Profile 参数配置、DDS&OP 配置接口，也不把 DDMRP 结果直接变成 CP-SAT 硬约束。
+
 ### BE-SIM-001 / BE-SIM-002 / BE-SIM-003 / BE-SIM-004 XML 模板与结果回传验收记录
 
 - 状态变更：保持 `[PARTIAL]`，补充 XML 模板源、Local Headless 结果模型、Simio 统计解析和结果回传证据。
@@ -701,6 +842,34 @@ Simio 集成工作约束：
 - 业务验收：SDBR 现在不再只依赖视觉上空的 `ManufacturingOrdersOutput.xml`，而是明确消费 Simio Process/Assignments 写入到 `TableStates.sqlite:PlanValues` 的模型侧业务事实；第一版可回传工序实际开始/结束、工单完成证据、队列等待占位、WIP 快照和运行汇总承载点。
 - 已知限制：当前 `QueueWaitMinutes` 是保守输出占位，专用输入队列长度和等待曲线仍需 queue enter/exit 事件或 Simio 报表/日志映射；WIP 是工序开始/结束快照，尚非时间加权 WIP 曲线；Simio Desktop 无设计错误校验仍需作为后续模板质量门。
 - 用户确认：待确认
+
+### BE-RUN-010 / BE-INT-008 DDAE 契约入站与反馈出站实施记录
+
+- 日期：2026-06-26
+- 状态变更：`BE-RUN-010 [NOT-STARTED] -> [PARTIAL]`；`BE-INT-008 [NOT-STARTED] -> [PARTIAL]`
+- 契约事实源：仅使用 `D:\Documents\DDAE_INTERFACE_CONTRACT\contracts\ddsop-config-inbound-v1` 和 `D:\Documents\DDAE_INTERFACE_CONTRACT\contracts\ddsop-feedback-outbound-v1` 的 schema、示例和验收口径。
+- 实现证据：`sdbr/ddsop_contracts.py` 新增 Operating Model Configuration 指纹计算、入站 schema 校验、ACK 生成、业务不变量校验、待引用检查、PlanningRunFeedback 和 VarianceAnalysisFeedback 生成；`sdbr/api.py` 新增 `/planner/workbench/ddsop/config-inbound`、`/planner/workbench/ddsop/configurations`、`/planner/workbench/ddsop/feedback/planning-runs/{run_id}`、`/planner/workbench/ddsop/feedback/variance-analysis/{run_id}`，并在 Planning Run 创建时冻结 `OperatingModelConfigurationID`、`OperatingModelFingerprint`、`SchedulingConfigurationID`、`DDMRPConfigurationID`。
+- 测试证据：`pytest tests/test_ddsop_contracts.py -q --basetemp .tmp/pytest-ddsop-contracts -p no:cacheprovider` 通过；`pytest tests/test_ddsop_contracts.py tests/test_api.py -q -k "ddsop or planning_run_lifecycle_executes_frozen_inputs_with_cp_sat_and_persists" --basetemp .tmp/pytest-ddsop-targeted -p no:cacheprovider` 通过；`python -m compileall -q sdbr` 通过。
+- 业务验收：Approved/Active 配置在引用解析完成后可进入 Planning Run；Draft 或未批准配置被契约 ACK 拒绝；Planning Run 可追溯到本次冻结的 DDAE 配置、排程配置和 DDMRP 配置；反馈包可由契约 schema 校验。
+- 已知限制：旧 Planning Run 兼容路径仍允许不带 Operating Model Configuration；配置中的 DDS&OP 主设置不被 SDBR 隐式重算或改写为私有参数；真实 DDAE 出站投递、反馈 ACK 接收、Contract Agent 变更请求工作流、重排时强制继承/替换配置的完整策略仍待后续。
+
+### BE-RUN-010 / BE-INT-008 Contract Agent Open Gates 收口记录
+
+- 日期：2026-06-26
+- 状态变更：保持 `[PARTIAL]`，关闭 Contract Agent 裁定的 SDBR open gates 中“主数据 required references 深度解析”和“legacy path 标识”两项；feedback outbound delivery 给出推荐方案但未实现生产投递。
+- 裁定来源：`D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\IMPLEMENTATION_ACCEPTANCE_20260626.md`。
+- 实现证据：`sdbr/ddsop_contracts.py` 新增 `validate_required_master_data_references`，在 Planning Run 创建时对所选 `MasterDataVersionID` 下的 `ProductID`、`PrimaryRoutingID`、`ResourceID`、`ItemID`、`LocationID` 进行解析；`sdbr/api.py` 对带 `OperatingModelConfigurationID` 的 DDAE 契约路径在引用缺失时拒绝创建并返回 `REFERENCE_NOT_FOUND`，不创建占位主数据、不默认映射、不降级 best-effort；旧 Planning Run 路径保留并标记 `ContractPath=LegacyNonDdsopConfigInboundV1`。
+- 测试证据：`pytest tests/test_ddsop_contracts.py -q --basetemp .tmp/pytest-ddsop-open-gates -p no:cacheprovider` 通过；`pytest tests/test_ddsop_contracts.py tests/test_api.py -q -k "ddsop or planning_run_lifecycle_executes_frozen_inputs_with_cp_sat_and_persists" --basetemp .tmp/pytest-ddsop-open-gates-targeted -p no:cacheprovider` 通过；`python -m compileall -q sdbr` 通过；`pytest -q --basetemp .tmp/pytest-full-ddsop-open-gates -p no:cacheprovider` 通过，372 passed，1 warning。
+- 联调结论：SDBR 端已可参与黄金闭环联调的配置入站、ACK、Planning Run 冻结、反馈 payload 生成环节；真实 feedback outbound delivery 仍需 Contract Agent 将推荐方案写入契约后再实现。
+
+### BE-INT-008 SDBR-EXECUTION-OBJECT-EVIDENCE-V1 受控实现记录
+
+- 日期：2026-06-28
+- 状态变更：保持 `[PARTIAL]`，补充 Contract Agent 授权的 Reviewed Draft 范围内 execution object evidence 契约处理；不推进为生产执行权威或 Business Golden Loop 完成。
+- 契约事实源：仅使用 `D:\Documents\DDAE_INTERFACE_CONTRACT\contracts\sdbr-execution-object-evidence-v1` 的 schema、示例、状态机和 contract tests，以及 `SDBR_EXECUTION_OBJECT_EVIDENCE_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260628.md`。
+- 实现证据：`sdbr/execution_object_evidence_contracts.py` 新增 evidence schema/ACK schema loader、ACK 生成、canonical payload fingerprint、幂等 replay / conflict 处理、routing authority 校验、冻结 Planning Run / DDS&OP config reference 校验、material requirement 与 issue/consumption 边界校验、late-capture reconciliation 校验、governance auto-update 拒绝和 ledger record；`sdbr/state_store.py` 新增 `execution_object_evidence_inbound_messages` 持久化槽位。
+- 测试证据：`python -m compileall -q sdbr` 通过；`pytest tests/test_execution_object_evidence_contracts.py -q --basetemp .tmp/pytest-execution-object-evidence -p no:cacheprovider` 通过，16 passed；`pytest tests/test_supplier_identity_source_contracts.py tests/test_production_inventory_quality_contracts.py tests/test_execution_object_evidence_contracts.py -q --basetemp .tmp/pytest-contract-related -p no:cacheprovider` 通过，43 passed。
+- 已知限制：仅实现 reviewed fixture/control behavior；不消费为 source-authoritative production execution，不证明生产发料、生产消耗、库存权威、质量权威、`ProductionValidated` 或 Business Golden Loop readiness；生产级 issue/consumption 仍需未来 production execution data 或已验收 MES/ERP integration。
 
 ### BE-SOLVER-012 冻结期与可协调区稳定性原则
 
@@ -734,12 +903,25 @@ Simio 集成工作约束：
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.61 | 2026-06-28 | 按 Contract Agent `SDBR_EXECUTION_OBJECT_EVIDENCE_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260628.md` 在 Reviewed Draft 范围内新增 `SDBR-EXECUTION-OBJECT-EVIDENCE-V1` 处理模块与 StateStore ledger：支持 schema/ACK 校验、Accepted/Duplicate/Rejected/DeadLettered、幂等冲突、SDBR executable routing 边界、冻结配置引用、物料需求与发料/消耗边界、late capture 和治理越界拒绝；明确不声明生产执行权威、ProductionValidated 或 Business Golden Loop readiness |
+| 2.60 | 2026-06-27 | 恢复 Contract Golden Loop with Fixture Mapping：按 `DDSOP-FEEDBACK-OUTBOUND-V1` ACK schema 新增 SDBR fixture 级 feedback push-with-ACK 能力和 delivery ledger read model；新增 `sdbr/ddsop_delivery.py`、`/planner/workbench/ddsop/feedback/runs/{run_id}/deliver`、`/planner/workbench/ddsop/feedback/delivery-ledger`，测试覆盖本地 DDAE-like ACK endpoint；报告结论固定为 `Accepted for Contract Fixtures, Not Business Production Data`，不声明生产数据可用 |
+| 2.59 | 2026-06-26 | 按 Contract Agent `IMPLEMENTATION_ACCEPTANCE_20260626.md` 收口 SDBR open gates：Planning Run 在 DDAE 契约路径下深度解析 `MasterDataVersionID` 中的 ProductID、PrimaryRoutingID、ResourceID、ItemID、LocationID，缺失时拒绝创建并返回 `REFERENCE_NOT_FOUND`；legacy Planning Run 路径保留但标记为 `LegacyNonDdsopConfigInboundV1`；新增 `SDBR-open-gates-report.md` 记录测试结果、未实现项、黄金闭环联调结论和推荐 feedback outbound delivery 方案 |
+| 2.58 | 2026-06-26 | 按 `D:\Documents\DDAE_INTERFACE_CONTRACT` 最新 Draft 契约实现 DDAE 配置入站与反馈出站第一段闭环：`DDSOP-CONFIG-INBOUND-V1` 支持接收、schema 校验、指纹校验、Approved/Active 可用性判断、ACK 和配置台账；Planning Run 引用可用配置时冻结 `OperatingModelConfigurationID`、`OperatingModelFingerprint`、`SchedulingConfigurationID`、`DDMRPConfigurationID`；`DDSOP-FEEDBACK-OUTBOUND-V1` 支持 PlanningRunFeedback 与 VarianceAnalysisFeedback payload 生成并通过契约 schema；`BE-RUN-010` 和 `BE-INT-008` 推进到 `[PARTIAL]` |
+| 2.57 | 2026-06-26 | 固化 DDAE / DDS&OP 契约边界：SDBR 只作为 DDOM / S-DBR 执行系统，对 DDAE 已批准主设置执行接收、校验、冻结、执行、反馈；新增 `BE-RUN-010 [NOT-STARTED]` 跟踪 Planning Run 冻结 `OperatingModelConfigurationID`；更新 `BE-INT-008`，要求反馈包按 `D:\Documents\DDAE_INTERFACE_CONTRACT` 带配置版本、运行版本、时间戳、数据来源、异常原因和可追溯 ID；契约不足时提交契约变更请求，不在 SDBR 隐式扩字段 |
+| 2.56 | 2026-06-26 | 新增 `BE-DDOM-001` 至 `BE-DDOM-004`：按可靠性、稳定性、速度/流速三类建立 DDOM 运营指标和偏差反馈 read model，接口为 `/planner/workbench/ddom/operational-metrics`；第一版聚合释放、缓冲、派工、负载和执行事件，DDS&OP 出站契约与完整历史趋势仍后续开发 |
+| 2.55 | 2026-06-26 | 新增 MES 与 SDBR 事件驱动执行协同原则：MES 负责无队列实时开工和现场控制，SDBR 负责释放门控、缓冲风险、排队时派工建议、异常反馈和重排建议；明确派工建议对象是资源前工序队列，不是工单释放 |
+| 2.54 | 2026-06-25 | 将 MES 派工建议的 UI 消费边界从缓冲执行页移到独立派工建议工作台；后台 `BE-REL-011` / `BE-INT-005` API 契约保持不变，缓冲执行页只保留约束缓冲状态 |
+| 2.53 | 2026-06-25 | DDMRP 物料计划工作台复用 `BE-DDMRP-006` read model：`/planner/workbench/ddmrp/status` 被独立 `UI-DDMRP-002` 消费，用于只读展示物料-地点净流、缓冲百分比、补货建议和详情；不新增 DDMRP 参数配置或外部订单生成能力 |
+| 2.52 | 2026-06-25 | 依据 `Demand Driven Material Requirements Planning (DDMRP), Version 3.pdf` 和 `The Demand Driven Adaptive Enterprise.pdf` 重新提取 DDOM 中 DDMRP 运行原则，新增 `docs/ddom-ddmrp-runtime-principles.md`；明确 DDOM 消费 DDS&OP/外部配置，DDMRP 运行只负责净流、库存缓冲状态、补货建议、相对优先级和反馈，不做参数治理 |
+| 2.51 | 2026-06-25 | 修正 DDMRP 补货触发规则：只有净流位置处于红区或黄区时生成补货建议，绿区和高于绿区不补货；展示案例补货建议数从 3 调整为 2 |
+| 2.50 | 2026-06-25 | 新增 `BE-DDMRP-001` 至 `BE-DDMRP-006`：DDMRP 运行能力第一阶段只消费外部已配置解耦点、库存缓冲、需求信号和开放供应，计算净流位置、库存缓冲状态和补货建议；不做 DDMRP 参数配置、Buffer Profile 治理或 DDS&OP 配置接口 |
 | 2.47 | 2026-06-24 | 修正 Simio 验证包时间语义：生成 `Routings.ProcessTime` / `SetupTime` 时保留 `Units="Minutes"`，验证包归零模板默认 `.1 Hours` 辅助任务；本机 Local Headless 重跑与 CP-SAT 60/30 分钟工序对齐，并回传吞吐、队列等待占位、WIP 快照和资源利用率 |
 | 2.48 | 2026-06-24 | 增加 Simio 模板注册表与固定模板目录：默认模板迁移到 `model/templates/simio/SDBR_Example_Base.xml`，验证请求支持 `TemplateID`，验证包冻结模板版本、路径、源类型和时间单位策略 |
 | 2.49 | 2026-06-24 | 在缓冲执行页和 Mock API 补 MES 派工建议包：正式队列、候选预警、现场状态、建议原因、Mock issue 台账与未来 Direct/UNS canonical payload 边界 |
 | 2.46 | 2026-06-23 | 调整 Simio 能力状态：管理后台和 Planning Run 能力接口显示 Simio 为计划完成后的可选验证能力；排程结果治理/read model 支撑独立仿真结果输出页，展示可行性、吞吐、队列/WIP、资源利用率、计划偏差和问题明细 |
 | 2.44 | 2026-06-23 | 研究并修正 Simio 模型侧输出读取：`Plan.RunPlan` 的 `ManufacturingOrdersOutput` 写入 `TableStates.sqlite:PlanValues`，XML/InteractiveValues 可为空；SDBR 优先解析 PlanValues 并映射外键，同时记录 `Routings.ProcessTime` 时间单位转换缺口 |
 | 2.45 | 2026-06-23 | 补齐 Simio SDBR 最小 Process/Assignments 反馈链：模板增加工单开始、工序开始/结束、工单完成、WIP、队列和运行汇总承载点；解析层从输出行回传 Actual、Queue、WIP 指标 |
+| 2.47 | 2026-06-25 | 明确产品方向为 DDOM 运营执行模型：DDS&OP 负责配置和模型治理，本系统只接收配置并回传运行/偏差数据；新增 `BE-INT-008` 跟踪 DDS&OP 配置输入与 DDOM 偏差反馈契约；DDMRP 作为 DDOM 内部运行能力补齐，但不做 DDMRP 参数配置 |
 | 2.43 | 2026-06-23 | 用户重启 Simio license 后完成 Local Headless 重测：time-mapped XML 派生包 `RunPlan` 返回 `Completed / FeasibleWithWarnings`，资源利用率从 post-run 日志回传；队列、WIP 和订单完成输出仍保持部分覆盖 |
 | 2.42 | 2026-06-23 | 修正 Simio Local Headless 闭环：helper 选择主模型 `Model` 而非 `ModelEntity`，验证包合并模板全量资源表，APS 时间平移到 Simio RunSetup 窗口，并从 post-run `ResourceStateLog`/`ResourceCapacityLog` 聚合资源利用率；本机最终重跑仍受 Simio API 许可状态阻断 |
 | 2.41 | 2026-06-23 | Simio 结果回传增强：helper 解析 `Interactive_Results.stats`，SDBR 读取 `TableStates.sqlite` 输出状态，回传系统 WIP、资源利用率/饥饿时间、站内内容，并将当前模型验证结论更正为 `Infeasible` |

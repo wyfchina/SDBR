@@ -564,6 +564,78 @@ Validation:
   - RLM status: `AlreadyRunning`
   - Wall-clock elapsed time: about `34.697` seconds
   - `Status=Completed`
+
+## 2026-06-25 Source Material Color Row-Reference Fix
+
+Trigger:
+
+- Local headless validation for `TST-CP-RUN-CALENDAR-001` failed at time
+  `0.0 Hours` on `TST_SOURCE`.
+- Simio reported that
+  `TST_SOURCE.AssignmentsBeforeExiting[2].AssignmentsBeforeExitingNewValue`
+  could not evaluate `Materials.MaterialColor` because no `Materials` table
+  row was selected for the entity/token. The available table selection was
+  `ManufacturingOrders[1]`, not `Materials`.
+
+Root cause:
+
+- The model used `Materials.MaterialColor` in two places for
+  sequence-dependent setup/changeover configuration.
+- It also used `Materials.MaterialColor` as a `TST_SOURCE`
+  `AssignmentsBeforeExiting` value for `ModelEntity.Picture`. That assignment
+  is only a display/color convenience, but it requires a selected `Materials`
+  row. During source release, the token has the manufacturing order row but
+  not the material row, so the run fails before any routing or schedule
+  validation can occur.
+- After removing the source display assignment, local headless validation
+  exposed the same row-selection issue in the changeover logic:
+  `SequenceDependentSetupMatrix.SetupTransitions[*].OperationAttribute =
+  Materials.MaterialColor`. At operation execution, Simio had selected
+  `ManufacturingOrders`, `Routings`, and `ManufacturingOrdersOutput`, but still
+  no `Materials` row.
+
+Fix:
+
+- Removed the `TST_SOURCE` source-exit assignment:
+  `ModelEntity.Picture = Materials.MaterialColor`.
+- Changed the changeover operation attribute from `Materials.MaterialColor` to
+  `Routings.MaterialName`, because `Routings` is selected on the operation
+  token and preserves the first-version meaning of "changeover by product /
+  material".
+- Removed the second matrix-based transition
+  `ChangeoverMatrixName = Resources.ChangeoverMatrix` from the V1 template.
+  That transition expects a Simio list/matrix-compatible attribute, while
+  `Routings.MaterialName` is a route text value. V1 validation uses
+  `Routings.SetupTime` and generated setup time is currently `0 Minutes`.
+- Applied the fix to:
+  - `model/Simple_DBR_XML/SDBR_Example.xml`
+  - `model/templates/simio/SDBR_Example_Base.xml`
+  - `model/SDBR_Example.spfx`
+
+Validation guard:
+
+- Added `tests/test_simio_model_template.py::test_simio_source_does_not_assign_material_color_without_material_row`.
+- The test verifies that changeover references use `Routings.MaterialName`,
+  while `ChangeoverMatrixName = Resources.ChangeoverMatrix`,
+  `OperationAttribute = Materials.MaterialColor`, and
+  `AssignmentsBeforeExitingNewValue = Materials.MaterialColor` are absent from
+  XML template sources and the tracked `.spfx` package.
+
+Principle:
+
+- Source/Server/Sink state assignments must not reference a table unless that
+  lifecycle point has a proven row selection for the entity/token.
+- Visual display assignments must never be allowed to break the simulation
+  validation path. If color coding is needed later, bind it through an entity
+  state or an explicitly selected row, not an implicit `Materials.*` reference.
+- Changeover operation attributes must also use fields available at operation
+  execution time. In the SDBR V1 template, `Routings.MaterialName` is valid;
+  future `SetupFamily` support should be added to the route/output contract
+  rather than inferred from an unselected `Materials` row.
+- Matrix-based sequence-dependent setup remains a future Simio model rule. To
+  re-enable it safely, define a route-level setup family/list that Simio can
+  evaluate at operation execution time and make the matrix keys match that
+  list.
   - `FeasibilityConclusion=FeasibleWithWarnings`
   - Result model:
     `.tmp\simio-validation\RUN-SIMIO\SDBR_Example_RUN-SIMIO_result.spfx`

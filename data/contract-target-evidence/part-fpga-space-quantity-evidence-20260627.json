@@ -1,0 +1,55 @@
+{
+  "EvidencePackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+  "EvidencePackageType": "ControlledQuantityBearingMaterialAvailabilityEvidence",
+  "EvidencePackageStatus": "CreatedForContractAgentReview",
+  "CreatedAt": "2026-06-27T20:00:00+08:00",
+  "CreatedBy": "SDBR Agent",
+  "Scope": {
+    "ItemID": "PART-FPGA-SPACE",
+    "LocationID": "WH-ELEC-QA",
+    "ItemLocation": "PART-FPGA-SPACE @ WH-ELEC-QA",
+    "PlanningUom": "EA"
+  },
+  "ReviewedBaseline": {
+    "AlignmentPackageID": "MDA-PART-FPGA-SPACE-20260627-001",
+    "MappingStatus": "Reviewed",
+    "MappingConfidence": "Reviewed",
+    "TargetEvidencePackageID": "SDBR-TEP-PART-FPGA-SPACE-20260627-001"
+  },
+  "QuantitySource": {
+    "SourceSystem": "UserProvidedControlledValidationSet",
+    "SourceRecordID": "USER-FPGA-QTY-20260627-001",
+    "SnapshotTimestamp": "2026-06-27T20:00:00+08:00",
+    "SourceMarker": "UserAuthorizedControlledQuantityEvidence",
+    "TraceableID": "TRACE-PART-FPGA-SPACE-WH-ELEC-QA-20260627-001"
+  },
+  "MaterialAvailabilitySnapshot": {
+    "SnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+    "SnapshotTimestamp": "2026-06-27T20:00:00+08:00",
+    "ItemID": "PART-FPGA-SPACE",
+    "LocationID": "WH-ELEC-QA",
+    "PlanningUom": "EA",
+    "AvailableQty": 120,
+    "AllocatedQty": 30,
+    "InboundQty": 80,
+    "InboundExpectedAt": "2026-07-15T00:00:00+08:00",
+    "QuantityEvidenceStatus": "AssertedFromUserProvidedControlledValidationSet"
+  },
+  "QualityReleaseTreatment": {
+    "LocationRole": "QualifiedStock",
+    "QualityTreatment": "Qualified",
+    "Interpretation": "Quantity applies only to the reviewed qualified electronics stock location WH-ELEC-QA."
+  },
+  "Boundaries": {
+    "UsesFixtureQuantity": false,
+    "MapsToTstRmElec": false,
+    "MapsToTstMain": false,
+    "CreatesSupplierExecution": false,
+    "CreatesWorkOrder": false,
+    "CreatesMaterialRequirement": false,
+    "CreatesRouting": false,
+    "CreatesOperation": false,
+    "ClaimsProductionValidated": false,
+    "ClaimsBusinessGoldenLoopReady": false
+  }
+}

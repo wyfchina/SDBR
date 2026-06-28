@@ -1,0 +1,95 @@
+{
+  "ContractID": "SUPPLIER-EXECUTION-EVIDENCE-V1",
+  "ContractVersion": "1.0.0",
+  "Direction": "SDBR_OR_APPROVED_SOURCE_TO_DDAE",
+  "MessageID": "SDBR-SEEV1-MSG-PART-FPGA-SPACE-20260627-001",
+  "EvidencePackageID": "SDBR-SEEP-PART-FPGA-SPACE-20260627-001",
+  "EvidencePackageStatus": "Submitted",
+  "IdempotencyKey": "SUPPLIER-EXECUTION-EVIDENCE-V1:UserProvidedControlledValidationSet:CTRL-PO-FPGA-20260627-001:001:SupplierCommitted:1",
+  "CreatedAt": "2026-06-27T20:30:00+08:00",
+  "ProducerSystem": "UserProvidedControlledValidationSet",
+  "ConsumerSystem": "DDAE",
+  "Scope": {
+    "ItemID": "PART-FPGA-SPACE",
+    "LocationID": "WH-ELEC-QA",
+    "PlanningUom": "EA",
+    "BusinessFocus": "Supplier commitment evidence for controlled PART-FPGA-SPACE validation."
+  },
+  "RelatedReferences": {
+    "MasterDataAlignmentPackageID": "MDA-PART-FPGA-SPACE-20260627-001",
+    "MaterialAvailabilityPackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+    "MaterialAvailabilitySnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+    "MaterialRequirementPackageID": "SDBR-MREP-PART-FPGA-SPACE-20260627-001",
+    "DemandContextID": "CTRL-DEMAND-SUB-AVIONICS-COMPUTE-20260627-001"
+  },
+  "Events": [
+    {
+      "EventID": "SDBR-SEEVT-PART-FPGA-SPACE-20260627-001",
+      "EventVersion": 1,
+      "EventType": "SupplierCommitted",
+      "EventStatus": "Committed",
+      "Supplier": {
+        "SupplierID": "SUP-MICROCHIP",
+        "SupplierName": "Microchip Space",
+        "SupplierIdentitySourceSystem": "DDAE SupplierSource / controlled validation",
+        "SupplierIdentityConfidence": "Reviewed"
+      },
+      "ItemID": "PART-FPGA-SPACE",
+      "LocationID": "WH-ELEC-QA",
+      "Quantity": {
+        "SupplierExecutionQty": 80,
+        "SupplierExecutionUom": "EA",
+        "AcceptedQty": null,
+        "RejectedQty": null,
+        "RemainingOpenQty": 80,
+        "QuantitySourceBasis": "Committed"
+      },
+      "SourceDocument": {
+        "SourceSystem": "UserProvidedControlledValidationSet",
+        "SourceRecordID": "USER-FPGA-SUPPLIER-EVENT-20260627-001",
+        "SourceDocumentType": "SupplierCommitment",
+        "SourceDocumentID": "CTRL-PO-FPGA-20260627-001",
+        "SourceDocumentLineID": "001",
+        "SourceDocumentStatus": "Committed",
+        "SourceMarker": "UserAuthorizedControlledSupplierExecutionEvidence"
+      },
+      "Timestamps": {
+        "EventTimestamp": "2026-06-27T20:30:00+08:00",
+        "ExpectedAt": "2026-07-15T00:00:00+08:00",
+        "OriginalExpectedAt": "2026-07-15T00:00:00+08:00",
+        "CommittedAt": "2026-06-27T20:30:00+08:00",
+        "ShippedAt": null,
+        "ReceivedAt": null,
+        "QualityReleasedAt": null,
+        "RegisteredAt": "2026-06-27T20:35:00+08:00"
+      },
+      "Traceability": {
+        "TraceableID": "TRACE-SUP-MICROCHIP-PART-FPGA-SPACE-COMMIT-20260627-001",
+        "RawPayloadReference": "D:\\Documents\\SDBR\\data\\contract-target-evidence\\part-fpga-space-supplier-committed-evidence-20260627.json",
+        "PreviousEventID": null,
+        "SupersedesEventID": null
+      },
+      "RelatedReferences": {
+        "MasterDataAlignmentPackageID": "MDA-PART-FPGA-SPACE-20260627-001",
+        "MaterialAvailabilityPackageID": "SDBR-QEP-PART-FPGA-SPACE-20260627-001",
+        "MaterialAvailabilitySnapshotID": "SDBR-FPGA-MATERIAL-AVAILABILITY-SNAPSHOT-20260627-001",
+        "MaterialRequirementPackageID": "SDBR-MREP-PART-FPGA-SPACE-20260627-001",
+        "DemandContextID": "CTRL-DEMAND-SUB-AVIONICS-COMPUTE-20260627-001"
+      },
+      "Notes": "Controlled supplier commitment evidence. This does not prove shipment, receipt, quality release, ProductionValidated confidence, or Business Golden Loop readiness."
+    }
+  ],
+  "BoundaryFlags": {
+    "InboundQuantityUsedAsExecutionProof": false,
+    "CreatesWorkOrder": false,
+    "CreatesMaterialRequirement": false,
+    "CreatesRouting": false,
+    "CreatesOperation": false,
+    "ClaimsProductionValidated": false,
+    "ClaimsBusinessGoldenLoopReady": false
+  },
+  "ChangeReason": {
+    "ReasonCode": "CONTROLLED_VALIDATION",
+    "Description": "Controlled supplier committed evidence for PART-FPGA-SPACE authorized by user for Contract Agent review."
+  }
+}

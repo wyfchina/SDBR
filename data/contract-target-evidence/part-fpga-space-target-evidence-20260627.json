@@ -1,0 +1,79 @@
+{
+  "EvidencePackageID": "SDBR-TEP-PART-FPGA-SPACE-20260627-001",
+  "EvidencePackageType": "ControlledTargetEvidencePackage",
+  "CreatedAt": "2026-06-27T00:00:00+08:00",
+  "CreatedBy": "SDBR Agent",
+  "AuthorizationSource": "D:\\Documents\\DDAE_INTERFACE_CONTRACT\\reviews\\PART_FPGA_SPACE_AUTHORIZATION_NEXT_ACTIONS_20260627.md",
+  "Scope": "PART-FPGA-SPACE target evidence for Contract Agent review only",
+  "Status": "RegisteredForReview",
+  "NonClaims": [
+    "No ProductionValidated mapping claimed",
+    "No Business Golden Loop readiness claimed",
+    "No mapping to TST-RM-ELEC",
+    "No use of TST-MAIN by analogy",
+    "No executable routing created",
+    "No SDBR operations generated from DDAE evidence"
+  ],
+  "ItemEvidence": {
+    "ItemID": "PART-FPGA-SPACE",
+    "ItemName": "Imported space-grade FPGA",
+    "ItemType": "PurchasedPart",
+    "PlanningUom": "EA",
+    "EvidenceStatus": "RegisteredTargetIdentity",
+    "SourceMeaning": "Same business identity as DDAE PART-FPGA-SPACE; controlled target evidence only"
+  },
+  "LocationEvidence": [
+    {
+      "LocationID": "WH-ELEC-QA",
+      "LocationName": "Qualified electronics stock",
+      "LocationRole": "QualifiedStock",
+      "QualityTreatment": "Qualified",
+      "EvidenceStatus": "RegisteredTargetIdentity"
+    }
+  ],
+  "ItemLocationEvidence": [
+    {
+      "ItemID": "PART-FPGA-SPACE",
+      "LocationID": "WH-ELEC-QA",
+      "PlanningUom": "EA",
+      "EvidenceStatus": "RegisteredTargetItemLocation"
+    }
+  ],
+  "MaterialAvailabilityEvidence": [
+    {
+      "SnapshotID": "SDBR-FPGA-EVIDENCE-SNAPSHOT-20260627-001",
+      "SnapshotTimestamp": "2026-06-27T00:00:00+08:00",
+      "SourceMarker": "UserAuthorizedControlledTargetEvidence",
+      "ItemID": "PART-FPGA-SPACE",
+      "LocationID": "WH-ELEC-QA",
+      "PlanningUom": "EA",
+      "AvailableQty": null,
+      "AllocatedQty": null,
+      "InboundQty": null,
+      "QuantityEvidenceStatus": "NotAssertedInThisPackage",
+      "EvidenceStatus": "RegisteredMaterialAvailabilityTargetRow",
+      "Notes": "This row registers the target material availability identity and snapshot/source marker only. It does not assert authoritative stock quantities."
+    }
+  ],
+  "UomSemantics": {
+    "UnitOfMeasure": "EA",
+    "AppliesTo": "PART-FPGA-SPACE",
+    "Meaning": "Each physical FPGA unit",
+    "EvidenceStatus": "RegisteredTargetUomSemantics"
+  },
+  "SupplierExecutionEvidence": {
+    "EvidenceStatus": "NotCreated",
+    "Reason": "Current authorization minimum does not define a SDBR supplier execution data shape. Supplier source remains evidence-only under current MASTER-DATA-ALIGNMENT-V1."
+  },
+  "WorkOrderMaterialRequirementEvidence": {
+    "EvidenceStatus": "NotCreated",
+    "Reason": "Current scope is material availability target evidence only; no work order or material requirement consuming PART-FPGA-SPACE was created."
+  },
+  "DataCreationBoundary": {
+    "SDBRCodeChanged": false,
+    "FixtureDataChanged": false,
+    "ContractChanged": false,
+    "ExecutableRoutingCreated": false,
+    "ProductionValidationClaimed": false
+  }
+}

@@ -1060,6 +1060,17 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
 .compact-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 10px; }
 .calendar-source-card { display: grid; gap: 8px; }
 .calendar-source-row { border-top: 1px solid var(--color-border); padding-top: 8px; font-size: 12px; line-height: 1.45; }
+.public-demo-view { display: grid; gap: 14px; }
+.public-demo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.public-demo-banner { margin-bottom: 12px; }
+.public-demo-business { display: grid; gap: 12px; }
+.business-demo-intro { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.55; }
+.business-step-list { display: grid; gap: 12px; margin: 0; padding-left: 22px; }
+.business-step-list li { padding-left: 4px; }
+.business-step-list strong { display: block; color: var(--color-text); font-size: 14px; line-height: 1.35; }
+.business-step-list p { margin: 4px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
+.business-step-list small { display: block; margin-top: 4px; color: var(--color-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.simple-list { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
 
 @media (max-width: 1180px) {
   .context-item { min-width: 110px; padding: 0 10px; }
@@ -1127,6 +1138,7 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
   .dispatch-summary div { border-bottom: 1px solid var(--color-border); }
   .dispatch-resource-heading, .dispatch-operation-title { align-items: flex-start; flex-direction: column; }
   .dispatch-operation-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .public-demo-grid { grid-template-columns: 1fr; }
   .exception-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell.nav-collapsed .brand-copy,
   .app-shell.nav-collapsed .nav-item > span:not(.nav-index),

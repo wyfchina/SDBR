@@ -1,0 +1,154 @@
+{
+  "AdapterProfileID": "ADVENTUREWORKS-BOUNDED-SCHEDULING-ADAPTER-PROFILE-V1",
+  "AdapterSummary": {
+    "CalendarMappings": [
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-10-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-10"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-20-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-20"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-30-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-30"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-40-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-40"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-45-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-45"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-50-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-50"
+      },
+      {
+        "Authority": "SDBR",
+        "CalendarID": "AW-CAL-RES-60-SDBR-DEMO-8X5",
+        "CapacityWindowCount": 1,
+        "MappingStatus": "Explicit",
+        "ResourceID": "AW-RES-60"
+      }
+    ],
+    "CapacityUnitNormalization": {
+      "AvailabilityUse": "Audit evidence only; not production capacity authority.",
+      "CapacityUnits": 1,
+      "RuleID": "AW-CAPACITY-UNIT-FIXTURE-ONE-UNIT-PER-RESOURCE-WINDOW"
+    },
+    "DurationNormalization": {
+      "ActualResourceHrsRows": 21,
+      "RejectedNonPositiveRows": 0,
+      "Rule": "Prefer ActualResourceHrs * 60; fallback to ScheduledEndDate - ScheduledStartDate.",
+      "ScheduledDateDeltaRows": 0
+    },
+    "MaterialConstraints": {
+      "MaterialFeasibleProductionClaim": false,
+      "Mode": "OmittedForPublicDemo"
+    },
+    "OperationResourceCoverage": {
+      "GeneratedOperationCount": 21,
+      "OperationResourceIDs": [
+        "AW-RES-10",
+        "AW-RES-20",
+        "AW-RES-30",
+        "AW-RES-40",
+        "AW-RES-45",
+        "AW-RES-50",
+        "AW-RES-60"
+      ],
+      "RequiredResourceIDs": [
+        "AW-RES-10",
+        "AW-RES-20",
+        "AW-RES-30",
+        "AW-RES-40",
+        "AW-RES-45",
+        "AW-RES-50",
+        "AW-RES-60"
+      ]
+    },
+    "RoutingPathCoverage": {
+      "RecognizedPathCount": 7,
+      "SelectedFixtureWorkOrderCount": 7,
+      "SelectedRoutingIDs": [
+        "AW-ROUTE-PATH-01-WO-67",
+        "AW-ROUTE-PATH-02-WO-15",
+        "AW-ROUTE-PATH-03-WO-39",
+        "AW-ROUTE-PATH-04-WO-69",
+        "AW-ROUTE-PATH-05-WO-82",
+        "AW-ROUTE-PATH-06-WO-13",
+        "AW-ROUTE-PATH-07-WO-14"
+      ]
+    },
+    "SetupChangeover": {
+      "Mode": "NoSetupRulesApplied",
+      "SilentInferenceAllowed": false
+    },
+    "StorageOnlyLocationGuard": {
+      "AllowedExecutableLocationIDs": [
+        10,
+        20,
+        30,
+        40,
+        45,
+        50,
+        60
+      ],
+      "ObservedLocationRoles": {
+        "10": "LocationWorkCenterResourceProxy",
+        "20": "LocationWorkCenterResourceProxy",
+        "30": "LocationWorkCenterResourceProxy",
+        "40": "LocationWorkCenterResourceProxy",
+        "45": "LocationWorkCenterResourceProxy",
+        "50": "LocationWorkCenterResourceProxy",
+        "60": "LocationWorkCenterResourceProxy"
+      },
+      "Status": "Passed",
+      "StorageOnlyLocationsPromoted": []
+    }
+  },
+  "BoundedFixtureScheduling": {
+    "FormalSolverEntry": "Gated",
+    "Message": "Generated rows are validated as bounded fixture scheduling input; formal CP-SAT / OR-Tools production entry remains disabled.",
+    "Mode": "BoundedAdapterFixtureSchedulingMode",
+    "OperationCount": 21,
+    "ResourceCalendarCount": 7,
+    "RoutingCount": 7,
+    "RuntimePlanningInputPackageID": "RPI-AW-SCHED-SDBR-BOUNDED-FIXTURE-001",
+    "Status": "ValidatedInputOnly",
+    "WorkOrderCount": 7
+  },
+  "Errors": [],
+  "NonClaims": [
+    "Not ProductionValidated",
+    "Not Business Golden Loop readiness",
+    "Not production authority",
+    "BoundedAdapterFixtureSchedulingMode only",
+    "Formal CP-SAT / OR-Tools production entry remains gated",
+    "SQL Server / SQL Express is not a runtime dependency"
+  ],
+  "ProcessingStatus": "Accepted",
+  "RuntimePlanningInputPackageID": "RPI-AW-SCHED-SDBR-BOUNDED-FIXTURE-001",
+  "ValidationStatus": "Accepted"
+}

@@ -55,6 +55,9 @@
         <a class="nav-item" href="#administration" data-route="administration" data-nav-help>
           <span class="nav-index" aria-hidden="true">12</span><span data-i18n="navAdmin">管理后台</span>
         </a>
+        <a class="nav-item" href="#public-demo" data-route="public-demo" data-nav-help>
+          <span class="nav-index" aria-hidden="true">D1</span><span data-i18n="navPublicDemo">公开演示闭环</span>
+        </a>
       </nav>
 
       <div id="nav-business-tooltip" class="nav-business-tooltip" role="tooltip" aria-hidden="true" hidden>
@@ -749,6 +752,65 @@
               </div>
               <div id="mes-dispatch-summary" class="dispatch-summary"></div>
               <div id="mes-dispatch-resources" class="dispatch-resource-list"></div>
+            </section>
+          </section>
+        </div>
+
+        <div id="public-demo-view" class="public-demo-view" hidden>
+          <section class="result-context-bar" aria-label="公开演示闭环" data-i18n-aria-label="publicDemoContext">
+            <button id="refresh-public-demo" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+            <button id="run-public-demo" class="button primary" type="button" data-i18n="runPublicDemo">运行演示闭环</button>
+            <span id="public-demo-chip" class="status-chip neutral">-</span>
+          </section>
+          <div id="public-demo-error" class="persistent-error" role="alert" hidden>
+            <strong data-i18n="publicDemoLoadFailed">无法读取公开演示闭环</strong>
+            <span data-i18n="publicDemoRetryAdvice">请确认 frozen package 与 handoff 文件可用后重试。</span>
+          </div>
+          <section id="public-demo-content" hidden>
+            <section class="readiness-banner public-demo-banner" aria-label="公开演示闭环摘要" data-i18n-aria-label="publicDemoSummary">
+              <div>
+                <span class="context-label" data-i18n="controlledDemo">受控演示</span>
+                <strong id="public-demo-title">PUBLIC-DEMO-GOLDEN-DATA-V1</strong>
+                <p id="public-demo-labels">DemoFixture · ReviewedEvidence · Controlled Contract Golden Loop Demo</p>
+              </div>
+              <span class="status-chip neutral" data-i18n="publicDemoOnly">PublicDemoOnly</span>
+            </section>
+            <div id="public-demo-summary" class="case-summary compact-summary"></div>
+            <div class="public-demo-grid">
+              <section class="admin-panel" aria-labelledby="public-demo-package-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="packageValidation">数据包校验</span><h2 id="public-demo-package-title" data-i18n="frozenPackage">冻结数据包</h2></div></div>
+                <div id="public-demo-package" class="policy-group-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="public-demo-handoff-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="handoffValidation">交接校验</span><h2 id="public-demo-handoff-title" data-i18n="ddaeHandoff">DDAE 到 SDBR</h2></div></div>
+                <div id="public-demo-handoff" class="policy-group-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="public-demo-validation-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="contractValidation">契约校验</span><h2 id="public-demo-validation-title" data-i18n="validationResults">校验结果</h2></div></div>
+                <div id="public-demo-validation" class="policy-group-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="public-demo-adapter-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="adapterValidation">Adapter 校验</span><h2 id="public-demo-adapter-title" data-i18n="adventureWorksAdapter">AdventureWorks 排程 Adapter</h2></div></div>
+                <div id="public-demo-adapter" class="policy-group-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="public-demo-output-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="feedbackHandoff">反馈交接</span><h2 id="public-demo-output-title" data-i18n="sdbrFeedbackFiles">SDBR 到 DDAE</h2></div></div>
+                <div id="public-demo-outputs" class="policy-group-list"></div>
+              </section>
+            </div>
+            <section class="admin-panel full-width" aria-labelledby="public-demo-nonclaims-title">
+              <div class="panel-heading"><div><span class="panel-kicker" data-i18n="boundary">边界</span><h2 id="public-demo-nonclaims-title" data-i18n="nonClaims">非声明</h2></div></div>
+              <ul id="public-demo-nonclaims" class="simple-list"></ul>
+            </section>
+            <section class="admin-panel full-width public-demo-business" aria-labelledby="public-demo-business-title">
+              <div class="panel-heading">
+                <div>
+                  <span class="panel-kicker" data-i18n="businessUserView">业务用户视图</span>
+                  <h2 id="public-demo-business-title" data-i18n="sdbrExecutionDemo">SDBR 执行演示</h2>
+                </div>
+              </div>
+              <p class="business-demo-intro" data-i18n="sdbrExecutionDemoIntro">这部分用业务语言说明：SDBR 如何接收 DDAE 的受控演示交接，校验其可信性，转换为有界演示排程输入，并把结果反馈给 DDAE 复核。</p>
+              <ol id="public-demo-business-steps" class="business-step-list"></ol>
             </section>
           </section>
         </div>

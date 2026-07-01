@@ -633,6 +633,39 @@ UI 必须帮助计划员快速回答五个问题：
 - 2026-06-26：补充 MES 与 SDBR 的时序边界：缓冲执行负责工单释放/到达/缓冲状态，派工建议负责资源前工序队列排序；无排队时 MES 可直接开工，有排队或风险时再请求 SDBR 排序。
 - 2026-06-26：派工建议页按 `缓冲执行` 页面版式收紧面板标题、说明文字、按钮、统计栏和资源折叠行字号；`MES 派工队列` 降为面板内标题层级，不再形成独立页面主标题视觉焦点。
 
+### UI-DEMO-001 公开演示闭环页面
+
+**状态：已验证待用户确认**
+
+页面位置：独立导航页 `公开演示闭环 / Public Demo Loop`。
+
+业务定义：
+
+- 页面用于 `PUBLIC-DEMO-GOLDEN-DATA-V1 Controlled Contract Golden Loop Demo`，只演示文件化契约交接，不代表生产验证或 Business Golden Loop readiness。
+- 页面读取 DDAE handoff payload，显示 schema、状态/审批、fingerprint、crosswalk 文件和 reviewed candidate mapping 校验。
+- 页面使用 `DemoFixture`、`ReviewedEvidence`、`Controlled Contract Golden Loop Demo`、`MappingConfidence = PublicDemoOnly` 标签，不得显示生产权威或生产验证结论。
+
+页面显示：
+
+- 冻结数据包状态、checksum、canonical file 数量和 crosswalk 文件状态。
+- DDAE 到 SDBR handoff 的 MessageID、IdempotencyKey 和读取状态。
+- 契约 ACK、fingerprint、reviewed candidate mapping 命中情况。
+- SDBR 到 DDAE feedback handoff 文件的存在性和大小。
+- 非声明列表：不声明 `ProductionValidated`、不声明 Business Golden Loop readiness、不声明 production authority。
+
+交互边界：
+
+- `运行演示闭环`只在 handoff payload 通过当前契约校验时生成 demo fixture feedback 文件。
+- 若 payload 不符合契约 schema，页面必须显示阻塞原因，不能绕过契约生成 feedback。
+- 不重新抽取 AdventureWorks，不自动创建 SDBR 生产主数据，不修改契约仓库 schema/examples/tests/changelog。
+
+验证记录：
+
+- 2026-06-29：新增 `public-demo` 路由、页面卡片和 FastAPI read/run 接口；`python -m compileall -q sdbr` 通过，bundled Node `--check sdbr\web\planner-workbench.js` 通过，FastAPI TestClient 返回 `200 Blocked` / `200 ValidationBlocked`。当前 DDAE handoff payload 因 `Payload.ChangeReason.ReasonCode=CONTROLLED_CONTRACT_DEMO` 不在契约 schema 枚举内被拒绝，页面显示阻塞且不写 feedback。
+- 2026-06-30：新增 AdventureWorks 排程 Adapter 只读校验区，展示 `ADVENTUREWORKS-BOUNDED-SCHEDULING-ADAPTER-PROFILE-V1`、`BoundedAdapterFixtureSchedulingMode`、7 个 SDBR-owned AW 资源日历映射、生成工单/工序行数和正式求解入口 gate；按 Contract Agent correction gate 补充 `MaterialConstraintsMode = OmittedForPublicDemo` 与“物料可行性生产声明：否”，避免把公开演示上下文误读为生产物料可行性证明。
+- 2026-07-01：按 `PUBLIC_DEMO_BUSINESS_USER_DEMO_V1_IMPLEMENTATION_NEXT_ACTIONS_20260701.md` 在公开演示闭环内容区最下方新增业务用户演示视图；该视图位于冻结数据包、DDAE 到 SDBR、校验结果、AdventureWorks Adapter、SDBR 到 DDAE 和非声明区域之后，不新增左侧导航、不重排既有技术区；内容用业务语言说明 SDBR 收到什么、校验什么、转换什么、不声明什么、反馈什么，并保留 `OmittedForPublicDemo`、`PublicDemoOnly`、正式求解入口 gated 等边界。
+- 2026-07-01：按 Contract Agent 导航顺序要求，将左侧导航中的 `公开演示闭环 / Public Demo Loop` 移到导航列表最下面；页面内部技术区和底部业务用户演示视图顺序不变。
+
 ### UI-EXCEPTION-001 异常与死信中心
 
 **状态：用户已确认**
@@ -1031,6 +1064,10 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.26 | 2026-07-01 | 将 `公开演示闭环 / Public Demo Loop` 左侧导航项移动到导航列表最下面；不改变公开演示页面内部技术区和底部业务用户演示视图顺序 |
+| 5.25 | 2026-07-01 | `UI-DEMO-001` 在公开演示闭环页最下方新增业务用户演示视图，面向业务用户解释 SDBR 的执行/校验/adapter/反馈角色；不新增导航、不改变现有技术区顺序，不声明生产验证或 Business Golden Loop readiness |
+| 5.24 | 2026-06-30 | 公开演示闭环页新增 AdventureWorks 排程 Adapter 校验区：显示 adapter profile、bounded fixture 模式、AW-RES 显式资源日历映射、生成行数、formal solver gate，并明确 `MaterialConstraintsMode=OmittedForPublicDemo` 且无物料可行性生产声明 |
+| 5.23 | 2026-06-29 | 新增 `UI-DEMO-001`：独立 `公开演示闭环 / Public Demo Loop` 页面，读取 PUBLIC-DEMO-GOLDEN-DATA-V1 frozen package 与 DDAE handoff payload，展示契约校验、reviewed candidate mapping 命中和 SDBR feedback handoff 状态；明确仅为 DemoFixture / ReviewedEvidence / PublicDemoOnly，不声明生产验证 |
 | 5.22 | 2026-06-26 | 固化 DDAE / DDS&OP UI 边界：SDBR 页面只展示 DDAE 主设置的来源、版本、冻结状态和执行反馈，不重新计算或审批时间缓冲、控制点、DDMRP 参数、资源角色等主参数；配置不足时提示契约变更或配置补充，不新增隐式 UI 字段 |
 | 5.21 | 2026-06-26 | 统一 `UI-CALENDAR-001` 与 `UI-ADMIN-001/002` 字体层级：日历配置与管理后台的标题、卡片、表单、说明文字和列表行收敛到工作台页面的紧凑字号与密度 |
 | 5.20 | 2026-06-26 | 收口 `UI-DDOM-001` 中文展示：运营指标页将后端适用范围、不适用范围等英文规范值转换为中文业务表达，避免计划员界面出现英文说明 |

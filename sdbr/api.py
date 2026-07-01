@@ -16,6 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
+from sdbr.adventureworks_scheduling_adapter import (
+    build_adventureworks_scheduling_adapter_status,
+)
 from sdbr.administration_view import build_administration_workbench
 from sdbr.base_calendar import (
     apply_base_calendar_assignments,
@@ -92,6 +95,10 @@ from sdbr.plan_publication import (
     mark_superseded,
     publication_state,
     transition_publication_state,
+)
+from sdbr.public_demo_golden_loop import (
+    get_public_demo_golden_loop_status,
+    run_public_demo_golden_loop,
 )
 from sdbr.planner_view import (
     InventoryBufferPolicy,
@@ -1698,6 +1705,39 @@ def create_app(
                 "DeliveryRecords": ddsop_feedback_outbound_messages,
                 "RecordCount": len(ddsop_feedback_outbound_messages),
             },
+        }
+
+    @app.get("/planner/workbench/public-demo/golden-loop")
+    def planner_workbench_public_demo_golden_loop() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/public-demo/golden-loop",
+            "StatusCode": 200,
+            "Data": get_public_demo_golden_loop_status(),
+        }
+
+    @app.post("/planner/workbench/public-demo/golden-loop/run")
+    def planner_workbench_public_demo_golden_loop_run() -> dict[str, object]:
+        result = run_public_demo_golden_loop()
+        return {
+            "Endpoint": "/planner/workbench/public-demo/golden-loop/run",
+            "StatusCode": 200,
+            "Data": result,
+        }
+
+    @app.get("/planner/workbench/public-demo/adventureworks-scheduling-adapter")
+    def planner_workbench_public_demo_adventureworks_adapter() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/public-demo/adventureworks-scheduling-adapter",
+            "StatusCode": 200,
+            "Data": build_adventureworks_scheduling_adapter_status(),
+        }
+
+    @app.post("/planner/workbench/public-demo/adventureworks-scheduling-adapter/run")
+    def planner_workbench_public_demo_adventureworks_adapter_run() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/public-demo/adventureworks-scheduling-adapter/run",
+            "StatusCode": 200,
+            "Data": build_adventureworks_scheduling_adapter_status(write_artifacts=True),
         }
 
     @app.get("/planner/workbench/test-data/cases")

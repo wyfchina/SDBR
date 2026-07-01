@@ -47,6 +47,9 @@ class WorkbenchStateStore:
     ddsop_config_inbound_messages: list[dict[str, object]] = field(default_factory=list)
     operating_model_configurations: dict[str, dict[str, object]] = field(default_factory=dict)
     ddsop_feedback_outbound_messages: list[dict[str, object]] = field(default_factory=list)
+    ddsop_runtime_planning_input_messages: list[dict[str, object]] = field(default_factory=list)
+    ddsop_runtime_planning_input_packages: dict[str, dict[str, object]] = field(default_factory=dict)
+    ddsop_runtime_feedback_correlations: list[dict[str, object]] = field(default_factory=list)
     supplier_identity_source_inbound_messages: list[dict[str, object]] = field(default_factory=list)
     production_inventory_quality_inbound_messages: list[dict[str, object]] = field(default_factory=list)
     execution_object_evidence_inbound_messages: list[dict[str, object]] = field(default_factory=list)
@@ -130,6 +133,9 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "ddsop_config_inbound_messages": self.ddsop_config_inbound_messages,
             "operating_model_configurations": self.operating_model_configurations,
             "ddsop_feedback_outbound_messages": self.ddsop_feedback_outbound_messages,
+            "ddsop_runtime_planning_input_messages": self.ddsop_runtime_planning_input_messages,
+            "ddsop_runtime_planning_input_packages": self.ddsop_runtime_planning_input_packages,
+            "ddsop_runtime_feedback_correlations": self.ddsop_runtime_feedback_correlations,
             "supplier_identity_source_inbound_messages": self.supplier_identity_source_inbound_messages,
             "production_inventory_quality_inbound_messages": self.production_inventory_quality_inbound_messages,
             "execution_object_evidence_inbound_messages": self.execution_object_evidence_inbound_messages,
@@ -324,6 +330,15 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.ddsop_feedback_outbound_messages.extend(
             payloads.get("ddsop_feedback_outbound_messages", [])
         )
+        self.ddsop_runtime_planning_input_messages.extend(
+            payloads.get("ddsop_runtime_planning_input_messages", [])
+        )
+        self.ddsop_runtime_planning_input_packages.update(
+            payloads.get("ddsop_runtime_planning_input_packages", {})
+        )
+        self.ddsop_runtime_feedback_correlations.extend(
+            payloads.get("ddsop_runtime_feedback_correlations", [])
+        )
         self.supplier_identity_source_inbound_messages.extend(
             payloads.get("supplier_identity_source_inbound_messages", [])
         )
@@ -376,6 +391,9 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.ddsop_config_inbound_messages.clear()
         self.operating_model_configurations.clear()
         self.ddsop_feedback_outbound_messages.clear()
+        self.ddsop_runtime_planning_input_messages.clear()
+        self.ddsop_runtime_planning_input_packages.clear()
+        self.ddsop_runtime_feedback_correlations.clear()
         self.supplier_identity_source_inbound_messages.clear()
         self.production_inventory_quality_inbound_messages.clear()
         self.execution_object_evidence_inbound_messages.clear()
@@ -418,6 +436,15 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "DdsopConfigInboundMessages": len(store.ddsop_config_inbound_messages),
         "OperatingModelConfigurations": len(store.operating_model_configurations),
         "DdsopFeedbackOutboundMessages": len(store.ddsop_feedback_outbound_messages),
+        "DdsopRuntimePlanningInputMessages": len(
+            store.ddsop_runtime_planning_input_messages
+        ),
+        "DdsopRuntimePlanningInputPackages": len(
+            store.ddsop_runtime_planning_input_packages
+        ),
+        "DdsopRuntimeFeedbackCorrelations": len(
+            store.ddsop_runtime_feedback_correlations
+        ),
         "SupplierIdentitySourceInboundMessages": len(
             store.supplier_identity_source_inbound_messages
         ),

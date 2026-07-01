@@ -1,0 +1,11 @@
+{
+  "FormalSolverEntry": "Gated",
+  "Message": "Generated rows are validated as bounded fixture scheduling input; formal CP-SAT / OR-Tools production entry remains disabled.",
+  "Mode": "BoundedAdapterFixtureSchedulingMode",
+  "OperationCount": 21,
+  "ResourceCalendarCount": 7,
+  "RoutingCount": 7,
+  "RuntimePlanningInputPackageID": "RPI-AW-SCHED-SDBR-BOUNDED-FIXTURE-001",
+  "Status": "ValidatedInputOnly",
+  "WorkOrderCount": 7
+}

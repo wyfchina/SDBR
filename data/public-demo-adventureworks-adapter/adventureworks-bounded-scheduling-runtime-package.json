@@ -1,0 +1,847 @@
+{
+  "ContractID": "DDSOP-RUNTIME-PLANNING-INPUT-V1",
+  "ContractVersion": "0.1.0-draft",
+  "IdempotencyKey": "SDBR:SDBR-MSG-AW-SCHED-RPI-001",
+  "MessageID": "SDBR-MSG-AW-SCHED-RPI-001",
+  "MessageType": "RuntimePlanningInputPackagePublished",
+  "OccurredAt": "2026-06-30T18:30:00+08:00",
+  "Payload": {
+    "ConsumerRules": {
+      "ForbiddenMutations": [
+        "MUTATE_OPERATING_MODEL_CONFIGURATION_ID",
+        "MUTATE_OPERATING_MODEL_FINGERPRINT",
+        "RECALCULATE_DDAE_BUFFER_TOPS",
+        "MUTATE_DDAE_DLT_MOQ_ORDER_CYCLE",
+        "MUTATE_DDAE_SCHEDULING_POLICY",
+        "PROMOTE_RUNTIME_FEEDBACK_TO_APPROVED_MASTER_SETTING"
+      ],
+      "ReadOnlyFrozenInputs": [
+        "OPERATING_MODEL_CONFIGURATION_ID",
+        "OPERATING_MODEL_FINGERPRINT",
+        "SCHEDULING_CONFIGURATION_ID",
+        "DDMRP_CONFIGURATION_ID",
+        "DDSOP_DDMRP_MASTER_SETTINGS",
+        "DDSOP_SCHEDULING_POLICY_SETTINGS",
+        "DDMRP_BUFFER_TOPS",
+        "DDMRP_DLT_MOQ_ORDER_CYCLE",
+        "SCHEDULING_CONTROL_POINTS_TIME_BUFFERS"
+      ],
+      "SDBRDerivedRuntimeSignals": [
+        "NET_FLOW_POSITION",
+        "BUFFER_STATUS",
+        "QUALIFIED_SPIKE_DEMAND",
+        "MATERIAL_AVAILABILITY_STATUS",
+        "RELEASE_AUTHORIZATION_STATE",
+        "SCHEDULE_FEASIBILITY",
+        "INFEASIBILITY_CAUSES",
+        "DISPATCH_RECOMMENDATION"
+      ]
+    },
+    "ExecutableSchedulingInputs": {
+      "AdapterProfileID": "ADVENTUREWORKS-BOUNDED-SCHEDULING-ADAPTER-PROFILE-V1",
+      "CapacityUnitNormalizationRuleID": "AW-CAPACITY-UNIT-FIXTURE-ONE-UNIT-PER-RESOURCE-WINDOW",
+      "MasterDataVersionID": "AW-SCHED-PUBLIC-DEMO-MD-SDBR-0.1",
+      "MaterialConstraints": [],
+      "MaterialConstraintsMode": "OmittedForPublicDemo",
+      "Operations": [
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-67-806-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=67;ProductID=806;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-67-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 240,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-15-749-7-60",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=15;ProductID=749;OperationSequence=7;LocationID=60;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-15-007-60",
+          "ResourceID": "AW-RES-60",
+          "Sequence": 7
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-39-516-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=39;ProductID=516;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-39-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 240,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-39-516-7-60",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=39;ProductID=516;OperationSequence=7;LocationID=60;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-39-007-60",
+          "ResourceID": "AW-RES-60",
+          "Sequence": 7
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 246,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-69-810-1-10",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=69;ProductID=810;OperationSequence=1;LocationID=10;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-69-001-10",
+          "ResourceID": "AW-RES-10",
+          "Sequence": 1
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 210,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-69-810-2-20",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=69;ProductID=810;OperationSequence=2;LocationID=20;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-69-002-20",
+          "ResourceID": "AW-RES-20",
+          "Sequence": 2
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-69-810-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=69;ProductID=810;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-69-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 246,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-82-945-1-10",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=82;ProductID=945;OperationSequence=1;LocationID=10;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-82-001-10",
+          "ResourceID": "AW-RES-10",
+          "Sequence": 1
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-82-945-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=82;ProductID=945;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-82-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 246,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-1-10",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=1;LocationID=10;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-001-10",
+          "ResourceID": "AW-RES-10",
+          "Sequence": 1
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 210,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-2-20",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=2;LocationID=20;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-002-20",
+          "ResourceID": "AW-RES-20",
+          "Sequence": 2
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 60,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-3-30",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=3;LocationID=30;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-003-30",
+          "ResourceID": "AW-RES-30",
+          "Sequence": 3
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 120,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-4-40",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=4;LocationID=40;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-004-40",
+          "ResourceID": "AW-RES-40",
+          "Sequence": 4
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 240,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-13-747-7-60",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=13;ProductID=747;OperationSequence=7;LocationID=60;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-13-007-60",
+          "ResourceID": "AW-RES-60",
+          "Sequence": 7
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 246,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-1-10",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=1;LocationID=10;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-001-10",
+          "ResourceID": "AW-RES-10",
+          "Sequence": 1
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 210,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-2-20",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=2;LocationID=20;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-002-20",
+          "ResourceID": "AW-RES-20",
+          "Sequence": 2
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 60,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-3-30",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=3;LocationID=30;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-003-30",
+          "ResourceID": "AW-RES-30",
+          "Sequence": 3
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 120,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-5-45",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=5;LocationID=45;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-005-45",
+          "ResourceID": "AW-RES-45",
+          "Sequence": 5
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 180,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-6-50",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=6;LocationID=50;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-006-50",
+          "ResourceID": "AW-RES-50",
+          "Sequence": 6
+        },
+        {
+          "AlternateResourceIDs": [],
+          "DurationMinutes": 240,
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTING-OP-14-748-7-60",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrderRouting;WorkOrderID=14;ProductID=748;OperationSequence=7;LocationID=60;DurationRule=ActualResourceHrs"
+            }
+          ],
+          "OperationID": "AW-OP-14-007-60",
+          "ResourceID": "AW-RES-60",
+          "Sequence": 7
+        }
+      ],
+      "ResourceCalendars": [
+        {
+          "CalendarID": "AW-CAL-RES-10-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-10",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=10"
+            }
+          ],
+          "ResourceID": "AW-RES-10"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-20-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-20",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=20"
+            }
+          ],
+          "ResourceID": "AW-RES-20"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-30-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-30",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=30"
+            }
+          ],
+          "ResourceID": "AW-RES-30"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-40-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-40",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=40"
+            }
+          ],
+          "ResourceID": "AW-RES-40"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-45-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-45",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=45"
+            }
+          ],
+          "ResourceID": "AW-RES-45"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-50-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-50",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=50"
+            }
+          ],
+          "ResourceID": "AW-RES-50"
+        },
+        {
+          "CalendarID": "AW-CAL-RES-60-SDBR-DEMO-8X5",
+          "CapacityWindows": [
+            {
+              "CapacityUnits": 1,
+              "EndAt": "2026-07-08T17:00:00+08:00",
+              "StartAt": "2026-07-01T08:00:00+08:00"
+            }
+          ],
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-CAPACITY-60",
+              "SourceAuthority": "SDBR public demo calendar fixture; AdventureWorks Availability retained as public-demo proxy evidence only",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.Location.Availability;LocationID=60"
+            }
+          ],
+          "ResourceID": "AW-RES-60"
+        }
+      ],
+      "Routings": [
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-01",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=50"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-67-006-50"
+          ],
+          "ProductID": "AW-PRODUCT-806",
+          "RoutingID": "AW-ROUTE-PATH-01-WO-67"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-02",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=60"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-15-007-60"
+          ],
+          "ProductID": "AW-PRODUCT-749",
+          "RoutingID": "AW-ROUTE-PATH-02-WO-15"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-03",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=50-60"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-39-006-50",
+            "AW-OP-39-007-60"
+          ],
+          "ProductID": "AW-PRODUCT-516",
+          "RoutingID": "AW-ROUTE-PATH-03-WO-39"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-04",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=10-20-50"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-69-001-10",
+            "AW-OP-69-002-20",
+            "AW-OP-69-006-50"
+          ],
+          "ProductID": "AW-PRODUCT-810",
+          "RoutingID": "AW-ROUTE-PATH-04-WO-69"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-05",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=10-50"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-82-001-10",
+            "AW-OP-82-006-50"
+          ],
+          "ProductID": "AW-PRODUCT-945",
+          "RoutingID": "AW-ROUTE-PATH-05-WO-82"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-06",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=10-20-30-40-50-60"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-13-001-10",
+            "AW-OP-13-002-20",
+            "AW-OP-13-003-30",
+            "AW-OP-13-004-40",
+            "AW-OP-13-006-50",
+            "AW-OP-13-007-60"
+          ],
+          "ProductID": "AW-PRODUCT-747",
+          "RoutingID": "AW-ROUTE-PATH-06-WO-13"
+        },
+        {
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-ROUTE-PATH-07",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "RoutingPathSignature=10-20-30-45-50-60"
+            }
+          ],
+          "OperationIDs": [
+            "AW-OP-14-001-10",
+            "AW-OP-14-002-20",
+            "AW-OP-14-003-30",
+            "AW-OP-14-005-45",
+            "AW-OP-14-006-50",
+            "AW-OP-14-007-60"
+          ],
+          "ProductID": "AW-PRODUCT-748",
+          "RoutingID": "AW-ROUTE-PATH-07-WO-14"
+        }
+      ],
+      "SetupChangeoverMode": "NoSetupRulesApplied",
+      "SetupChangeoverRules": [
+        {
+          "EvidenceID": "AW-NO-SETUP-RULES-APPLIED",
+          "SourceAuthority": "SDBR public demo fixture policy",
+          "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+          "SourceRecordID": "SetupChangeoverMode=NoSetupRulesApplied"
+        }
+      ],
+      "WorkOrders": [
+        {
+          "DueAt": "2026-07-07T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-01T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-67",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=67"
+            }
+          ],
+          "Priority": 1,
+          "ProductID": "AW-PRODUCT-806",
+          "Quantity": 322.0,
+          "RoutingID": "AW-ROUTE-PATH-01-WO-67",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-67"
+        },
+        {
+          "DueAt": "2026-07-08T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-02T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-15",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=15"
+            }
+          ],
+          "Priority": 2,
+          "ProductID": "AW-PRODUCT-749",
+          "Quantity": 4.0,
+          "RoutingID": "AW-ROUTE-PATH-02-WO-15",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-15"
+        },
+        {
+          "DueAt": "2026-07-09T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-03T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-39",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=39"
+            }
+          ],
+          "Priority": 3,
+          "ProductID": "AW-PRODUCT-516",
+          "Quantity": 120.0,
+          "RoutingID": "AW-ROUTE-PATH-03-WO-39",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-39"
+        },
+        {
+          "DueAt": "2026-07-10T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-04T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-69",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=69"
+            }
+          ],
+          "Priority": 4,
+          "ProductID": "AW-PRODUCT-810",
+          "Quantity": 120.0,
+          "RoutingID": "AW-ROUTE-PATH-04-WO-69",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-69"
+        },
+        {
+          "DueAt": "2026-07-11T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-05T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-82",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=82"
+            }
+          ],
+          "Priority": 5,
+          "ProductID": "AW-PRODUCT-945",
+          "Quantity": 460.0,
+          "RoutingID": "AW-ROUTE-PATH-05-WO-82",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-82"
+        },
+        {
+          "DueAt": "2026-07-12T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-06T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-13",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=13"
+            }
+          ],
+          "Priority": 6,
+          "ProductID": "AW-PRODUCT-747",
+          "Quantity": 4.0,
+          "RoutingID": "AW-ROUTE-PATH-06-WO-13",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-13"
+        },
+        {
+          "DueAt": "2026-07-13T08:00:00+08:00",
+          "EarliestReleaseAt": "2026-07-07T08:00:00+08:00",
+          "EvidenceRefs": [
+            {
+              "EvidenceID": "AW-WORK-ORDER-14",
+              "SourceAuthority": "AdventureWorks public demo fixture",
+              "SourceObservedAt": "2026-06-30T18:30:00+08:00",
+              "SourceRecordID": "Production.WorkOrder;WorkOrderID=14"
+            }
+          ],
+          "Priority": 7,
+          "ProductID": "AW-PRODUCT-748",
+          "Quantity": 2.0,
+          "RoutingID": "AW-ROUTE-PATH-07-WO-14",
+          "UnitOfMeasure": "EA",
+          "WorkOrderID": "AW-WO-14"
+        }
+      ]
+    },
+    "FrozenDdsopConfiguration": {
+      "ConfigStatus": "Approved",
+      "ConfigurationVersion": "1.0.0",
+      "DDMRPConfigurationID": "DDSOP-DDMRP-AW-PUBLIC-DEMO-V1",
+      "EffectiveFrom": "2026-06-30T00:00:00+08:00",
+      "EffectiveTo": null,
+      "OperatingModelConfigurationID": "DDSOP-OMC-AW-SCHED-PUBLIC-DEMO-V1",
+      "OperatingModelFingerprint": "sha256:49e11e70db2a377fabb4402296e67a9b08590a1ca93891c2144d57ecc1d6d9b1",
+      "SchedulingConfigurationID": "DDSOP-SCHED-AW-PUBLIC-DEMO-V1",
+      "SourceConfigurationContractID": "DDSOP-CONFIG-INBOUND-V1",
+      "TimeZone": "Asia/Shanghai"
+    },
+    "OutputExpectations": {
+      "DeadLetterPolicy": "Schema, authority, resource-calendar, duration, material-mode, setup-mode, or ownership failure must be rejected without bypass.",
+      "DeliveryLedgerCorrelationID": "LEDGER-CORR-AW-SCHED-SDBR-RPI-001",
+      "FeedbackContractID": "DDSOP-FEEDBACK-OUTBOUND-V1",
+      "FeedbackCorrelationMode": "DeliveryLedger",
+      "PlanningRunFeedbackRequired": true,
+      "ReplayPolicy": "Same IdempotencyKey returns Duplicate; corrected package requires new MessageID.",
+      "RuntimePlanningInputPackageID": "RPI-AW-SCHED-SDBR-BOUNDED-FIXTURE-001",
+      "VarianceAnalysisFeedbackRequired": true
+    },
+    "PackageIdentity": {
+      "ExecutionMode": "BoundedProductionScheduling",
+      "MappingConfidence": "PublicDemoOnly",
+      "PackageStatus": "AcceptedForBoundedPlanning",
+      "PackageVersion": "0.1.0-sdbr-adventureworks-fixture",
+      "RuntimePlanningInputPackageID": "RPI-AW-SCHED-SDBR-BOUNDED-FIXTURE-001",
+      "ScenarioLabel": "ControlledContractGoldenLoopDemo"
+    },
+    "ParameterAuthorityEvidence": {
+      "ApprovalEvidenceID": "APPROVAL-AW-SCHED-SDBR-FIXTURE-20260630",
+      "ApprovedAt": "2026-06-30T18:20:00+08:00",
+      "ApprovedBy": "SDBR Agent scoped implementation",
+      "DDMRPFormulaVersionID": "DDMRP-NOT-USED-BOUNDED-SCHED-PUBLIC-DEMO",
+      "EffectivePolicyID": "EFFECTIVITY-AW-SCHED-SDBR-PUBLIC-DEMO-20260630",
+      "ParameterEvidenceRefs": [
+        {
+          "Applicability": "Applicable",
+          "CalculationStatus": "ManualGoverned",
+          "EvidenceID": "AW-SCHED-CONTROLPOINT-PUBLIC-DEMO",
+          "FieldGroup": "ControlPoint",
+          "NotApplicableReason": null,
+          "ProductionAuthorityStatus": "PublicDemoOnly",
+          "SourceAuthority": "DDAE public demo scheduling governance"
+        },
+        {
+          "Applicability": "Applicable",
+          "CalculationStatus": "ManualGoverned",
+          "EvidenceID": "AW-SCHED-TIMEBUFFER-PUBLIC-DEMO",
+          "FieldGroup": "TimeBuffer",
+          "NotApplicableReason": null,
+          "ProductionAuthorityStatus": "PublicDemoOnly",
+          "SourceAuthority": "DDAE public demo scheduling governance"
+        },
+        {
+          "Applicability": "Applicable",
+          "CalculationStatus": "ManualGoverned",
+          "EvidenceID": "AW-SCHED-RESOURCEPOLICY-PUBLIC-DEMO",
+          "FieldGroup": "ResourcePolicy",
+          "NotApplicableReason": null,
+          "ProductionAuthorityStatus": "PublicDemoOnly",
+          "SourceAuthority": "DDAE public demo scheduling governance"
+        },
+        {
+          "Applicability": "Applicable",
+          "CalculationStatus": "FixtureSeeded",
+          "EvidenceID": "AW-SCHED-CALENDARPOLICY-PUBLIC-DEMO",
+          "FieldGroup": "CalendarPolicy",
+          "NotApplicableReason": null,
+          "ProductionAuthorityStatus": "PublicDemoOnly",
+          "SourceAuthority": "SDBR public demo calendar fixture authority"
+        },
+        {
+          "Applicability": "Applicable",
+          "CalculationStatus": "ManualGoverned",
+          "EvidenceID": "AW-SCHED-RELEASEPOLICY-PUBLIC-DEMO",
+          "FieldGroup": "ReleasePolicy",
+          "NotApplicableReason": null,
+          "ProductionAuthorityStatus": "PublicDemoOnly",
+          "SourceAuthority": "DDAE public demo scheduling governance"
+        }
+      ],
+      "SchedulingRuleVersionID": "SCHED-RULE-AW-BOUNDED-SCHED-SDBR-0.1"
+    }
+  },
+  "SourceSystem": "SDBR",
+  "TargetSystem": [
+    "SDBR"
+  ]
+}

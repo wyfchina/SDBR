@@ -6,13 +6,13 @@ const I18N = {
     primaryNavigation: "主导航", planningContext: "计划上下文", toggleNavigation: "切换导航",
     productName: "需求驱动计划员工作台", navOverview: "计划总览", navOperationalMetrics: "运营指标", navData: "数据就绪", navMaterials: "物料计划",
     navRuns: "排程任务", navResults: "排程结果", navRelease: "释放管理", navBuffer: "缓冲执行", navDispatch: "派工建议",
-    navExceptions: "异常中心", navCalendar: "日历配置", navAdmin: "管理后台", noUnreadExceptions: "无未读异常",
+    navPublicDemo: "公开演示闭环", navExceptions: "异常中心", navCalendar: "日历配置", navAdmin: "管理后台", noUnreadExceptions: "无未读异常",
     apiConnected: "本地服务已连接", planningScope: "计划范围", defaultFactory: "默认工厂",
     masterDataVersionLabel: "主数据版本", snapshotLabel: "运行快照", systemHealthLabel: "系统健康",
     notSelected: "未选择", checking: "检查中", healthy: "健康", unavailable: "不可用",
     language: "语言", planner: "计划员", workspaceEyebrow: "计划员工作台",
     pageOverview: "计划总览", pageOperationalMetrics: "运营指标", pageData: "数据就绪", pageMaterials: "物料计划", pageRuns: "排程任务",
-    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageDispatch: "派工建议", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
+    pageResults: "排程结果", pageRelease: "释放管理", pageBuffer: "约束缓冲执行", pageDispatch: "派工建议", pagePublicDemo: "公开演示闭环", pageExceptions: "异常中心", pageCalendar: "日历配置", pageAdmin: "管理后台",
     descriptionOverview: "集中查看排程范围、异常和下一步工作。",
     descriptionOperationalMetrics: "按可靠性、稳定性和流速检查 DDOM 日常运行表现。",
     descriptionData: "检查主数据版本与运行状态快照。",
@@ -22,6 +22,7 @@ const I18N = {
     descriptionRelease: "依据绳长、物料、WIP 和缓冲管理工单释放。",
     descriptionBuffer: "按约束缓冲阶段和时间区域协同工单接收与开工。",
     descriptionDispatch: "按缓冲颜色、渗透率和现场状态生成资源级派工建议。",
+    descriptionPublicDemo: "使用 PUBLIC-DEMO-GOLDEN-DATA-V1 文件包演示 DDAE 配置接收、SDBR 运行和反馈交接。",
     descriptionExceptions: "集中处理失败、死信和执行偏差。",
     descriptionCalendar: "检查日历事项、冲突优先级和 CP-SAT 最终可用窗口。",
     descriptionAdmin: "管理主数据、求解器、集成和权限配置。",
@@ -51,6 +52,19 @@ const I18N = {
     operationalSnapshotGenerated: "运行快照已生成。",
     operationalSnapshotGenerateFailed: "运行快照生成失败。",
     operationalSnapshotMissing: "没有可复制的运行状态快照。",
+    publicDemoContext: "公开演示闭环", publicDemoSummary: "公开演示闭环摘要", runPublicDemo: "运行演示闭环",
+    publicDemoOnly: "仅公开演示", controlledDemo: "受控契约演示", packageValidation: "数据包校验",
+    frozenPackage: "冻结数据包", handoffValidation: "交接校验", ddaeHandoff: "DDAE 到 SDBR",
+    contractValidation: "契约校验", validationResults: "校验结果", feedbackHandoff: "反馈交接",
+    adapterValidation: "Adapter 校验", adventureWorksAdapter: "AdventureWorks 排程 Adapter",
+    adapterMode: "Adapter 模式", generatedRows: "生成行数", explicitCalendars: "显式资源日历",
+    formalSolverGate: "正式求解入口", generatedPackage: "生成包路径",
+    materialFeasibleClaim: "物料可行性生产声明",
+    sdbrFeedbackFiles: "SDBR 到 DDAE", boundary: "边界", nonClaims: "非声明",
+    publicDemoLoadFailed: "无法读取公开演示闭环", publicDemoRetryAdvice: "请确认 frozen package 与 handoff 文件可用后重试。",
+    publicDemoRunCompleted: "公开演示反馈文件已生成。", publicDemoRunNotReady: "公开演示尚未就绪，请检查 DDAE handoff payload。",
+    businessUserView: "业务用户视图", sdbrExecutionDemo: "SDBR 执行演示",
+    sdbrExecutionDemoIntro: "这部分用业务语言说明：SDBR 如何接收 DDAE 的受控演示交接，校验其可信性，转换为有界演示排程输入，并把结果反馈给 DDAE 复核。",
     ddmrpRuntime: "DDMRP 运行", ddmrpRuntimeStatus: "DDMRP 运行状态", ddmrpRuntimeSummary: "DDMRP 运行状态摘要",
     decouplingPoints: "解耦点", redZone: "红区", yellowZone: "黄区", greenZone: "绿区", aboveGreenZone: "高于绿区",
     replenishmentSuggestions: "补货建议", missingData: "缺失数据", viewDdmrpDetails: "解耦点明细",
@@ -341,13 +355,13 @@ const I18N = {
     primaryNavigation: "Primary navigation", planningContext: "Planning context", toggleNavigation: "Toggle navigation",
     productName: "Demand-Driven Planner Workbench", navOverview: "Planning Overview", navOperationalMetrics: "Operational Metrics", navData: "Data Readiness", navMaterials: "Materials Planning",
     navRuns: "Planning Runs", navResults: "Schedule Results", navRelease: "Release Management", navBuffer: "Buffer Execution", navDispatch: "Dispatch Suggestions",
-    navExceptions: "Exceptions", navCalendar: "Calendar Configuration", navAdmin: "Administration", noUnreadExceptions: "No unread exceptions",
+    navPublicDemo: "Public Demo Loop", navExceptions: "Exceptions", navCalendar: "Calendar Configuration", navAdmin: "Administration", noUnreadExceptions: "No unread exceptions",
     apiConnected: "Local service connected", planningScope: "Planning scope", defaultFactory: "Default factory",
     masterDataVersionLabel: "Master data version", snapshotLabel: "Operational snapshot", systemHealthLabel: "System health",
     notSelected: "Not selected", checking: "Checking", healthy: "Healthy", unavailable: "Unavailable",
     language: "Language", planner: "Planner", workspaceEyebrow: "Planner Workbench",
     pageOverview: "Planning Overview", pageOperationalMetrics: "Operational Metrics", pageData: "Data Readiness", pageMaterials: "Materials Planning", pageRuns: "Planning Runs",
-    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageDispatch: "Dispatch Suggestions", pageExceptions: "Exceptions", pageCalendar: "Calendar Configuration", pageAdmin: "Administration",
+    pageResults: "Schedule Results", pageRelease: "Release Management", pageBuffer: "Constraint Buffer Execution", pageDispatch: "Dispatch Suggestions", pagePublicDemo: "Public Demo Loop", pageExceptions: "Exceptions", pageCalendar: "Calendar Configuration", pageAdmin: "Administration",
     descriptionOverview: "Review planning context, exceptions, and the next work to perform.",
     descriptionOperationalMetrics: "Review DDOM daily performance by reliability, stability, and flow velocity.",
     descriptionData: "Check master data versions and operational snapshots.",
@@ -357,6 +371,7 @@ const I18N = {
     descriptionRelease: "Control release using rope time, material, WIP, and buffers.",
     descriptionBuffer: "Coordinate order receipt and start by constraint-buffer stage and time zone.",
     descriptionDispatch: "Generate resource-level dispatch suggestions by buffer color, penetration, and shop-floor state.",
+    descriptionPublicDemo: "Demonstrate DDAE config intake, SDBR demo run, and feedback handoff using the PUBLIC-DEMO-GOLDEN-DATA-V1 file package.",
     descriptionExceptions: "Handle failures, dead letters, and execution variance.",
     descriptionCalendar: "Review calendar elements, conflict priority, and final CP-SAT availability windows.",
     descriptionAdmin: "Manage master data, solvers, integrations, and access.",
@@ -386,6 +401,19 @@ const I18N = {
     operationalSnapshotGenerated: "Operational snapshot generated.",
     operationalSnapshotGenerateFailed: "Operational snapshot generation failed.",
     operationalSnapshotMissing: "No operational snapshot is available to copy.",
+    publicDemoContext: "Public demo loop", publicDemoSummary: "Public demo loop summary", runPublicDemo: "Run demo loop",
+    publicDemoOnly: "Public demo only", controlledDemo: "Controlled contract demo", packageValidation: "Package validation",
+    frozenPackage: "Frozen package", handoffValidation: "Handoff validation", ddaeHandoff: "DDAE to SDBR",
+    contractValidation: "Contract validation", validationResults: "Validation results", feedbackHandoff: "Feedback handoff",
+    adapterValidation: "Adapter validation", adventureWorksAdapter: "AdventureWorks scheduling adapter",
+    adapterMode: "Adapter mode", generatedRows: "Generated rows", explicitCalendars: "Explicit resource calendars",
+    formalSolverGate: "Formal solver gate", generatedPackage: "Generated package path",
+    materialFeasibleClaim: "Material-feasible production claim",
+    sdbrFeedbackFiles: "SDBR to DDAE", boundary: "Boundary", nonClaims: "Non-claims",
+    publicDemoLoadFailed: "Public demo loop could not be loaded", publicDemoRetryAdvice: "Check that the frozen package and handoff files are available, then retry.",
+    publicDemoRunCompleted: "Public demo feedback files generated.", publicDemoRunNotReady: "Public demo is not ready. Check the DDAE handoff payload.",
+    businessUserView: "Business user view", sdbrExecutionDemo: "SDBR execution demo",
+    sdbrExecutionDemoIntro: "This section explains in business language how SDBR receives the controlled DDAE handoff, validates whether it is trustworthy, converts it into bounded demo scheduling input, and sends feedback to DDAE for review.",
     ddmrpRuntime: "DDMRP runtime", ddmrpRuntimeStatus: "DDMRP runtime status", ddmrpRuntimeSummary: "DDMRP runtime summary",
     decouplingPoints: "Decoupling points", redZone: "Red", yellowZone: "Yellow", greenZone: "Green", aboveGreenZone: "Above green",
     replenishmentSuggestions: "Replenishment suggestions", missingData: "Missing data", viewDdmrpDetails: "Decoupling point details",
@@ -684,6 +712,7 @@ const ROUTES = {
   "release-management": ["pageRelease", "descriptionRelease"],
   "buffer-board": ["pageBuffer", "descriptionBuffer"],
   "dispatch-suggestions": ["pageDispatch", "descriptionDispatch"],
+  "public-demo": ["pagePublicDemo", "descriptionPublicDemo"],
   exceptions: ["pageExceptions", "descriptionExceptions"],
   calendar: ["pageCalendar", "descriptionCalendar"],
   administration: ["pageAdmin", "descriptionAdmin"]
@@ -720,6 +749,7 @@ let releaseManagementUsesLatestOperationalState = false;
 let bufferBoardData = null;
 let dispatchPriorityData = null;
 let mesDispatchIssueData = null;
+let publicDemoData = null;
 let selectedBufferRunID = null;
 let selectedDispatchRunID = null;
 let selectedBufferOrder = null;
@@ -810,10 +840,11 @@ function renderRoute(focusWorkspace = false) {
   const isReleaseManagement = route === "release-management";
   const isBufferBoard = route === "buffer-board";
   const isDispatchSuggestions = route === "dispatch-suggestions";
+  const isPublicDemo = route === "public-demo";
   const isExceptions = route === "exceptions";
   const isCalendar = route === "calendar";
   const isAdministration = route === "administration";
-  document.getElementById("generic-workspace").hidden = isOverview || isOperationalMetrics || isDataReadiness || isMaterialPlanning || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isDispatchSuggestions || isExceptions || isCalendar || isAdministration;
+  document.getElementById("generic-workspace").hidden = isOverview || isOperationalMetrics || isDataReadiness || isMaterialPlanning || isPlanningRuns || isScheduleResults || isReleaseManagement || isBufferBoard || isDispatchSuggestions || isPublicDemo || isExceptions || isCalendar || isAdministration;
   document.getElementById("overview-view").hidden = !isOverview;
   document.getElementById("operational-metrics-view").hidden = !isOperationalMetrics;
   document.getElementById("data-readiness-view").hidden = !isDataReadiness;
@@ -823,6 +854,7 @@ function renderRoute(focusWorkspace = false) {
   document.getElementById("release-management-view").hidden = !isReleaseManagement;
   document.getElementById("buffer-board-view").hidden = !isBufferBoard;
   document.getElementById("dispatch-suggestions-view").hidden = !isDispatchSuggestions;
+  document.getElementById("public-demo-view").hidden = !isPublicDemo;
   document.getElementById("exceptions-view").hidden = !isExceptions;
   document.getElementById("calendar-view").hidden = !isCalendar;
   document.getElementById("administration-view").hidden = !isAdministration;
@@ -835,6 +867,7 @@ function renderRoute(focusWorkspace = false) {
   if (isReleaseManagement) loadReleaseManagementRuns();
   if (isBufferBoard) loadBufferBoardRuns();
   if (isDispatchSuggestions) loadDispatchSuggestionRuns();
+  if (isPublicDemo) loadPublicDemoGoldenLoop();
   if (isExceptions) loadExceptionCenter();
   if (isCalendar) loadCalendarWorkspace();
   if (isAdministration) loadAdministration();
@@ -3993,6 +4026,240 @@ function detailMetric(labelKey, value) {
   return metric;
 }
 
+async function loadPublicDemoGoldenLoop() {
+  try {
+    const response = await fetch("/planner/workbench/public-demo/golden-loop", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    publicDemoData = (await response.json()).Data;
+    document.getElementById("public-demo-error").hidden = true;
+    document.getElementById("public-demo-content").hidden = false;
+    renderPublicDemoGoldenLoop();
+  } catch (_error) {
+    publicDemoData = null;
+    document.getElementById("public-demo-error").hidden = false;
+    document.getElementById("public-demo-content").hidden = true;
+  }
+}
+
+async function runPublicDemoGoldenLoop() {
+  const button = document.getElementById("run-public-demo");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const response = await fetch("/planner/workbench/public-demo/golden-loop/run", { method: "POST", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(String(response.status));
+    publicDemoData = (await response.json()).Data;
+    renderPublicDemoGoldenLoop();
+    showNotification(
+      publicDemoData.RunStatus === "Completed" ? translate("publicDemoRunCompleted") : translate("publicDemoRunNotReady"),
+      publicDemoData.RunStatus === "Completed" ? "success" : "error"
+    );
+  } catch (_error) {
+    showNotification(translate("actionFailed"), "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderPublicDemoGoldenLoop() {
+  const data = publicDemoData || {};
+  const chip = document.getElementById("public-demo-chip");
+  const validationStatus = data.Validation?.OverallStatus || data.RunStatus || "NotRun";
+  chip.className = `status-chip ${validationStatus === "AcceptedForDemo" || data.RunStatus === "Completed" ? "is-valid" : "neutral"}`;
+  chip.textContent = displayValue(validationStatus);
+  setText("public-demo-labels", (data.Labels || []).join(" · "));
+  const summary = document.getElementById("public-demo-summary");
+  summary.replaceChildren(
+    detailMetric("packageValidation", data.Package?.Status),
+    detailMetric("handoffValidation", data.HandoffInput?.Status),
+    detailMetric("contractValidation", validationStatus),
+    detailMetric("feedbackHandoff", data.RunStatus || outputCompletionLabel(data.HandoffOutputs))
+  );
+  renderPublicDemoPackage(data.Package || {});
+  renderPublicDemoHandoff(data.HandoffInput || {});
+  renderPublicDemoValidation(data.Validation || {});
+  renderPublicDemoAdapter(data.AdventureWorksSchedulingAdapter || {});
+  renderPublicDemoOutputs(data.HandoffOutputs || {});
+  const nonClaims = document.getElementById("public-demo-nonclaims");
+  nonClaims.replaceChildren(...(data.NonClaims || []).map((claim) => {
+    const item = document.createElement("li");
+    item.textContent = claim;
+    return item;
+  }));
+  renderPublicDemoBusinessView(data);
+}
+
+function renderPublicDemoPackage(packageData) {
+  renderKeyValueList("public-demo-package", [
+    ["PackageID", packageData.PackageID],
+    ["Status", packageData.Status],
+    ["PackageChecksum", compactFingerprint(packageData.PackageChecksum)],
+    ["ExpectedPackageChecksum", compactFingerprint(packageData.ExpectedPackageChecksum)],
+    ["ChecksumMatches", businessValue(packageData.ChecksumMatches)],
+    ["CanonicalFileCount", packageData.CanonicalFileCount],
+    ["CrosswalkFilePresent", businessValue(packageData.CrosswalkFilePresent)]
+  ]);
+}
+
+function renderPublicDemoHandoff(handoff) {
+  renderKeyValueList("public-demo-handoff", [
+    ["Status", handoff.Status],
+    ["MessageID", handoff.MessageID],
+    ["IdempotencyKey", handoff.IdempotencyKey],
+    ["Path", handoff.Path]
+  ]);
+}
+
+function renderPublicDemoValidation(validation) {
+  const rows = [
+    ["OverallStatus", validation.OverallStatus],
+    ["SchemaValidation", validation.SchemaValidation],
+    ["StatusApprovalValidation", validation.StatusApprovalValidation],
+    ["FingerprintValidation", validation.FingerprintValidation],
+    ["CrosswalkValidation", validation.CrosswalkValidation?.Status],
+    ["ConfigAck", validation.ConfigAck?.ProcessingStatus]
+  ];
+  const container = document.getElementById("public-demo-validation");
+  container.replaceChildren();
+  rows.forEach(([key, value]) => container.append(keyValueCard(key, value)));
+  (validation.ReviewedCandidateMappingHits || []).forEach((hit) => {
+    container.append(keyValueCard(hit.CandidateID, `${hit.Hit ? translate("yes") : translate("no")} · ${hit.MappingConfidence || "-"}`));
+  });
+}
+
+function renderPublicDemoAdapter(adapter) {
+  const declarations = adapter.Declarations || {};
+  const material = adapter.MaterialConstraints || {};
+  const routing = adapter.RoutingPathCoverage || {};
+  const resources = adapter.OperationResourceCoverage || {};
+  const bounded = adapter.BoundedFixtureScheduling || {};
+  const calendarCount = (adapter.CalendarMappings || []).filter((row) => row.MappingStatus === "Explicit").length;
+  renderKeyValueList("public-demo-adapter", [
+    ["Status", adapter.Status],
+    [translate("adapterMode"), adapter.Mode],
+    ["AdapterProfileID", adapter.AdapterProfileID],
+    ["CapacityUnitNormalizationRuleID", declarations.CapacityUnitNormalizationRuleID],
+    ["MaterialConstraintsMode", declarations.MaterialConstraintsMode],
+    [translate("materialFeasibleClaim"), businessValue(material.MaterialFeasibleProductionClaim === true)],
+    ["SetupChangeoverMode", declarations.SetupChangeoverMode],
+    [translate("explicitCalendars"), `${calendarCount} / ${(adapter.CalendarMappings || []).length}`],
+    [translate("generatedRows"), `${routing.SelectedFixtureWorkOrderCount || 0} ${translate("orders")} · ${resources.GeneratedOperationCount || 0} ${translate("operations")}`],
+    [translate("formalSolverGate"), adapter.FormalSolverGate?.["CP-SAT/OR-Tools"]],
+    [translate("generatedPackage"), adapter.GeneratedPackagePath || "-"],
+    ["BoundedFixtureScheduling", bounded.Status]
+  ]);
+}
+
+function renderPublicDemoOutputs(outputs) {
+  const rows = Object.entries(outputs).map(([name, value]) => [
+    name,
+    `${value.Exists ? translate("yes") : translate("no")} · ${value.SizeBytes || 0} B`
+  ]);
+  renderKeyValueList("public-demo-outputs", rows);
+}
+
+function renderKeyValueList(elementId, rows) {
+  const container = document.getElementById(elementId);
+  container.replaceChildren(...rows.map(([key, value]) => keyValueCard(key, value)));
+}
+
+function keyValueCard(label, value) {
+  const card = document.createElement("div");
+  card.className = "policy-group-item";
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const text = document.createElement("span");
+  text.textContent = displayValue(value);
+  card.append(title, text);
+  return card;
+}
+
+function outputCompletionLabel(outputs) {
+  const values = Object.values(outputs || {});
+  return values.length && values.every((item) => item.Exists) ? "Completed" : "NotGenerated";
+}
+
+function renderPublicDemoBusinessView(data) {
+  const adapter = data.AdventureWorksSchedulingAdapter || {};
+  const declarations = adapter.Declarations || {};
+  const material = adapter.MaterialConstraints || {};
+  const routing = adapter.RoutingPathCoverage || {};
+  const resources = adapter.OperationResourceCoverage || {};
+  const validation = data.Validation || {};
+  const outputs = data.HandoffOutputs || {};
+  const calendarCount = (adapter.CalendarMappings || []).filter((row) => row.MappingStatus === "Explicit").length;
+  const outputNames = Object.entries(outputs)
+    .filter(([, value]) => value?.Exists)
+    .map(([name]) => name);
+  const steps = currentLanguage === "zh"
+    ? [
+        {
+          title: "1. SDBR 收到了什么",
+          body: `SDBR 收到 DDAE 的配置/运行交接和公开演示数据包，用于判断这次受控演示能否进入 SDBR 执行侧校验。数据包状态：${displayValue(data.Package?.Status)}；交接状态：${displayValue(data.HandoffInput?.Status)}。`,
+          trace: `追溯：${displayValue(data.Package?.PackageID)} · ${displayValue(data.HandoffInput?.MessageID)}`
+        },
+        {
+          title: "2. SDBR 校验了什么",
+          body: `SDBR 检查 schema、审批状态、指纹、crosswalk 和配置 ACK，用业务话说就是确认“这份交接是否可信、是否可用于本次演示”。当前校验结果：${displayValue(validation.OverallStatus)}。`,
+          trace: `Schema ${displayValue(validation.SchemaValidation)} · Fingerprint ${displayValue(validation.FingerprintValidation)} · Crosswalk ${displayValue(validation.CrosswalkValidation?.Status)}`
+        },
+        {
+          title: "3. SDBR 为演示转换了什么",
+          body: `SDBR 使用 AdventureWorks Adapter 把公开演示数据转换为有界演示排程输入：${routing.SelectedFixtureWorkOrderCount || 0} 个代表性演示工单、${resources.GeneratedOperationCount || 0} 道工序、${calendarCount} 个 SDBR 自有资源日历。`,
+          trace: `模式：${displayValue(adapter.Mode)} · Adapter：${displayValue(adapter.AdapterProfileID)}`
+        },
+        {
+          title: "4. SDBR 没有声明什么",
+          body: `本演示不声明物料可行性生产排程，不声明完整生产 routing 权威，也不打开正式 CP-SAT / OR-Tools 生产入口。物料可行性生产声明：${businessValue(material.MaterialFeasibleProductionClaim === true)}。`,
+          trace: `MaterialConstraintsMode=${displayValue(declarations.MaterialConstraintsMode)} · MaterialConstraints=[] · Formal solver=${displayValue(adapter.FormalSolverGate?.["CP-SAT/OR-Tools"])}`
+        },
+        {
+          title: "5. SDBR 回传了什么",
+          body: `SDBR 回传 PlanningRunFeedback、VarianceAnalysisFeedback 和 ValidationSummary，供 DDAE 做治理复核。这些反馈不会自动修改 DDAE 已批准主设置。`,
+          trace: `已生成：${outputNames.length ? outputNames.join(" · ") : "尚未生成反馈文件"}`
+        }
+      ]
+    : [
+        {
+          title: "1. What SDBR received",
+          body: `SDBR receives the DDAE configuration/runtime handoff and the public demo package to decide whether this controlled demo can enter execution-side validation. Package status: ${displayValue(data.Package?.Status)}; handoff status: ${displayValue(data.HandoffInput?.Status)}.`,
+          trace: `Traceability: ${displayValue(data.Package?.PackageID)} · ${displayValue(data.HandoffInput?.MessageID)}`
+        },
+        {
+          title: "2. What SDBR validated",
+          body: `SDBR checks schema, approval status, fingerprint, crosswalk, and config ACK. In business terms, this answers whether the handoff is trustworthy and usable for this demo. Current validation result: ${displayValue(validation.OverallStatus)}.`,
+          trace: `Schema ${displayValue(validation.SchemaValidation)} · Fingerprint ${displayValue(validation.FingerprintValidation)} · Crosswalk ${displayValue(validation.CrosswalkValidation?.Status)}`
+        },
+        {
+          title: "3. What SDBR converted for the demo",
+          body: `SDBR uses the AdventureWorks adapter to convert the public demo data into bounded demo scheduling input: ${routing.SelectedFixtureWorkOrderCount || 0} representative demo work orders, ${resources.GeneratedOperationCount || 0} operations, and ${calendarCount} SDBR-owned resource calendars.`,
+          trace: `Mode: ${displayValue(adapter.Mode)} · Adapter: ${displayValue(adapter.AdapterProfileID)}`
+        },
+        {
+          title: "4. What SDBR does not claim",
+          body: `This demo does not claim material-feasible production scheduling, full production routing authority, or formal CP-SAT / OR-Tools production entry. Material-feasible production claim: ${businessValue(material.MaterialFeasibleProductionClaim === true)}.`,
+          trace: `MaterialConstraintsMode=${displayValue(declarations.MaterialConstraintsMode)} · MaterialConstraints=[] · Formal solver=${displayValue(adapter.FormalSolverGate?.["CP-SAT/OR-Tools"])}`
+        },
+        {
+          title: "5. What SDBR sent back",
+          body: `SDBR sends PlanningRunFeedback, VarianceAnalysisFeedback, and ValidationSummary back to DDAE for governance review. These feedback records do not automatically mutate approved DDAE master settings.`,
+          trace: `Generated: ${outputNames.length ? outputNames.join(" · ") : "No feedback files generated yet"}`
+        }
+      ];
+  const list = document.getElementById("public-demo-business-steps");
+  list.replaceChildren(...steps.map((step) => {
+    const item = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = step.title;
+    const body = document.createElement("p");
+    body.textContent = step.body;
+    const trace = document.createElement("small");
+    trace.textContent = step.trace;
+    item.append(title, body, trace);
+    return item;
+  }));
+}
+
 function bufferMatrixCell(cell) {
   const element = document.createElement("section");
   element.className = `buffer-matrix-cell zone-${cell.Zone}`;
@@ -5137,6 +5404,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("dispatch-evaluated-at").addEventListener("change", loadDispatchSuggestions);
   document.getElementById("refresh-dispatch-suggestions").addEventListener("click", loadDispatchSuggestions);
   document.getElementById("issue-mes-dispatch-suggestions").addEventListener("click", issueMesDispatchSuggestions);
+  document.getElementById("refresh-public-demo").addEventListener("click", loadPublicDemoGoldenLoop);
+  document.getElementById("run-public-demo").addEventListener("click", runPublicDemoGoldenLoop);
   document.getElementById("close-buffer-order-detail").addEventListener("click", () => closeSideDrawer("buffer-order-detail"));
   document.getElementById("close-buffer-transaction-dialog").addEventListener("click", () => document.getElementById("buffer-transaction-dialog").close());
   document.getElementById("cancel-buffer-transaction").addEventListener("click", () => document.getElementById("buffer-transaction-dialog").close());

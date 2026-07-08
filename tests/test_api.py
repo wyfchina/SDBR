@@ -11,6 +11,7 @@ from sdbr.operational_state import create_operational_state_snapshot
 from sdbr.release_authorization import create_release_authorization
 from sdbr.replanning import ReplanRequest
 from sdbr.state_store import WorkbenchStateStore
+from sdbr.test_data import P1_MARKET_CONTROL_RUN_ID, seed_baseline_test_data
 
 
 def test_planner_workbench_demo_endpoint_returns_payload():
@@ -2662,6 +2663,33 @@ def test_schedule_results_returns_p1_market_control_read_model():
         market["Boundary"]
         == "Internal S-DBR execution read model; no new DDAE protocol required."
     )
+
+
+def test_p1_market_control_case_executes_and_returns_mto_mta_load():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    execute = client.post(
+        f"/planner/workbench/planning-runs/{P1_MARKET_CONTROL_RUN_ID}/execute",
+        json={
+            "ExecutedBy": "pytest",
+            "StartedAt": "2026-07-09T08:05:00+00:00",
+            "CompletedAt": "2026-07-09T08:06:00+00:00",
+        },
+    )
+    assert execute.status_code == 200
+
+    response = client.get(
+        f"/planner/workbench/schedule-results/runs/{P1_MARKET_CONTROL_RUN_ID}/workbench"
+    )
+
+    assert response.status_code == 200
+    market = response.json()["Data"]["SDBRMarketControl"]
+    assert market["CCRPlannedLoad"]["Summary"]["MtoLoadMinutes"] > 0
+    assert market["CCRPlannedLoad"]["Summary"]["MtaLoadMinutes"] > 0
+    assert market["CCRPlannedLoad"]["Summary"]["MappedMtaSuggestionCount"] >= 1
+    assert market["UnifiedBufferPriority"]["Summary"]["RedCount"] >= 1
 
 
 def test_be_ui_003_schedule_result_rejects_incomplete_run():

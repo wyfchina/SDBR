@@ -11,6 +11,8 @@ from sdbr.test_data import (
     BASELINE_OPERATIONAL_STATE_ID,
     DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
     MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID,
+    P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID,
+    P1_MARKET_CONTROL_RUN_ID,
     WIP_LIMIT_OPERATIONAL_STATE_ID,
     main,
     reset_test_database,
@@ -32,6 +34,8 @@ def test_seed_baseline_test_data_builds_business_readable_state():
     assert MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert WIP_LIMIT_OPERATIONAL_STATE_ID in store.operational_state_snapshots
     assert DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID in store.master_data_versions
+    assert P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID in store.master_data_versions
+    assert P1_MARKET_CONTROL_RUN_ID in store.planning_runs
     assert {
         "TST-RUN-BASELINE-001",
         "TST-RUN-MATERIAL-SHORTAGE-001",
@@ -47,6 +51,11 @@ def test_seed_baseline_test_data_builds_business_readable_state():
         order["OrderID"].startswith("TST-")
         for order in store.master_data_versions[BASELINE_MASTER_DATA_VERSION_ID]["Orders"]
     )
+    p1_version = store.master_data_versions[P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID]
+    p1_demand_classes = {row["OrderID"]: row.get("DemandClass") for row in p1_version["Orders"]}
+    assert "MTO" in p1_demand_classes.values()
+    assert "MTA" in p1_demand_classes.values()
+    assert any(row.get("DemandClass") == "MTA" for row in p1_version["Orders"])
     ddmrp_version = store.master_data_versions[DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID]
     assert len(ddmrp_version["DdmrpDecouplingPoints"]) == 4
     assert {item["ItemID"] for item in ddmrp_version["DdmrpDecouplingPoints"]} == {
@@ -57,12 +66,26 @@ def test_seed_baseline_test_data_builds_business_readable_state():
     }
 
 
+def test_p1_market_control_case_contains_mto_and_mta_orders():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+
+    mdv = store.master_data_versions[P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID]
+    demand_classes = {row["OrderID"]: row.get("DemandClass") for row in mdv["Orders"]}
+
+    assert P1_MARKET_CONTROL_RUN_ID in store.planning_runs
+    assert "MTO" in demand_classes.values()
+    assert "MTA" in demand_classes.values()
+    assert any(row.get("DemandClass") == "MTA" for row in mdv["Orders"])
+    assert mdv["DdmrpRuntimeLines"][0]["ItemID"] == "TST-FG-C"
+
+
 def test_test_case_catalog_documents_business_acceptance_cases():
     # BE-DATA-014 / BE-SOLVER-009 / BE-REL-004
     payload = build_test_case_catalog_payload()
 
     assert payload["DatasetID"] == "TST-DATASET-BASELINE-20260619"
-    assert payload["CaseCount"] == 9
+    assert payload["CaseCount"] == 10
     assert payload["DdmrpRuntimeCases"][0]["MasterDataVersionID"] == (
         DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
     )
@@ -220,7 +243,7 @@ def test_test_case_catalog_endpoint_exposes_environment_metadata(tmp_path):
 
     assert response.status_code == 200
     data = response.json()["Data"]
-    assert data["CaseCount"] == 9
+    assert data["CaseCount"] == 10
     assert data["DdmrpRuntimeCases"][0]["CaseGroup"] == "DDMRPRuntimeCases"
     assert data["Environment"]["EnvironmentID"] == "test"
     assert data["Cases"][0]["CoveredSpecIDs"]
@@ -237,7 +260,7 @@ def test_test_case_acceptance_endpoint_marks_pending_cases_as_needing_execution(
     data = response.json()["Data"]
     assert data["AcceptancePackageID"] == "TST-ACP-BASELINE-20260619"
     assert data["Summary"]["PendingHumanDecisionCount"] == 0
-    assert data["Summary"]["NeedsExecutionCount"] == 9
+    assert data["Summary"]["NeedsExecutionCount"] == 10
     assert {case["AcceptanceStatus"] for case in data["Cases"]} == {
         "NeedsExecution"
     }

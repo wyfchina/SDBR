@@ -29,6 +29,8 @@ BASELINE_OPERATIONAL_STATE_ID = "TST-OPS-BASELINE-20260619"
 MATERIAL_SHORTAGE_OPERATIONAL_STATE_ID = "TST-OPS-MATERIAL-SHORTAGE-20260619"
 WIP_LIMIT_OPERATIONAL_STATE_ID = "TST-OPS-WIP-LIMIT-20260619"
 DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID = "TST-DDMRP-MDV-NET-FLOW-20260625"
+P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID = "TST-P1-MDV-MARKET-CONTROL-20260709"
+P1_MARKET_CONTROL_RUN_ID = "TST-P1-RUN-MARKET-CONTROL-20260709"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +191,36 @@ def test_case_catalog() -> list[TestCaseSpec]:
                 "BE-REL-004",
                 "BE-REL-005",
                 "BE-UI-004",
+            ],
+        ),
+        TestCaseSpec(
+            case_id="TST-P1-MARKET-CONTROL",
+            case_group="SDBRMarketControlCases",
+            case_type="MarketControl",
+            name_zh="S-DBR 市场承诺与约束保护",
+            name_en="S-DBR market promise and constraint protection",
+            planning_run_id=P1_MARKET_CONTROL_RUN_ID,
+            master_data_version_id=P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID,
+            operational_state_snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+            purpose_zh="验证同一排程结果能同时显示 MTO 约束负荷、MTA 补货负荷、安全承诺信号和统一缓冲优先级。",
+            expected_solver_backend_id="ortools",
+            expected_planning_run_status="Completed",
+            expected_solver_statuses=["Optimal", "Feasible"],
+            expected_release_ready_min=0,
+            expected_blocking_codes=[],
+            expected_publication_status="Draft",
+            expected_schedule_assertions=["ALL_ORDERS_SCHEDULED"],
+            expected_diagnostic_codes=["ORTOOLS_CP_SAT_MODEL"],
+            input_summary_zh="使用 3 张 P1 测试工单，其中 2 张为 MTO，1 张为 MTA 补货；MTA 补货建议已映射到可执行工单。",
+            expected_schedule_zh="CP-SAT 应完成有限能力排程，约束资源上同时形成 MTO 和 MTA 计划负荷。",
+            expected_release_zh="本案例聚焦 S-DBR 运行控制信号，释放候选数量不作为验收重点。",
+            expected_publication_zh="排程完成后形成草案计划。",
+            covered_spec_ids=[
+                "BE-SDBR-001",
+                "BE-SDBR-002",
+                "BE-SDBR-003",
+                "BE-SDBR-004",
+                "BE-UI-003",
             ],
         ),
         TestCaseSpec(
@@ -482,6 +514,10 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
             requested_at=captured_at,
         )
     _seed_cp_sat_business_cases(store=store, captured_at=captured_at)
+    _seed_p1_market_control_case(
+        store=store,
+        captured_at=captured_at + timedelta(days=5),
+    )
     _seed_ddmrp_net_flow_case(store=store, captured_at=captured_at + timedelta(days=6))
 
     store.audit_events.append(
@@ -521,7 +557,9 @@ def reset_test_case_state(
     if case is None:
         raise KeyError(case_id)
     effective_reset_at = reset_at or datetime(2026, 6, 19, 8, tzinfo=timezone.utc)
-    if case.case_id.startswith("TST-CP-"):
+    if case.case_id == "TST-P1-MARKET-CONTROL":
+        _seed_p1_market_control_case(store=store, captured_at=effective_reset_at)
+    elif case.case_id.startswith("TST-CP-"):
         _reset_cp_sat_case(store=store, case=case, captured_at=effective_reset_at)
     else:
         _reset_business_closure_case(store=store, case=case, captured_at=effective_reset_at)
@@ -644,6 +682,112 @@ def _reset_cp_sat_case(
     )
     for override in run_options.get("FrozenCalendarOverrides", []):
         store.calendar_overrides[str(override["OverrideID"])] = dict(override)
+
+
+def _seed_p1_market_control_case(
+    *,
+    store: WorkbenchStateStore,
+    captured_at: datetime,
+) -> None:
+    resources = _baseline_resources()
+    routings = _p1_market_control_routings()
+    orders = _baseline_orders()[:3]
+    inventory_buffers = _baseline_inventory_buffers()
+    material_requirements = _baseline_material_requirements(orders)
+    validation = validate_master_data(
+        resources=resources,
+        routings=routings,
+        orders=orders,
+        inventory_buffers=inventory_buffers,
+        material_requirements=material_requirements,
+        calendar_timezone=None,
+    )
+    order_rows = _orders_to_dict(orders)
+    for row in order_rows:
+        row["DemandClass"] = "MTA" if row["OrderID"] == "TST-WO-0003" else "MTO"
+        if row["DemandClass"] == "MTA":
+            row["OrderType"] = "StockReplenishment"
+    store.master_data_versions[P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID] = {
+        "VersionID": P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID,
+        "CapturedAt": captured_at.isoformat(),
+        "SourceSystem": "SDBR-P1-TestData",
+        "CreatedBy": "sdbr-test-data",
+        "CalendarTimezone": None,
+        "Status": "Valid" if validation.is_valid else "Invalid",
+        "Resources": _resources_to_dict(resources),
+        "Routings": _routings_to_dict(routings),
+        "Orders": order_rows,
+        "InventoryBuffers": _inventory_buffers_to_dict(inventory_buffers),
+        "MaterialRequirements": _material_requirements_to_dict(material_requirements),
+        "DdmrpRuntimeLines": [
+            {
+                "ItemID": "TST-FG-C",
+                "LocationID": "TST-MAIN",
+                "PlanningStatus": "Red",
+                "SuggestedReplenishmentQty": 1,
+                "NetFlowPosition": 40,
+                "TopOfGreen": 100,
+                "RecommendedAction": "Replenish",
+                "BusinessMeaning": "P1 测试补货建议已映射到 TST-WO-0003。",
+            }
+        ],
+        "Validation": _validation_to_dict(validation),
+    }
+    store.planning_runs[P1_MARKET_CONTROL_RUN_ID] = _pending_run_record(
+        run_id=P1_MARKET_CONTROL_RUN_ID,
+        snapshot_id=BASELINE_OPERATIONAL_STATE_ID,
+        requested_at=captured_at,
+        master_data_version_id=P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID,
+        problem_id="TST-P1-PROBLEM-MARKET-CONTROL",
+        time_buffer_minutes=480,
+    )
+    store.audit_events.append(
+        {
+            "EventID": "AUD-TST-P1-MARKET-CONTROL-SEED",
+            "RunID": P1_MARKET_CONTROL_RUN_ID,
+            "Action": "P1MarketControlCaseSeeded",
+            "ActorID": "sdbr-test-data",
+            "OccurredAt": captured_at.isoformat(),
+            "Details": {
+                "SpecIDs": [
+                    "BE-SDBR-001",
+                    "BE-SDBR-002",
+                    "BE-SDBR-003",
+                    "BE-SDBR-004",
+                ],
+                "MasterDataVersionID": P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID,
+                "DemandClasses": ["MTO", "MTA"],
+            },
+        }
+    )
+
+
+def _p1_market_control_routings() -> list[Routing]:
+    routings = []
+    for routing in _baseline_routings():
+        if not routing.is_primary:
+            continue
+        routings.append(
+            Routing(
+                product_id=routing.product_id,
+                routing_id=routing.routing_id,
+                is_primary=routing.is_primary,
+                operations=[
+                    Operation(
+                        operation_id=operation.operation_id,
+                        resource_id=operation.resource_id,
+                        duration_minutes=operation.duration_minutes,
+                        sequence=operation.sequence,
+                        alternate_resource_ids=[],
+                        setup_family=operation.setup_family,
+                        earliest_start_at=operation.earliest_start_at,
+                        latest_end_at=operation.latest_end_at,
+                    )
+                    for operation in routing.operations
+                ],
+            )
+        )
+    return routings
 
 
 def _seed_ddmrp_net_flow_case(

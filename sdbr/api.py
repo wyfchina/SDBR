@@ -16,6 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
+from sdbr.adventureworks_product_demo_profile import (
+    build_adventureworks_product_demo_profile_status,
+)
 from sdbr.adventureworks_scheduling_adapter import (
     build_adventureworks_scheduling_adapter_status,
 )
@@ -1738,6 +1741,14 @@ def create_app(
             "Endpoint": "/planner/workbench/public-demo/adventureworks-scheduling-adapter/run",
             "StatusCode": 200,
             "Data": build_adventureworks_scheduling_adapter_status(write_artifacts=True),
+        }
+
+    @app.get("/planner/workbench/public-demo/adventureworks-product-demo-profile")
+    def planner_workbench_public_demo_adventureworks_product_profile() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/public-demo/adventureworks-product-demo-profile",
+            "StatusCode": 200,
+            "Data": build_adventureworks_product_demo_profile_status(),
         }
 
     @app.get("/planner/workbench/test-data/cases")

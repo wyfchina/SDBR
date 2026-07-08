@@ -60,11 +60,19 @@ const I18N = {
     adapterMode: "Adapter 模式", generatedRows: "生成行数", explicitCalendars: "显式资源日历",
     formalSolverGate: "正式求解入口", generatedPackage: "生成包路径",
     materialFeasibleClaim: "物料可行性生产声明",
+    productDemoMode: "产品演示模式", productDemoProfile: "AdventureWorks 产品演示 Profile",
+    activeProfile: "活动 Profile", demoAuthority: "演示权威数据", authorityRows: "权威行数",
+    sourceClassCoverage: "来源类型覆盖", panelPolicy: "页面策略", productDemoPanels: "产品演示页面",
+    placeholderPanels: "占位页面", sampleModePanels: "样例模式页面", validationDeadLetters: "校验死信",
+    setupOmission: "换型规则边界", materialOmission: "物料可行性边界",
     sdbrFeedbackFiles: "SDBR 到 DDAE", boundary: "边界", nonClaims: "非声明",
     publicDemoLoadFailed: "无法读取公开演示闭环", publicDemoRetryAdvice: "请确认 frozen package 与 handoff 文件可用后重试。",
     publicDemoRunCompleted: "公开演示反馈文件已生成。", publicDemoRunNotReady: "公开演示尚未就绪，请检查 DDAE handoff payload。",
     businessUserView: "业务用户视图", sdbrExecutionDemo: "SDBR 执行演示",
     sdbrExecutionDemoIntro: "这部分用业务语言说明：SDBR 如何接收 DDAE 的受控演示交接，校验其可信性，转换为有界演示排程输入，并把结果反馈给 DDAE 复核。",
+    demoConfidenceMeaning: "演示口径说明",
+    productDemoOnlyExplanation: "ProductDemoOnly = AdventureWorks 产品演示档案，包含明确补全的 DemoAuthority。",
+    publicDemoOnlyExplanation: "PublicDemoOnly = 底层公开数据包和受控 fixture adapter 的证据口径。",
     ddmrpRuntime: "DDMRP 运行", ddmrpRuntimeStatus: "DDMRP 运行状态", ddmrpRuntimeSummary: "DDMRP 运行状态摘要",
     decouplingPoints: "解耦点", redZone: "红区", yellowZone: "黄区", greenZone: "绿区", aboveGreenZone: "高于绿区",
     replenishmentSuggestions: "补货建议", missingData: "缺失数据", viewDdmrpDetails: "解耦点明细",
@@ -162,6 +170,21 @@ const I18N = {
     loadViews: "负荷视图", systemLoad: "系统负荷", singleResourceLoad: "单资源负荷", resourceType: "资源类型",
     owner: "负责人", category: "类别", date: "日期", loadMinutes: "负荷分钟", availableCapacity: "可用产能",
     utilization: "利用率", released: "已释放", unreleased: "未释放", remainingLoad: "剩余负荷",
+    sdbrFlowControl: "S-DBR 运行控制", plannedLoadAndProtectiveCapacity: "计划负荷与保护产能",
+    plannedLoad: "计划负荷", safeDate: "安全日期", releaseDiscipline: "释放纪律", stabilityGuidance: "稳定性建议",
+    protectiveCapacity: "保护产能", earliestSafeDate: "最早安全日期", monitorOnly: "仅监控，不作为硬约束",
+    flowStatus_Protected: "保护正常", flowStatus_NearLimit: "接近上限", flowStatus_Overloaded: "负荷超限",
+    flowStatus_Available: "可作为初步窗口", flowStatus_NeedsCapacityReview: "需要产能协调",
+    flowAction_OperateByBufferPriority: "按缓冲优先级运行",
+    flowAction_ReviewBeforeInsertOrder: "插单前人工复核",
+    flowAction_CoordinateBeforeReleaseOrPromise: "释放或承诺前先协调产能",
+    flowAction_NoHardConstraintNeeded: "无需转为硬约束",
+    flowAction_MonitorBeforeInsertOrder: "插单前关注",
+    flowAction_ProtectiveCapacityReview: "复核保护产能",
+    flowAction_EscalateCapacityOrReplanReview: "协调产能，必要时评审重排",
+    flowAction_AbsorbWithBufferAndProtectiveCapacity: "先用缓冲和保护产能吸收",
+    flowAction_OnlyWhenBufferOrLoadThresholdIsBreached: "仅在缓冲或负荷达到阈值时重排",
+    protectiveStatus_Healthy: "保护正常", protectiveStatus_Watch: "关注", protectiveStatus_AtRisk: "风险", protectiveStatus_CandidateConstraint: "候选约束",
     product: "产品", dueDate: "交期", plannedCompletion: "计划完工", delayMinutes: "延迟分钟",
     decisionSupport: "决策支持", scenarioComparison: "方案比较", baselineScenario: "基准方案",
     candidateScenario: "候选方案", compare: "比较", allResources: "全部资源", allOrders: "全部工单",
@@ -409,11 +432,19 @@ const I18N = {
     adapterMode: "Adapter mode", generatedRows: "Generated rows", explicitCalendars: "Explicit resource calendars",
     formalSolverGate: "Formal solver gate", generatedPackage: "Generated package path",
     materialFeasibleClaim: "Material-feasible production claim",
+    productDemoMode: "Product demo mode", productDemoProfile: "AdventureWorks ProductDemo profile",
+    activeProfile: "Active profile", demoAuthority: "DemoAuthority data", authorityRows: "Authority rows",
+    sourceClassCoverage: "Source class coverage", panelPolicy: "Panel policy", productDemoPanels: "Product demo panels",
+    placeholderPanels: "Placeholder panels", sampleModePanels: "SampleMode panels", validationDeadLetters: "Validation dead letters",
+    setupOmission: "Setup boundary", materialOmission: "Material feasibility boundary",
     sdbrFeedbackFiles: "SDBR to DDAE", boundary: "Boundary", nonClaims: "Non-claims",
     publicDemoLoadFailed: "Public demo loop could not be loaded", publicDemoRetryAdvice: "Check that the frozen package and handoff files are available, then retry.",
     publicDemoRunCompleted: "Public demo feedback files generated.", publicDemoRunNotReady: "Public demo is not ready. Check the DDAE handoff payload.",
     businessUserView: "Business user view", sdbrExecutionDemo: "SDBR execution demo",
     sdbrExecutionDemoIntro: "This section explains in business language how SDBR receives the controlled DDAE handoff, validates whether it is trustworthy, converts it into bounded demo scheduling input, and sends feedback to DDAE for review.",
+    demoConfidenceMeaning: "Demo confidence wording",
+    productDemoOnlyExplanation: "ProductDemoOnly = the AdventureWorks product-demo profile, including explicitly completed DemoAuthority evidence.",
+    publicDemoOnlyExplanation: "PublicDemoOnly = the evidence level for the underlying public data package and controlled fixture adapter.",
     ddmrpRuntime: "DDMRP runtime", ddmrpRuntimeStatus: "DDMRP runtime status", ddmrpRuntimeSummary: "DDMRP runtime summary",
     decouplingPoints: "Decoupling points", redZone: "Red", yellowZone: "Yellow", greenZone: "Green", aboveGreenZone: "Above green",
     replenishmentSuggestions: "Replenishment suggestions", missingData: "Missing data", viewDdmrpDetails: "Decoupling point details",
@@ -511,6 +542,21 @@ const I18N = {
     loadViews: "Load views", systemLoad: "System load", singleResourceLoad: "Single resource load", resourceType: "Resource type",
     owner: "Owner", category: "Category", date: "Date", loadMinutes: "Load minutes", availableCapacity: "Available capacity",
     utilization: "Utilization", released: "Released", unreleased: "Unreleased", remainingLoad: "Remaining load",
+    sdbrFlowControl: "S-DBR flow control", plannedLoadAndProtectiveCapacity: "Planned load and protective capacity",
+    plannedLoad: "Planned load", safeDate: "Safe date", releaseDiscipline: "Release discipline", stabilityGuidance: "Stability guidance",
+    protectiveCapacity: "Protective capacity", earliestSafeDate: "Earliest safe date", monitorOnly: "Monitor only, not a hard constraint",
+    flowStatus_Protected: "Protected", flowStatus_NearLimit: "Near limit", flowStatus_Overloaded: "Overloaded",
+    flowStatus_Available: "Available as an initial window", flowStatus_NeedsCapacityReview: "Needs capacity review",
+    flowAction_OperateByBufferPriority: "Operate by buffer priority",
+    flowAction_ReviewBeforeInsertOrder: "Review before inserting orders",
+    flowAction_CoordinateBeforeReleaseOrPromise: "Coordinate capacity before release or promise",
+    flowAction_NoHardConstraintNeeded: "No hard constraint needed",
+    flowAction_MonitorBeforeInsertOrder: "Monitor before inserting orders",
+    flowAction_ProtectiveCapacityReview: "Review protective capacity",
+    flowAction_EscalateCapacityOrReplanReview: "Coordinate capacity; review replan only if needed",
+    flowAction_AbsorbWithBufferAndProtectiveCapacity: "Absorb with buffers and protective capacity first",
+    flowAction_OnlyWhenBufferOrLoadThresholdIsBreached: "Replan only when buffer or load thresholds are breached",
+    protectiveStatus_Healthy: "Protected", protectiveStatus_Watch: "Watch", protectiveStatus_AtRisk: "At risk", protectiveStatus_CandidateConstraint: "Candidate constraint",
     product: "Product", dueDate: "Due date", plannedCompletion: "Planned completion", delayMinutes: "Delay minutes",
     decisionSupport: "Decision support", scenarioComparison: "Scenario comparison", baselineScenario: "Baseline",
     candidateScenario: "Candidate", compare: "Compare", allResources: "All resources", allOrders: "All orders",
@@ -2432,6 +2478,31 @@ function ganttBarTypeLabel(bar) {
   return translate(`${String(bar.BufferZone || "Green").toLowerCase()}Buffer`);
 }
 
+function ganttTickIntervalMinutes(rangeMs, zoomValue) {
+  const rangeMinutes = rangeMs / 60000;
+  const targetTicks = zoomValue >= 16 ? 120 : zoomValue >= 8 ? 72 : zoomValue >= 4 ? 48 : 4;
+  const intervals = zoomValue >= 8
+    ? [5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 10080]
+    : [360, 720, 1440, 2880, 10080];
+  return intervals.find((minutes) => rangeMinutes / minutes <= targetTicks) || intervals[intervals.length - 1];
+}
+
+function renderGanttTicks(axisTrack, from, rangeMs, zoomValue) {
+  const intervalMinutes = ganttTickIntervalMinutes(rangeMs, zoomValue);
+  const intervalMs = intervalMinutes * 60000;
+  const formatterOptions = intervalMinutes < 1440
+    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+    : { month: "short", day: "numeric" };
+  const formatter = new Intl.DateTimeFormat(currentLanguage === "zh" ? "zh-CN" : "en-US", formatterOptions);
+  for (let offset = 0, index = 0; offset <= rangeMs + 1 && index < 240; offset += intervalMs, index += 1) {
+    const tick = document.createElement("span");
+    tick.className = "gantt-tick";
+    tick.style.setProperty("--tick-position", `${Math.min(offset / rangeMs * 100, 100)}%`);
+    tick.textContent = formatter.format(new Date(from.getTime() + offset));
+    axisTrack.append(tick);
+  }
+}
+
 function renderGanttBoard() {
   const board = document.getElementById("gantt-board");
   board.replaceChildren();
@@ -2444,7 +2515,8 @@ function renderGanttBoard() {
   const from = fromValue ? new Date(`${fromValue}T00:00:00`) : new Date(scheduleResultData.Gantt.Range.Start);
   const to = toValue ? new Date(`${toValue}T23:59:59`) : new Date(scheduleResultData.Gantt.Range.End);
   const rangeMs = Math.max(to.getTime() - from.getTime(), 1);
-  board.style.setProperty("--gantt-zoom", document.getElementById("gantt-zoom").value);
+  const zoomValue = Number(document.getElementById("gantt-zoom").value) || 1;
+  board.style.setProperty("--gantt-zoom", String(zoomValue));
   const axis = document.createElement("div");
   axis.className = "gantt-axis";
   const axisLabel = document.createElement("div");
@@ -2452,13 +2524,7 @@ function renderGanttBoard() {
   axisLabel.textContent = activeGanttMode === "order" ? translate("workOrder") : translate("resource");
   const axisTrack = document.createElement("div");
   axisTrack.className = "gantt-axis-track";
-  for (let index = 0; index <= 4; index += 1) {
-    const tick = document.createElement("span");
-    tick.className = "gantt-tick";
-    tick.style.setProperty("--tick-position", `${index * 25}%`);
-    tick.textContent = new Intl.DateTimeFormat(currentLanguage === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric" }).format(new Date(from.getTime() + rangeMs * index / 4));
-    axisTrack.append(tick);
-  }
+  renderGanttTicks(axisTrack, from, rangeMs, zoomValue);
   axis.append(axisLabel, axisTrack);
   board.append(axis);
   const sourceRows = activeGanttMode === "order"
@@ -2553,6 +2619,7 @@ function filteredSystemLoadRows() {
 
 function renderSystemLoad() {
   if (!scheduleResultData) return;
+  renderSdbrFlowControl();
   const chart = document.getElementById("system-load-chart");
   chart.replaceChildren();
   filteredSystemLoadRows().forEach((row) => {
@@ -2577,6 +2644,80 @@ function renderSystemLoad() {
     item.append(label, track, value);
     chart.append(item);
   });
+}
+
+function renderSdbrFlowControl() {
+  const summary = document.getElementById("sdbr-flow-control-summary");
+  const list = document.getElementById("protective-capacity-list");
+  summary.replaceChildren();
+  list.replaceChildren();
+  const control = scheduleResultData?.SDBRFlowControl || {};
+  const plannedLoad = control.PlannedLoad || {};
+  const safeDate = control.SafeDate || {};
+  const release = control.ReleaseDiscipline || {};
+  const stability = control.StabilityGuidance || {};
+  [
+    ["plannedLoad", flowStatusLabel(plannedLoad.Status), flowActionLabel(plannedLoad.RecommendedAction), `${plannedLoad.MaxLoadResourceID || "-"} · ${plannedLoad.MaxLoadPercent || 0}%`],
+    ["safeDate", flowStatusLabel(safeDate.Status), safeDate.EarliestSafeDate || "-", safeDate.BusinessMeaning || "-"],
+    ["releaseDiscipline", translate("monitorOnly"), release.EarliestSuggestedReleaseAt ? formatDate(release.EarliestSuggestedReleaseAt) : "-", release.BusinessMeaning || "-"],
+    ["stabilityGuidance", flowActionLabel(stability.DefaultAction), flowActionLabel(stability.ReplanTrigger), stability.BusinessMeaning || "-"]
+  ].forEach(([labelKey, value, subValue, note]) => {
+    const card = document.createElement("article");
+    card.className = "flow-control-card";
+    const label = document.createElement("span");
+    label.textContent = translate(labelKey);
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    const small = document.createElement("small");
+    small.textContent = subValue;
+    const paragraph = document.createElement("p");
+    paragraph.textContent = note;
+    card.append(label, strong, small, paragraph);
+    summary.append(card);
+  });
+  (control.ProtectiveCapacity?.Rows || []).forEach((row) => {
+    const item = document.createElement("div");
+    item.className = `protective-capacity-row ${protectiveStatusClass(row.Status)}`;
+    const name = document.createElement("strong");
+    name.textContent = row.ResourceName || row.ResourceID || "-";
+    const status = document.createElement("span");
+    status.textContent = `${protectiveStatusLabel(row.Status)} · ${row.LoadPercent}%`;
+    const action = document.createElement("small");
+    action.textContent = flowActionLabel(row.RecommendedAction);
+    item.append(name, status, action);
+    list.append(item);
+  });
+  if (!(control.ProtectiveCapacity?.Rows || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "inline-note";
+    empty.textContent = translate("notAvailable");
+    list.append(empty);
+  }
+}
+
+function flowStatusLabel(status) {
+  const key = `flowStatus_${status}`;
+  const translated = translate(key);
+  return translated === key ? displayValue(status) : translated;
+}
+
+function flowActionLabel(action) {
+  const key = `flowAction_${action}`;
+  const translated = translate(key);
+  return translated === key ? displayValue(action) : translated;
+}
+
+function protectiveStatusLabel(status) {
+  const key = `protectiveStatus_${status}`;
+  const translated = translate(key);
+  return translated === key ? displayValue(status) : translated;
+}
+
+function protectiveStatusClass(status) {
+  if (status === "CandidateConstraint") return "is-critical";
+  if (status === "AtRisk") return "is-warning";
+  if (status === "Watch") return "is-watch";
+  return "is-healthy";
 }
 
 function setLoadView(viewName) {
@@ -4072,12 +4213,14 @@ function renderPublicDemoGoldenLoop() {
   summary.replaceChildren(
     detailMetric("packageValidation", data.Package?.Status),
     detailMetric("handoffValidation", data.HandoffInput?.Status),
+    detailMetric("productDemoMode", data.ProductDemoMode?.Validation?.OverallStatus),
     detailMetric("contractValidation", validationStatus),
     detailMetric("feedbackHandoff", data.RunStatus || outputCompletionLabel(data.HandoffOutputs))
   );
   renderPublicDemoPackage(data.Package || {});
   renderPublicDemoHandoff(data.HandoffInput || {});
   renderPublicDemoValidation(data.Validation || {});
+  renderPublicDemoProductProfile(data.ProductDemoMode || {});
   renderPublicDemoAdapter(data.AdventureWorksSchedulingAdapter || {});
   renderPublicDemoOutputs(data.HandoffOutputs || {});
   const nonClaims = document.getElementById("public-demo-nonclaims");
@@ -4150,12 +4293,48 @@ function renderPublicDemoAdapter(adapter) {
   ]);
 }
 
+function renderPublicDemoProductProfile(profile) {
+  const authority = profile.DemoAuthority || {};
+  const sdbrAuthority = authority.SDBRSchedulingAuthority || {};
+  const rowCounts = sdbrAuthority.RowCounts || {};
+  const panelPolicy = profile.PanelPolicy || {};
+  const setupOmission = sdbrAuthority.SetupChangeoverOmission || {};
+  const materialOmission = sdbrAuthority.MaterialFeasibilityOmission || {};
+  const validation = profile.Validation || {};
+  renderKeyValueList("public-demo-product-profile", [
+    [translate("activeProfile"), `${displayValue(profile.ProfileID)} · ${displayValue(profile.Mode)}`],
+    [translate("productDemoMode"), `${displayValue(profile.ProductStatus)} · ${displayValue(profile.MappingConfidence)}`],
+    [translate("demoAuthority"), `${displayValue(authority.DemoAuthorityPackageID)} · ${displayValue(authority.DemoAuthorityStatus)}`],
+    [translate("authorityRows"), formatAuthorityRowCounts(rowCounts)],
+    [translate("sourceClassCoverage"), formatSourceClassCoverage(profile.SourceClassCoverage || {})],
+    [translate("panelPolicy"), `${translate("productDemoPanels")} ${countList(panelPolicy.ProductDemoModePanels)} · ${translate("placeholderPanels")} ${countList(panelPolicy.PlaceholderPanels)} · ${translate("sampleModePanels")} ${countList(panelPolicy.SampleModeOnlyPanels)}`],
+    [translate("setupOmission"), setupOmission.BlockingRule || "-"],
+    [translate("materialOmission"), materialOmission.BlockingRule || "-"],
+    [translate("validationDeadLetters"), `${(validation.DeadLetters || []).length} · ${displayValue(validation.OverallStatus)}`]
+  ]);
+}
+
 function renderPublicDemoOutputs(outputs) {
   const rows = Object.entries(outputs).map(([name, value]) => [
     name,
     `${value.Exists ? translate("yes") : translate("no")} · ${value.SizeBytes || 0} B`
   ]);
   renderKeyValueList("public-demo-outputs", rows);
+}
+
+function formatAuthorityRowCounts(rowCounts) {
+  const keys = ["Calendars", "CapacityWindows", "ExecutableRoutingRows", "OperationDurations", "WorkOrderReleaseCandidates", "SchedulingObjectivePolicies", "DispatchHorizons"];
+  return keys.map((key) => `${key} ${rowCounts[key] || 0}`).join(" · ");
+}
+
+function formatSourceClassCoverage(coverage) {
+  const entries = Object.entries(coverage || {});
+  if (!entries.length) return "-";
+  return entries.map(([key, value]) => `${key} ${value}`).join(" · ");
+}
+
+function countList(values) {
+  return Array.isArray(values) ? values.length : 0;
 }
 
 function renderKeyValueList(elementId, rows) {

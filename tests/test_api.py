@@ -2473,7 +2473,16 @@ def _schedule_result_test_store() -> WorkbenchStateStore:
                         }
                     ],
                 },
-            }
+            },
+            {
+                "ResourceID": "WC-PACK",
+                "Name": "Pack",
+                "IsConstraint": False,
+                "ResourceType": "Line",
+                "LocationID": "PLANT-A",
+                "OwnerID": "planner-1",
+                "Category": "Packing",
+            },
         ],
         "Orders": [
             {
@@ -2539,6 +2548,20 @@ def _schedule_result_test_store() -> WorkbenchStateStore:
                             "CapacityMinutes": 480,
                             "OverloadMinutes": 120,
                             "LoadPercent": 125.0,
+                        }
+                    ],
+                },
+                {
+                    "ResourceID": "WC-PACK",
+                    "ResourceName": "Pack",
+                    "IsConstraint": False,
+                    "Cells": [
+                        {
+                            "Date": "2026-06-19",
+                            "RequiredMinutes": 420,
+                            "CapacityMinutes": 480,
+                            "OverloadMinutes": 0,
+                            "LoadPercent": 87.5,
                         }
                     ],
                 }
@@ -2613,6 +2636,9 @@ def test_be_ui_003_schedule_result_workbench_returns_kpis_gantt_and_load_views()
     assert data["Gantt"]["Rows"][0]["Bars"][0]["BufferZone"] == "Red"
     assert data["SystemLoad"]["Rows"][0]["LoadPercent"] == 125.0
     assert data["ResourceLoad"]["Rows"][0]["RemainingMinutes"] == 600
+    assert data["SDBRFlowControl"]["PlannedLoad"]["Status"] == "Overloaded"
+    assert data["SDBRFlowControl"]["ReleaseDiscipline"]["Rule"] == "DoNotReleaseBeforeSuggestedDate"
+    assert data["SDBRFlowControl"]["ProtectiveCapacity"]["Rows"][0]["Status"] == "Watch"
     assert data["FilterOptions"]["Resources"][0]["ResourceID"] == "WC-DRUM"
     assert data["OrderDelivery"][0]["Status"] == "OnTime"
     assert "Schedule" not in data
@@ -2696,6 +2722,7 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'id="gantt-board"' in html
     assert 'data-gantt-mode="resource"' in html
     assert 'data-gantt-mode="order"' in html
+    assert '<option value="16">分钟级 / Minute</option>' in html
     assert 'id="simio-adherence-search"' in html
     assert 'id="simio-adherence-event-filter"' in html
     assert 'id="simio-adherence-wait-filter"' in html
@@ -2706,9 +2733,13 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'data-simio-sort="DurationMinutes"' in html
     assert 'id="system-load-view"' in html
     assert 'id="resource-load-view"' in html
+    assert 'id="sdbr-flow-control-summary"' in html
+    assert 'id="protective-capacity-list"' in html
     assert 'id="scenario-comparison"' in html
     assert 'id="output-governance-summary"' in html
     assert "/planner/workbench/schedule-results/runs/" in script
+    assert 'flowAction_AbsorbWithBufferAndProtectiveCapacity: "先用缓冲和保护产能吸收"' in script
+    assert 'flowAction_OnlyWhenBufferOrLoadThresholdIsBreached: "仅在缓冲或负荷达到阈值时重排"' in script
     assert "/planner/workbench/schedule-results/compare" in script
     assert "/governance`" in script
     assert "/output-package`" in script
@@ -2727,6 +2758,11 @@ def test_planner_workbench_page_exposes_schedule_result_workspace():
     assert 'noSimulationRows: "没有符合条件的工单仿真记录"' in script
     assert 'durationMinutes: "Processing / dwell time"' in script
     assert "ganttRowsByOrder" in script
+    assert "ganttTickIntervalMinutes" in script
+    assert "renderGanttTicks" in script
+    assert "renderSdbrFlowControl" in script
+    assert 'plannedLoadAndProtectiveCapacity: "计划负荷与保护产能"' in script
+    assert 'monitorOnly: "仅监控，不作为硬约束"' in script
     assert 'resourceOccupationView: "资源占用图"' in script
     assert 'workOrderFlowView: "工单流程图"' in script
 

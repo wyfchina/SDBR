@@ -462,6 +462,7 @@ UI 必须帮助计划员快速回答五个问题：
 - 工序条显示订单、工序、开始结束、资源和缓冲状态。
 - 悬浮详情至少包含条带类型、任务、开始、结束、订单号和资源。
 - 支持缩放、时间范围和订单/资源筛选。
+- 缩放必须包含分钟级查看档位；放大后时间轴刻度显示到小时/分钟，便于检查短工序、相邻工序和疑似资源重叠。
 - 支持按资源、工单、持续时间类型、生产线和自定义业务字段筛选。
 - 第一版仅查看，不提供未经后端约束校验的自由拖拽保存。
 
@@ -471,6 +472,8 @@ UI 必须帮助计划员快速回答五个问题：
 - `系统负荷`视图按选定日期范围横向比较全部资源负荷百分比，支持按资源类型、位置、负责人和类别筛选。
 - `资源负荷`视图按日显示单一资源的可用产能线、负荷柱、已释放/未释放构成和数值明细表。
 - 同时显示负荷小时、可用产能、利用率、已释放、未释放和剩余负荷。
+- `系统负荷`视图必须显示 S-DBR 运行控制摘要，包括计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能状态。
+- 非约束资源的保护产能状态为监控信号，不得在界面暗示已自动变成 CP-SAT 硬约束。
 - 约束资源以可用产能为刚性边界；非约束资源允许显示超过 100% 的峰值和风险提示。
 - 持续超载资源标为候选约束，但不自动修改主数据。
 
@@ -482,6 +485,8 @@ UI 必须帮助计划员快速回答五个问题：
 
 验证记录：
 
+- 2026-07-02：甘特图缩放从 100%/150%/200% 扩展为 100%/150%/200%/400%/800%/分钟级，放大后刻度按范围自适应到小时/分钟，支持检查短工序与相邻任务。自动化证据：`pytest tests/test_api.py -q -k "schedule_result_workspace" --basetemp .tmp/pytest-gantt-minute-zoom -p no:cacheprovider`。
+- 2026-07-03：资源负荷页新增 S-DBR 运行控制摘要，展示计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能；明确非约束资源仅监控，不作为硬约束。自动化证据：`pytest tests/test_api.py -q -k "schedule_result_workspace" --basetemp .tmp/pytest-sdbr-flow-control -p no:cacheprovider`。
 - 2026-06-25：`求解诊断`主视图改为业务摘要，`ORTOOLS_TIME_LIMIT_CONFIGURED`、`ORTOOLS_CP_SAT_MODEL`、`ORTOOLS_OBJECTIVE_STRATEGY` 等技术码默认折叠到“技术详情”。自动化证据：`python -m compileall -q sdbr`；`node --check sdbr/web/planner-workbench.js`；`pytest tests/test_api.py -q -k "semantic_application_shell or schedule_result or buffer_board or dispatch_priority" --basetemp .tmp/pytest-dispatch-diagnostics-ui-2 -p no:cacheprovider`，8 passed；`pytest -q --basetemp .tmp/pytest-full-dispatch-diagnostics-ui-2 -p no:cacheprovider`，363 passed，1 warning。
 
 ### UI-SCHEDULE-003 已排程工单网格
@@ -665,6 +670,7 @@ UI 必须帮助计划员快速回答五个问题：
 - 2026-06-30：新增 AdventureWorks 排程 Adapter 只读校验区，展示 `ADVENTUREWORKS-BOUNDED-SCHEDULING-ADAPTER-PROFILE-V1`、`BoundedAdapterFixtureSchedulingMode`、7 个 SDBR-owned AW 资源日历映射、生成工单/工序行数和正式求解入口 gate；按 Contract Agent correction gate 补充 `MaterialConstraintsMode = OmittedForPublicDemo` 与“物料可行性生产声明：否”，避免把公开演示上下文误读为生产物料可行性证明。
 - 2026-07-01：按 `PUBLIC_DEMO_BUSINESS_USER_DEMO_V1_IMPLEMENTATION_NEXT_ACTIONS_20260701.md` 在公开演示闭环内容区最下方新增业务用户演示视图；该视图位于冻结数据包、DDAE 到 SDBR、校验结果、AdventureWorks Adapter、SDBR 到 DDAE 和非声明区域之后，不新增左侧导航、不重排既有技术区；内容用业务语言说明 SDBR 收到什么、校验什么、转换什么、不声明什么、反馈什么，并保留 `OmittedForPublicDemo`、`PublicDemoOnly`、正式求解入口 gated 等边界。
 - 2026-07-01：按 Contract Agent 导航顺序要求，将左侧导航中的 `公开演示闭环 / Public Demo Loop` 移到导航列表最下面；页面内部技术区和底部业务用户演示视图顺序不变。
+- 2026-07-01：按 `ADVENTUREWORKS_PRODUCT_DEMO_V1_SCOPED_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260701.md` 在公开演示闭环技术区新增 `AdventureWorks 产品演示 Profile` 卡片，展示 ProductDemoMode profile、DemoAuthority 状态、SDBR authority 行数、source-class coverage、PanelPolicy、setup/material omission blocking rule 和 validation dead-letter 数；该卡片位于契约校验之后、AdventureWorks Adapter 之前，底部业务用户演示视图仍保持页面内容区最下方；页面继续保留 `ProductDemoOnly` / `PublicDemoOnly` 分层口径，不声明生产物料可行性、ProductionValidated 或 Business Golden Loop readiness。
 
 ### UI-EXCEPTION-001 异常与死信中心
 
@@ -1064,6 +1070,7 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.27 | 2026-07-03 | `UI-SCHEDULE-001` 资源负荷页新增 S-DBR 运行控制摘要：计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能状态；明确非约束资源仅作为监控/候选约束信号，不作为自动硬约束 |
 | 5.26 | 2026-07-01 | 将 `公开演示闭环 / Public Demo Loop` 左侧导航项移动到导航列表最下面；不改变公开演示页面内部技术区和底部业务用户演示视图顺序 |
 | 5.25 | 2026-07-01 | `UI-DEMO-001` 在公开演示闭环页最下方新增业务用户演示视图，面向业务用户解释 SDBR 的执行/校验/adapter/反馈角色；不新增导航、不改变现有技术区顺序，不声明生产验证或 Business Golden Loop readiness |
 | 5.24 | 2026-06-30 | 公开演示闭环页新增 AdventureWorks 排程 Adapter 校验区：显示 adapter profile、bounded fixture 模式、AW-RES 显式资源日历映射、生成行数、formal solver gate，并明确 `MaterialConstraintsMode=OmittedForPublicDemo` 且无物料可行性生产声明 |

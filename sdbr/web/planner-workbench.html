@@ -577,7 +577,7 @@
                 <label><span data-i18n="bufferZone">缓冲区</span><select id="gantt-zone-filter"></select></label>
                 <label><span data-i18n="fromDate">开始日期</span><input id="gantt-from-date" type="date"></label>
                 <label><span data-i18n="toDate">结束日期</span><input id="gantt-to-date" type="date"></label>
-                <label><span data-i18n="zoom">缩放</span><select id="gantt-zoom"><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
+                <label><span data-i18n="zoom">缩放</span><select id="gantt-zoom"><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option><option value="4">400%</option><option value="8">800%</option><option value="16">分钟级 / Minute</option></select></label>
               </div>
               <div class="gantt-legend" aria-label="甘特图图例" data-i18n-aria-label="ganttLegend">
                 <span><i class="legend-swatch processing"></i><span data-i18n="processing">加工</span></span>
@@ -602,6 +602,13 @@
                   <label><span data-i18n="owner">负责人</span><select id="load-owner-filter"></select></label>
                   <label><span data-i18n="category">类别</span><select id="load-category-filter"></select></label>
                 </div>
+                <section class="sdbr-flow-control-panel" aria-labelledby="sdbr-flow-control-title">
+                  <div class="panel-heading compact-heading">
+                    <div><span class="panel-kicker" data-i18n="sdbrFlowControl">S-DBR 运行控制</span><h2 id="sdbr-flow-control-title" data-i18n="plannedLoadAndProtectiveCapacity">计划负荷与保护产能</h2></div>
+                  </div>
+                  <div id="sdbr-flow-control-summary" class="flow-control-summary"></div>
+                  <div id="protective-capacity-list" class="protective-capacity-list"></div>
+                </section>
                 <div id="system-load-chart" class="system-load-chart"></div>
               </div>
               <div id="resource-load-view" hidden>
@@ -776,6 +783,11 @@
               <span class="status-chip neutral" data-i18n="publicDemoOnly">PublicDemoOnly</span>
             </section>
             <div id="public-demo-summary" class="case-summary compact-summary"></div>
+            <section class="public-demo-confidence-note" aria-labelledby="public-demo-confidence-title">
+              <h2 id="public-demo-confidence-title" data-i18n="demoConfidenceMeaning">演示口径说明</h2>
+              <p data-i18n="productDemoOnlyExplanation">ProductDemoOnly = AdventureWorks 产品演示档案，包含明确补全的 DemoAuthority。</p>
+              <p data-i18n="publicDemoOnlyExplanation">PublicDemoOnly = 底层公开数据包和受控 fixture adapter 的证据口径。</p>
+            </section>
             <div class="public-demo-grid">
               <section class="admin-panel" aria-labelledby="public-demo-package-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="packageValidation">数据包校验</span><h2 id="public-demo-package-title" data-i18n="frozenPackage">冻结数据包</h2></div></div>
@@ -788,6 +800,10 @@
               <section class="admin-panel" aria-labelledby="public-demo-validation-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="contractValidation">契约校验</span><h2 id="public-demo-validation-title" data-i18n="validationResults">校验结果</h2></div></div>
                 <div id="public-demo-validation" class="policy-group-list"></div>
+              </section>
+              <section class="admin-panel" aria-labelledby="public-demo-product-profile-title">
+                <div class="panel-heading"><div><span class="panel-kicker" data-i18n="productDemoMode">ProductDemoMode</span><h2 id="public-demo-product-profile-title" data-i18n="productDemoProfile">AdventureWorks 产品演示 Profile</h2></div></div>
+                <div id="public-demo-product-profile" class="policy-group-list"></div>
               </section>
               <section class="admin-panel" aria-labelledby="public-demo-adapter-title">
                 <div class="panel-heading"><div><span class="panel-kicker" data-i18n="adapterValidation">Adapter 校验</span><h2 id="public-demo-adapter-title" data-i18n="adventureWorksAdapter">AdventureWorks 排程 Adapter</h2></div></div>

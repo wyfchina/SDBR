@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from sdbr.adventureworks_product_demo_profile import (
+    build_adventureworks_product_demo_profile_status,
+)
 from sdbr.adventureworks_scheduling_adapter import (
     build_adventureworks_scheduling_adapter_status,
 )
@@ -26,6 +29,7 @@ DEMO_LABELS = [
     "ReviewedEvidence",
     "Controlled Contract Golden Loop Demo",
     "MappingConfidence = PublicDemoOnly",
+    "ProductDemoMode = ADVENTUREWORKS_PRODUCT_DEMO_V1",
 ]
 REVIEWED_CANDIDATES = ("PART-FPGA-SPACE", "WH-ELEC-QA", "EA")
 
@@ -71,6 +75,7 @@ def get_public_demo_golden_loop_status() -> dict[str, Any]:
     root = public_demo_package_root()
     package = _package_status(root)
     handoff = _handoff_status(root)
+    product_demo = build_adventureworks_product_demo_profile_status()
     payload = handoff.get("Payload") if handoff.get("Status") == "Loaded" else None
     validation = (
         _validate_payload(payload, received_at=datetime.now(timezone.utc))
@@ -82,6 +87,7 @@ def get_public_demo_golden_loop_status() -> dict[str, Any]:
         "DemoName": "PUBLIC-DEMO-GOLDEN-DATA-V1 Controlled Contract Golden Loop Demo",
         "Labels": DEMO_LABELS,
         "MappingConfidence": "PublicDemoOnly",
+        "ProductDemoMode": product_demo,
         "Package": package,
         "HandoffInput": _without_payload(handoff),
         "Validation": validation,
@@ -130,6 +136,10 @@ def run_public_demo_golden_loop() -> dict[str, Any]:
     validation_summary = {
         "PackageID": PACKAGE_ID,
         "PackageChecksum": expected_package_checksum(),
+        "ProductDemoProfileID": status.get("ProductDemoMode", {}).get("ProfileID"),
+        "ProductDemoMappingConfidence": status.get("ProductDemoMode", {}).get(
+            "MappingConfidence"
+        ),
         "DemoRunID": planning_run["RunID"],
         "RunStatus": "Completed",
         "ValidationStatus": validation["OverallStatus"],
@@ -459,7 +469,13 @@ def _non_claims() -> list[str]:
         "Not ProductionValidated",
         "Not Business Golden Loop readiness",
         "Not production authority",
+        "Not production material feasibility",
+        "Not production routing authority",
+        "Not production calendar authority",
         "No automatic SDBR production master-data creation",
+        "No automatic DDAE master-setting mutation",
+        "No SDBR executable consumption of Network Structure Scoring candidates",
+        "Formal CP-SAT / OR-Tools production entry remains gated",
         "SQL Server / SQL Express is not a demo runtime dependency",
     ]
 

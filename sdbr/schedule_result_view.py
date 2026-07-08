@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from sdbr.release_policy import effective_rope_buffer_minutes
+from sdbr.sdbr_flow_control import build_sdbr_flow_control
 
 
 def build_schedule_result_workbench(
@@ -83,6 +84,13 @@ def build_schedule_result_workbench(
         "Gantt": gantt,
         "SystemLoad": system_load,
         "ResourceLoad": resource_load,
+        "SDBRFlowControl": build_sdbr_flow_control(
+            system_load_rows=_dict_list(system_load.get("Rows")),
+            resource_load_rows=_dict_list(resource_load.get("Rows")),
+            release_recommendations=_dict_list(
+                schedule.get("ReleaseRecommendations")
+            ),
+        ),
         "OrderDelivery": order_delivery,
         "Diagnostics": _dict_list(schedule.get("SolverDiagnostics")),
         "Risks": {

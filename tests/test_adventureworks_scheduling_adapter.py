@@ -148,6 +148,7 @@ def test_public_demo_business_user_view_is_bottom_section() -> None:
         'data-route="administration"', 0, nav_end
     )
     assert "renderPublicDemoBusinessView(data)" in script
+    assert "renderPublicDemoProductProfile(data.ProductDemoMode" in script
     assert "MaterialConstraintsMode" in script
     assert "MaterialFeasibleProductionClaim" in script
 

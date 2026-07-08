@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.57 |
-| 日期 | 2026-06-26 |
+| 文档版本 | 2.66 |
+| 日期 | 2026-07-09 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
 | UI 规格 | `docs/ui-specification.md` |
@@ -133,6 +133,17 @@ DDOM 与 DDS&OP 分工：
 | `BE-DDMRP-004` | 区分计划缓冲状态与在手执行状态 | `[VERIFIED]` | `C` `PlanningStatus`、`ExecutionStatus`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 计划状态基于净流位置，执行状态基于在手库存，二者不得混用 |
 | `BE-DDMRP-005` | 生成补货建议 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `SuggestedReplenishmentQty`; `A` `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 当净流处于红区或黄区时触发补货建议，建议量补到绿区顶部，并按 MOQ/订单倍量修正；净流高于黄区时不补货 |
 | `BE-DDMRP-006` | DDMRP 运行 read model | `[VERIFIED]` | `A` `/planner/workbench/ddmrp/status`; `UI` `UI-DDMRP-001`、`UI-DDMRP-002`; `T` `tests/test_api.py` | 数据就绪页只读显示健康摘要；物料计划工作台只读显示解耦点、缓冲颜色、缓冲百分比、净流位置、在手/在途/合格需求、补货建议和详情；不提供参数编辑 |
+
+## 4.2 S-DBR P1 市场控制运行能力
+
+本能力组属于 DDOM / S-DBR 执行层，不属于 DDS&OP 参数治理。第一轮实现目标是把 CCR planned load、MTO safe-date、MTA replenishment load 和 unified buffer priority 做成内部运行 read model；它消费冻结 Planning Run 配置、排程结果、现有 DDMRP 运行结果和执行状态，不新增 DDAE 主参数协议，也不重算 DDAE 已批准的时间缓冲、控制点、资源角色或 DDMRP 参数。
+
+| ID | 能力要求 | 状态 | 当前证据 | 缺口与完成条件 |
+| --- | --- | --- | --- | --- |
+| `BE-SDBR-001` | CCR planned load read model | `[PARTIAL]` | `C` `sdbr/sdbr_market_control.py`; `A` `/planner/workbench/schedule-results/runs/{run_id}/workbench`; `T` `tests/test_sdbr_market_control.py`, `tests/test_api.py` | 组合 MTO 订单负荷和 MTA 补货负荷，显示约束/候选约束资源的计划负荷与保护产能状态；first implementation does not require a new DDAE protocol，后续若 DDAE 要结构化消费该指标，再走 Contract Agent 变更 |
+| `BE-SDBR-002` | MTO safe-date execution signal | `[PARTIAL]` | `C` `build_mto_safe_date_summary`; `T` `tests/test_sdbr_market_control.py` | 基于 CCR planned load 和冻结时间缓冲策略生成执行层安全承诺信号；不在 SDBR 内治理或重算时间缓冲主参数 |
+| `BE-SDBR-003` | MTA replenishment load bridge | `[PARTIAL]` | `C` `build_mta_replenishment_load`; `T` `tests/test_sdbr_market_control.py` | 将 MTA replenishment load 可执行映射纳入 CCR 负荷可见性；缺少执行工单映射的补货建议必须输出 issue，不得隐式写入产能 |
+| `BE-SDBR-004` | Unified MTO/MTA buffer priority | `[PARTIAL]` | `C` `build_unified_buffer_priority`; `A` 释放管理和派工建议 read model; `T` `tests/test_sdbr_market_control.py`, `tests/test_dispatch_priority.py` | 用 shared red/yellow/green priority scale 统一 MTO time-buffer 与 MTA stock-buffer 的运行优先级；release authorization、物料/WIP 门控和 MES 到达仍是硬门槛 |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -930,6 +941,7 @@ Simio 集成工作约束：
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.66 | 2026-07-09 | Start P1 S-DBR market-control scope: CCR planned load, MTO safe-date signal, MTA replenishment load visibility, and unified buffer priority. First round uses existing DDAE contracts and frozen runtime inputs; no new DDAE protocol is required. |
 | 2.65 | 2026-07-03 | 新增 S-DBR 计划负荷与保护产能 read model：排程结果接口返回 `SDBRFlowControl`，展示计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能；明确非约束资源保持监控/候选约束信号，不自动转为 CP-SAT 硬约束、不自动重排、不声明正式承诺交期 |
 | 2.64 | 2026-07-01 | 按 Contract Agent `ADVENTUREWORKS_PRODUCT_DEMO_V1_SCOPED_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260701.md` 新增 AdventureWorks ProductDemoMode profile / DemoAuthority 消费层：SDBR 读取 `adventureworks-product-demo-v1` 契约目录中的 profile manifest 与 DemoAuthority extension，校验 source-class/evidence、PanelPolicy、DemoAuthority 行组、setup/material omission blocking rule、Network executable overreach 和 non-claims，并在公开演示闭环页面显示 ProductDemoMode read model；仍限定为 `ControlledPublicDemoImplementation`，不声明 ProductionValidated、Business Golden Loop readiness、生产物料可行性或正式 CP-SAT/OR-Tools production entry |
 | 2.63 | 2026-06-30 | 按 Contract Agent `ADVENTUREWORKS_SCHEDULING_ADAPTER_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260630.md` 新增 AdventureWorks bounded scheduling adapter：读取 PUBLIC-DEMO-GOLDEN-DATA-V1 文件化包和 `ADVENTUREWORKS-BOUNDED-SCHEDULING-ADAPTER-PROFILE-V1`，生成 `DDSOP-RUNTIME-PLANNING-INPUT-V1` executable scheduling rows，显式声明 capacity/material/setup 模式，为 `AW-RES-10/20/30/40/45/50/60` 生成 SDBR-owned demo 日历；首轮保持 `BoundedAdapterFixtureSchedulingMode`，正式 CP-SAT / OR-Tools production entry 继续 gate，不声明 `ProductionValidated` 或 Business Golden Loop readiness |

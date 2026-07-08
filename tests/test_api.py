@@ -3129,6 +3129,17 @@ def test_ui_ddom_001_operational_metrics_page_is_exposed():
     assert "operational-metrics-grid" in css
 
 
+def test_backend_spec_records_sdbr_p1_market_control_scope():
+    spec = Path("docs/backend-specification.md").read_text(encoding="utf-8")
+
+    assert "BE-SDBR-001" in spec
+    assert "CCR planned load" in spec
+    assert "MTO safe-date" in spec
+    assert "MTA replenishment load" in spec
+    assert "unified buffer priority" in spec
+    assert "does not require a new DDAE protocol" in spec
+
+
 def test_ui_calendar_and_admin_pages_use_compact_font_density():
     # UI-CALENDAR-001 / UI-ADMIN-001 / UI-ADMIN-002
     css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")

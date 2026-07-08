@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 5.22 |
-| 日期 | 2026-06-26 |
+| 文档版本 | 5.28 |
+| 日期 | 2026-07-09 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
 | 后端基线 | `docs/backend-readiness-2026-06-19.md` |
@@ -473,6 +473,8 @@ UI 必须帮助计划员快速回答五个问题：
 - `资源负荷`视图按日显示单一资源的可用产能线、负荷柱、已释放/未释放构成和数值明细表。
 - 同时显示负荷小时、可用产能、利用率、已释放、未释放和剩余负荷。
 - `系统负荷`视图必须显示 S-DBR 运行控制摘要，包括计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能状态。
+- P1 S-DBR market-control panel shows CCR planned load, MTO safe-date signal, MTA replenishment load visibility, unified buffer priority, and the boundary "no new DDAE protocol required for this internal execution read model".
+- The P1 market-control panel must not expose raw JSON, DDAE master-setting governance controls, or DDMRP parameter editors.
 - 非约束资源的保护产能状态为监控信号，不得在界面暗示已自动变成 CP-SAT 硬约束。
 - 约束资源以可用产能为刚性边界；非约束资源允许显示超过 100% 的峰值和风险提示。
 - 持续超载资源标为候选约束，但不自动修改主数据。
@@ -1070,6 +1072,7 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.28 | 2026-07-09 | 启动 P1 S-DBR 市场控制面板规格：排程结果页后续只读展示 CCR planned load、MTO safe-date、MTA replenishment load 和 unified buffer priority；第一轮为内部执行 read model，不新增 DDAE 协议、不暴露主参数治理或 DDMRP 参数编辑 |
 | 5.27 | 2026-07-03 | `UI-SCHEDULE-001` 资源负荷页新增 S-DBR 运行控制摘要：计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能状态；明确非约束资源仅作为监控/候选约束信号，不作为自动硬约束 |
 | 5.26 | 2026-07-01 | 将 `公开演示闭环 / Public Demo Loop` 左侧导航项移动到导航列表最下面；不改变公开演示页面内部技术区和底部业务用户演示视图顺序 |
 | 5.25 | 2026-07-01 | `UI-DEMO-001` 在公开演示闭环页最下方新增业务用户演示视图，面向业务用户解释 SDBR 的执行/校验/adapter/反馈角色；不新增导航、不改变现有技术区顺序，不声明生产验证或 Business Golden Loop readiness |

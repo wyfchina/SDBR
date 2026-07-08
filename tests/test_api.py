@@ -2644,6 +2644,26 @@ def test_be_ui_003_schedule_result_workbench_returns_kpis_gantt_and_load_views()
     assert "Schedule" not in data
 
 
+def test_schedule_results_returns_p1_market_control_read_model():
+    client = TestClient(create_app(state_store=_schedule_result_test_store()))
+
+    response = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/workbench"
+    )
+
+    assert response.status_code == 200
+    market = response.json()["Data"]["SDBRMarketControl"]
+    assert market["CCRPlannedLoad"]["Summary"]["Status"] == "Protected"
+    assert market["CCRPlannedLoad"]["Summary"]["MtoLoadMinutes"] == 120
+    assert market["MTOSafeDate"]["Status"] == "Available"
+    assert market["MTAReplenishmentLoad"]["MappedSuggestionCount"] == 0
+    assert market["UnifiedBufferPriority"]["Summary"]["RedCount"] == 1
+    assert (
+        market["Boundary"]
+        == "Internal S-DBR execution read model; no new DDAE protocol required."
+    )
+
+
 def test_be_ui_003_schedule_result_rejects_incomplete_run():
     store = _schedule_result_test_store()
     store.planning_runs["RUN-RESULT"]["Status"] = "Running"

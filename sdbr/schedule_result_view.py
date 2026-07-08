@@ -4,6 +4,12 @@ from datetime import date, datetime, time, timedelta
 
 from sdbr.release_policy import effective_rope_buffer_minutes
 from sdbr.sdbr_flow_control import build_sdbr_flow_control
+from sdbr.sdbr_market_control import (
+    build_ccr_planned_load,
+    build_mta_replenishment_load,
+    build_mto_safe_date_summary,
+    build_unified_buffer_priority,
+)
 
 
 def build_schedule_result_workbench(
@@ -91,6 +97,14 @@ def build_schedule_result_workbench(
                 schedule.get("ReleaseRecommendations")
             ),
         ),
+        "SDBRMarketControl": _build_sdbr_market_control(
+            planning_run=planning_run,
+            master_data_version=master_data_version,
+            gantt_rows=_dict_list(gantt.get("Rows")),
+            system_load_rows=_dict_list(system_load.get("Rows")),
+            resource_load_rows=_dict_list(resource_load.get("Rows")),
+            schedule=schedule,
+        ),
         "OrderDelivery": order_delivery,
         "Diagnostics": _dict_list(schedule.get("SolverDiagnostics")),
         "Risks": {
@@ -109,6 +123,131 @@ def build_schedule_result_workbench(
             buffer_zones=buffer_zones,
         ),
     }
+
+
+def _build_sdbr_market_control(
+    *,
+    planning_run: dict[str, object],
+    master_data_version: dict[str, object],
+    gantt_rows: list[dict[str, object]],
+    system_load_rows: list[dict[str, object]],
+    resource_load_rows: list[dict[str, object]],
+    schedule: dict[str, object],
+) -> dict[str, object]:
+    ddmrp_lines = _dict_list(master_data_version.get("DdmrpRuntimeLines"))
+    orders = _dict_list(master_data_version.get("Orders"))
+    ccr_load = build_ccr_planned_load(
+        gantt_rows=gantt_rows,
+        resources=_market_control_resources(
+            system_load_rows=system_load_rows,
+            resource_load_rows=resource_load_rows,
+        ),
+        orders=orders,
+        ddmrp_lines=ddmrp_lines,
+        horizon_start=_market_control_horizon_start(
+            planning_run=planning_run,
+            gantt_rows=gantt_rows,
+        ),
+    )
+    mta_load = build_mta_replenishment_load(ddmrp_lines=ddmrp_lines, orders=orders)
+    return {
+        "Mode": "SDBRMarketControlV1",
+        "Boundary": "Internal S-DBR execution read model; no new DDAE protocol required.",
+        "CCRPlannedLoad": ccr_load,
+        "MTOSafeDate": build_mto_safe_date_summary(
+            ccr_planned_load=ccr_load,
+            time_buffer_minutes=effective_rope_buffer_minutes(
+                release_policy=(
+                    planning_run.get("FrozenReleasePolicy")
+                    if isinstance(planning_run.get("FrozenReleasePolicy"), dict)
+                    else None
+                ),
+                fallback_time_buffer_minutes=int(
+                    planning_run.get("TimeBufferMinutes", 0)
+                ),
+            ),
+        ),
+        "MTAReplenishmentLoad": mta_load,
+        "UnifiedBufferPriority": build_unified_buffer_priority(
+            mto_candidates=_market_control_mto_candidates(schedule),
+            mta_lines=ddmrp_lines,
+        ),
+    }
+
+
+def _market_control_resources(
+    *,
+    system_load_rows: list[dict[str, object]],
+    resource_load_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    daily_capacity: dict[str, dict[str, int]] = {}
+    for row in resource_load_rows:
+        resource_id = str(row.get("ResourceID"))
+        date_value = str(row.get("Date"))
+        daily_capacity.setdefault(resource_id, {})[date_value] = int(
+            row.get("CapacityMinutes", 0)
+        )
+    resources = []
+    for row in system_load_rows:
+        resource_id = str(row.get("ResourceID"))
+        resources.append(
+            {
+                "ResourceID": resource_id,
+                "Name": row.get("ResourceName") or resource_id,
+                "IsConstraint": bool(row.get("IsConstraint")),
+                "IsCandidateConstraint": bool(row.get("IsCandidateConstraint")),
+                "DailyCapacityMinutes": daily_capacity.get(resource_id, {}),
+            }
+        )
+    return resources
+
+
+def _market_control_horizon_start(
+    *,
+    planning_run: dict[str, object],
+    gantt_rows: list[dict[str, object]],
+) -> datetime:
+    for value in (
+        planning_run.get("ScheduleStartAt"),
+        _dict(planning_run.get("Schedule")).get("GeneratedAt"),
+        planning_run.get("CompletedAt"),
+    ):
+        parsed = _parse_datetime(value)
+        if parsed is not None:
+            return parsed
+    for row in gantt_rows:
+        for bar in _dict_list(row.get("Bars")):
+            parsed = _parse_datetime(bar.get("Start"))
+            if parsed is not None:
+                return parsed
+    return datetime.utcnow()
+
+
+def _market_control_mto_candidates(
+    schedule: dict[str, object],
+) -> list[dict[str, object]]:
+    release_by_order = {
+        str(item.get("OrderID")): item
+        for item in _dict_list(schedule.get("ReleaseRecommendations"))
+    }
+    candidates = []
+    for row in _dict_list(schedule.get("BufferBoard")):
+        order_id = str(row.get("OrderID"))
+        release = release_by_order.get(order_id, {})
+        candidates.append(
+            {
+                "OrderID": order_id,
+                "DemandClass": row.get("DemandClass") or "MTO",
+                "BufferZone": row.get("Zone") or row.get("BufferZone"),
+                "BufferPenetrationPercent": row.get("BufferPenetrationPercent")
+                or row.get("PenetrationPercent")
+                or 0,
+                "SuggestedReleaseAt": row.get("SuggestedReleaseDate")
+                or release.get("SuggestedReleaseDate")
+                or release.get("SuggestedReleaseAt"),
+            }
+        )
+    return candidates
 
 
 def compare_schedule_results(

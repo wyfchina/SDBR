@@ -229,8 +229,9 @@ def build_release_management_workbench(
     operational_state_snapshot_id: str | None = None,
     release_policy: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    schedule = _dict(planning_run.get("Schedule"))
     candidates = release_candidate_rows_from_schedule(
-        schedule=_dict(planning_run.get("Schedule")),
+        schedule=schedule,
         evaluated_at=evaluated_at,
         inventory_buffers=inventory_buffers,
         material_requirements=material_requirements,
@@ -244,6 +245,10 @@ def build_release_management_workbench(
         for item in authorizations
         if item.request_id == planning_run.get("RunID")
         and item.status == "Authorized"
+    }
+    schedule_orders = {
+        str(item.get("OrderID")): item
+        for item in _dict_list(schedule.get("ScheduledOrders"))
     }
     enriched = []
     for candidate in candidates:
@@ -266,11 +271,22 @@ def build_release_management_workbench(
             release_policy=release_policy,
         )
         authorization = authorized_by_order.get(order_id)
+        demand_class = _demand_class(
+            schedule_orders.get(order_id, {}).get("DemandClass")
+            or candidate.get("DemandClass")
+        )
+        market_reason = _market_priority_reason(
+            demand_class=demand_class,
+            zone=zone,
+            penetration=penetration,
+        )
         enriched.append(
             {
                 **candidate,
+                "DemandClass": demand_class,
                 "BufferZone": zone,
                 "BufferPenetrationPercent": penetration,
+                "MarketPriorityReason": market_reason,
                 "BlockingReasons": blocking,
                 "PolicyEvidence": release_policy_evidence(release_policy),
                 "Stability": stability,
@@ -300,6 +316,7 @@ def build_release_management_workbench(
     )
     for rank, item in enumerate(enriched, start=1):
         item["ExecutionPriority"] = rank
+        item["MarketPriorityRank"] = rank
     return {
         "RunID": planning_run.get("RunID"),
         "EvaluatedAt": evaluated_at.isoformat(),
@@ -384,6 +401,27 @@ def _buffer_penetration(
     if penetration >= green_boundary:
         return penetration, "Yellow"
     return max(penetration, 0.0), "Green"
+
+
+def _demand_class(value: object) -> str:
+    text = str(value or "MTO").upper()
+    if text in {"MTA", "MTS", "STOCKREPLENISHMENT"}:
+        return "MTA"
+    return "MTO"
+
+
+def _market_priority_reason(
+    *,
+    demand_class: str,
+    zone: str,
+    penetration: float,
+) -> str:
+    class_label = "MTA补货" if demand_class == "MTA" else "MTO工单"
+    if zone in {"Late", "Red"}:
+        return f"{zone} 区 {class_label}，渗透率 {penetration:.2f}%，优先保护市场承诺"
+    if zone == "Yellow":
+        return f"黄区 {class_label}，进入释放关注窗口"
+    return f"绿区 {class_label}，保持观察"
 
 
 def _blocking_reasons(

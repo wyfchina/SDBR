@@ -3306,6 +3306,26 @@ def test_be_ui_004_planning_run_release_workbench_authorizes_only_ready_order():
     assert package["ReleasePolicyVersionID"] == "DBR-POLICY-AUTH"
 
 
+def test_release_management_candidates_include_market_priority_evidence():
+    store = _schedule_result_test_store()
+    store.planning_runs["RUN-RESULT"]["Schedule"]["ScheduledOrders"] = [
+        {"OrderID": "WO-1", "DemandClass": "MTA"}
+    ]
+    client = TestClient(create_app(state_store=store))
+    _add_release_snapshot(client)
+
+    response = client.get(
+        "/planner/workbench/release-management/runs/RUN-RESULT/workbench",
+        params={"evaluated_at": "2026-06-19T07:50:00+00:00"},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["Data"]["Candidates"][0]
+    assert candidate["DemandClass"] == "MTA"
+    assert candidate["MarketPriorityRank"] == candidate["ExecutionPriority"]
+    assert candidate["MarketPriorityReason"] == "Red 区 MTA补货，渗透率 91.67%，优先保护市场承诺"
+
+
 def test_be_ui_004_release_management_can_reevaluate_same_run_with_latest_snapshot():
     # BE-UI-004 / UI-RELEASE-001
     store = _schedule_result_test_store()

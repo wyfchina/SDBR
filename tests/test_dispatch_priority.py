@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 
-from sdbr.dispatch_priority import build_mes_dispatch_priority_queue
+from sdbr.dispatch_priority import (
+    build_mes_dispatch_priority_queue,
+    build_mes_dispatch_suggestion_package,
+)
 from sdbr.release_authorization import ReleaseAuthorization
 
 
@@ -152,6 +155,40 @@ def test_mes_dispatch_priority_recommends_replan_after_repeated_queue_jumps():
     assert first["ConflictResult"] == "NeedsReplan"
     assert first["ConflictResultLabelZh"] == "需要重排"
     assert queue["Summary"]["ReplanSuggestionCount"] == 1
+
+
+def test_dispatch_priority_preserves_market_priority_fields():
+    candidate = _candidate("WO-A", "Red", 90)
+    candidate.update(
+        {
+            "DemandClass": "MTO",
+            "MarketPriorityRank": 1,
+            "MarketPriorityReason": "红区 MTO 工单，优先保护市场承诺",
+        }
+    )
+    queue = build_mes_dispatch_priority_queue(
+        planning_run=_planning_run(),
+        master_data_version=_master_data(),
+        release_workbench={"Candidates": [candidate]},
+        authorizations=[_authorization("AUTH-A", "WO-A")],
+        execution_events=[_event("ArrivedBuffer", "WO-A", "OP-A")],
+        evaluated_at=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
+    )
+
+    row = queue["Resources"][0]["Queue"][0]
+    assert row["DemandClass"] == "MTO"
+    assert row["MarketPriorityRank"] == 1
+    assert row["MarketPriorityReason"] == "红区 MTO 工单，优先保护市场承诺"
+
+    package = build_mes_dispatch_suggestion_package(
+        dispatch_workbench=queue,
+        schedule_fingerprint="fp-market-priority",
+        generated_at=datetime(2026, 6, 16, 9, tzinfo=timezone.utc),
+    )
+    suggestion = package["ResourceQueues"][0]["Queue"][0]
+    assert suggestion["DemandClass"] == "MTO"
+    assert suggestion["MarketPriorityRank"] == 1
+    assert suggestion["MarketPriorityReason"] == "红区 MTO 工单，优先保护市场承诺"
 
 
 def _planning_run(*, include_third_order: bool = False) -> dict[str, object]:

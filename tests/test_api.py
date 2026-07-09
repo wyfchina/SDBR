@@ -2692,6 +2692,17 @@ def test_p1_market_control_case_executes_and_returns_mto_mta_load():
     assert market["UnifiedBufferPriority"]["Summary"]["RedCount"] >= 1
 
 
+def test_schedule_results_page_exposes_p1_market_control_panel():
+    html = Path("sdbr/web/planner-workbench.html").read_text(encoding="utf-8")
+    script = Path("sdbr/web/planner-workbench.js").read_text(encoding="utf-8")
+    css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
+
+    assert 'id="sdbr-market-control-panel"' in html
+    assert "renderSdbrMarketControl" in script
+    assert "CCR planned load" not in html
+    assert ".market-control-grid" in css
+
+
 def test_be_ui_003_schedule_result_rejects_incomplete_run():
     store = _schedule_result_test_store()
     store.planning_runs["RUN-RESULT"]["Status"] = "Running"

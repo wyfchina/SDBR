@@ -533,6 +533,38 @@
               <div><span data-i18n="peakLoad">峰值负荷</span><strong data-schedule-kpi="MaxLoadPercent">0%</strong></div>
             </div>
 
+            <section id="sdbr-market-control-panel" class="market-control-panel" hidden>
+              <div class="panel-heading">
+                <div>
+                  <span class="panel-kicker" data-i18n="sdbrMarketControlKicker">S-DBR 运行控制</span>
+                  <h2 data-i18n="sdbrMarketControlTitle">市场承诺与约束保护</h2>
+                </div>
+              </div>
+              <div class="market-control-grid">
+                <article>
+                  <span data-i18n="ccrPlannedLoad">约束计划负荷</span>
+                  <strong id="market-control-load-status">-</strong>
+                  <p id="market-control-load-detail" class="muted">-</p>
+                </article>
+                <article>
+                  <span data-i18n="mtoSafeDate">MTO 安全承诺</span>
+                  <strong id="market-control-safe-date">-</strong>
+                  <p id="market-control-safe-date-detail" class="muted">-</p>
+                </article>
+                <article>
+                  <span data-i18n="mtaReplenishmentLoad">MTA 补货负荷</span>
+                  <strong id="market-control-mta-load">-</strong>
+                  <p id="market-control-mta-detail" class="muted">-</p>
+                </article>
+                <article>
+                  <span data-i18n="unifiedBufferPriority">统一缓冲优先级</span>
+                  <strong id="market-control-priority-count">-</strong>
+                  <p id="market-control-priority-detail" class="muted">-</p>
+                </article>
+              </div>
+              <p class="boundary-note" data-i18n="marketControlBoundary">本区使用已冻结配置、排程结果和 DDMRP 运行输入，不新增 DDAE 主参数协议。</p>
+            </section>
+
             <section id="plan-publication-governance" class="publication-governance" aria-labelledby="publication-governance-title">
               <div class="panel-heading">
                 <div>
@@ -1108,6 +1140,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260626-config-font-density" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260709-p1-market-control" defer></script>
 </body>
 </html>

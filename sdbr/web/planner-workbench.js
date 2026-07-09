@@ -68,6 +68,13 @@ const I18N = {
     sdbrFeedbackFiles: "SDBR 到 DDAE", boundary: "边界", nonClaims: "非声明",
     publicDemoLoadFailed: "无法读取公开演示闭环", publicDemoRetryAdvice: "请确认 frozen package 与 handoff 文件可用后重试。",
     publicDemoRunCompleted: "公开演示反馈文件已生成。", publicDemoRunNotReady: "公开演示尚未就绪，请检查 DDAE handoff payload。",
+    sdbrMarketControlKicker: "S-DBR 运行控制", sdbrMarketControlTitle: "市场承诺与约束保护",
+    ccrPlannedLoad: "约束计划负荷", mtoSafeDate: "MTO 安全承诺", mtaReplenishmentLoad: "MTA 补货负荷", unifiedBufferPriority: "统一缓冲优先级",
+    marketControlBoundary: "本区使用已冻结配置、排程结果和 DDMRP 运行输入，不新增 DDAE 主参数协议。",
+    marketLoadStatus_Overloaded: "超出保护能力", marketLoadStatus_NearLimit: "接近上限", marketLoadStatus_Watch: "需要关注", marketLoadStatus_Protected: "受保护",
+    marketLoadDetail: "MTO {mto} 分钟 · MTA {mta} 分钟 · 最高负荷 {max}%",
+    marketSafeDateUnavailable: "需要产能评审", marketMtaMapped: "{count} 条已映射", marketMtaUnmapped: "{count} 条补货建议缺少执行映射",
+    marketPriorityCount: "{count} 条", marketPriorityDetail: "红区 {red} · 黄区 {yellow} · 绿区 {green}",
     businessUserView: "业务用户视图", sdbrExecutionDemo: "SDBR 执行演示",
     sdbrExecutionDemoIntro: "这部分用业务语言说明：SDBR 如何接收 DDAE 的受控演示交接，校验其可信性，转换为有界演示排程输入，并把结果反馈给 DDAE 复核。",
     demoConfidenceMeaning: "演示口径说明",
@@ -440,6 +447,13 @@ const I18N = {
     sdbrFeedbackFiles: "SDBR to DDAE", boundary: "Boundary", nonClaims: "Non-claims",
     publicDemoLoadFailed: "Public demo loop could not be loaded", publicDemoRetryAdvice: "Check that the frozen package and handoff files are available, then retry.",
     publicDemoRunCompleted: "Public demo feedback files generated.", publicDemoRunNotReady: "Public demo is not ready. Check the DDAE handoff payload.",
+    sdbrMarketControlKicker: "S-DBR flow control", sdbrMarketControlTitle: "Market promise and constraint protection",
+    ccrPlannedLoad: "Constraint planned load", mtoSafeDate: "MTO safe promise", mtaReplenishmentLoad: "MTA replenishment load", unifiedBufferPriority: "Unified buffer priority",
+    marketControlBoundary: "This panel consumes frozen configuration, schedule output, and DDMRP runtime input. It does not add DDAE-governed master parameters.",
+    marketLoadStatus_Overloaded: "Beyond protective capacity", marketLoadStatus_NearLimit: "Near limit", marketLoadStatus_Watch: "Needs attention", marketLoadStatus_Protected: "Protected",
+    marketLoadDetail: "MTO {mto} min · MTA {mta} min · peak load {max}%",
+    marketSafeDateUnavailable: "Capacity review needed", marketMtaMapped: "{count} mapped", marketMtaUnmapped: "{count} replenishment suggestions need execution mapping",
+    marketPriorityCount: "{count} rows", marketPriorityDetail: "Red {red} · Yellow {yellow} · Green {green}",
     businessUserView: "Business user view", sdbrExecutionDemo: "SDBR execution demo",
     sdbrExecutionDemoIntro: "This section explains in business language how SDBR receives the controlled DDAE handoff, validates whether it is trustworthy, converts it into bounded demo scheduling input, and sends feedback to DDAE for review.",
     demoConfidenceMeaning: "Demo confidence wording",
@@ -2426,6 +2440,7 @@ function renderScheduleResult() {
     const value = scheduleResultData.KPIs[key] ?? 0;
     element.textContent = key === "MaxLoadPercent" ? `${value}%` : String(value);
   });
+  renderSdbrMarketControl(scheduleResultData);
   prepareScheduleFilters();
   renderGanttBoard();
   renderSystemLoad();
@@ -2644,6 +2659,43 @@ function renderSystemLoad() {
     item.append(label, track, value);
     chart.append(item);
   });
+}
+
+function renderSdbrMarketControl(data) {
+  const panel = document.getElementById("sdbr-market-control-panel");
+  if (!panel) return;
+  const market = data?.SDBRMarketControl;
+  if (!market) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const loadSummary = market.CCRPlannedLoad?.Summary || {};
+  const safeDate = market.MTOSafeDate || {};
+  const mta = market.MTAReplenishmentLoad || market.CCRPlannedLoad?.MTAReplenishmentLoad || {};
+  const prioritySummary = market.UnifiedBufferPriority?.Summary || {};
+  setText("market-control-load-status", marketLoadStatusLabel(loadSummary.Status));
+  setText("market-control-load-detail", translateWith("marketLoadDetail", {
+    mto: formatNumber(loadSummary.MtoLoadMinutes || 0),
+    mta: formatNumber(loadSummary.MtaLoadMinutes || 0),
+    max: formatNumber(loadSummary.MaxLoadPercent || 0)
+  }));
+  setText("market-control-safe-date", safeDate.EarliestSafeDate || translate("marketSafeDateUnavailable"));
+  setText("market-control-safe-date-detail", safeDate.BusinessMeaning || "-");
+  setText("market-control-mta-load", translateWith("marketMtaMapped", { count: formatNumber(mta.MappedSuggestionCount || 0) }));
+  setText("market-control-mta-detail", translateWith("marketMtaUnmapped", { count: formatNumber(mta.UnmappedSuggestionCount || 0) }));
+  setText("market-control-priority-count", translateWith("marketPriorityCount", { count: formatNumber(prioritySummary.TotalCount || 0) }));
+  setText("market-control-priority-detail", translateWith("marketPriorityDetail", {
+    red: formatNumber(prioritySummary.RedCount || 0),
+    yellow: formatNumber(prioritySummary.YellowCount || 0),
+    green: formatNumber(prioritySummary.GreenCount || 0)
+  }));
+}
+
+function marketLoadStatusLabel(status) {
+  const key = `marketLoadStatus_${status || "Protected"}`;
+  const translated = translate(key);
+  return translated === key ? displayValue(status) : translated;
 }
 
 function renderSdbrFlowControl() {

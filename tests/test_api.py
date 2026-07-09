@@ -2032,7 +2032,7 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'data-route="dispatch-suggestions"' in html
     assert 'data-route="exceptions"' in html
     assert 'data-route="administration"' in html
-    assert html.count("data-nav-help") == 12
+    assert html.count("data-nav-help") == 13
     assert 'id="nav-business-tooltip"' in html
     assert 'role="tooltip"' in html
     assert 'id="master-data-version"' in html
@@ -2102,7 +2102,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260626-config-font-density"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260709-p1-market-control"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 

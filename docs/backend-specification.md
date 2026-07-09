@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.66 |
+| 文档版本 | 2.67 |
 | 日期 | 2026-07-09 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
@@ -937,10 +937,20 @@ Simio 集成工作约束：
 - 业务验收：约束/候选约束负荷用于判断是否需要协调释放或接单；非约束资源只输出保护产能健康、关注、风险或候选约束预警，不自动转为 CP-SAT 硬约束、不自动重排、不修改主数据；安全日期为插单/承诺前的初步窗口提示，不等同正式承诺交期。
 - 自动化证据：`python -m compileall -q sdbr`；`node --check sdbr/web/planner-workbench.js`；`pytest tests/test_api.py -q -k "schedule_result_workspace" --basetemp .tmp/pytest-sdbr-flow-control -p no:cacheprovider`。
 
+### BE-SDBR-001 至 BE-SDBR-004 P1 市场控制验收记录
+
+- 日期：2026-07-09
+- 状态变更：`BE-SDBR-001` 至 `BE-SDBR-004` 保持 `[PARTIAL]`，完成第一轮内部执行 read model、释放/派工证据传递和 UI 证据。
+- 实现证据：`sdbr/sdbr_market_control.py` 生成 CCR planned load、MTO safe-date signal、MTA replenishment load bridge 和 unified buffer priority；`sdbr/schedule_result_view.py` 在排程结果 workbench 返回 `SDBRMarketControl`；`sdbr/work_order_release_view.py` 与 `sdbr/dispatch_priority.py` 保留 release/MES gates 并补充市场优先级证据；`sdbr/web/planner-workbench.*` 在排程结果页显示只读业务面板。
+- 测试证据：`tests/test_sdbr_market_control.py`、`tests/test_api.py`、`tests/test_dispatch_priority.py`、`tests/test_test_data.py`。
+- 边界：本轮不新增 DDAE 协议；不配置、审批或重算 DDAE 主参数；不声明正式承诺交期；MTA 补货建议缺少执行工单映射时只输出 issue，不隐式写入 CCR 负荷。
+- 用户确认：待确认。
+
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.67 | 2026-07-09 | 完成 P1 S-DBR market-control 第一轮验收记录：新增内部执行 read model、释放/派工市场优先级证据、P1 测试案例和排程结果只读面板；仍保持 `[PARTIAL]`，不新增 DDAE 协议、不声明正式承诺交期 |
 | 2.66 | 2026-07-09 | Start P1 S-DBR market-control scope: CCR planned load, MTO safe-date signal, MTA replenishment load visibility, and unified buffer priority. First round uses existing DDAE contracts and frozen runtime inputs; no new DDAE protocol is required. |
 | 2.65 | 2026-07-03 | 新增 S-DBR 计划负荷与保护产能 read model：排程结果接口返回 `SDBRFlowControl`，展示计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能；明确非约束资源保持监控/候选约束信号，不自动转为 CP-SAT 硬约束、不自动重排、不声明正式承诺交期 |
 | 2.64 | 2026-07-01 | 按 Contract Agent `ADVENTUREWORKS_PRODUCT_DEMO_V1_SCOPED_IMPLEMENTATION_DISPATCH_NEXT_ACTIONS_20260701.md` 新增 AdventureWorks ProductDemoMode profile / DemoAuthority 消费层：SDBR 读取 `adventureworks-product-demo-v1` 契约目录中的 profile manifest 与 DemoAuthority extension，校验 source-class/evidence、PanelPolicy、DemoAuthority 行组、setup/material omission blocking rule、Network executable overreach 和 non-claims，并在公开演示闭环页面显示 ProductDemoMode read model；仍限定为 `ControlledPublicDemoImplementation`，不声明 ProductionValidated、Business Golden Loop readiness、生产物料可行性或正式 CP-SAT/OR-Tools production entry |

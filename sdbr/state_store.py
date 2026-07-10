@@ -63,6 +63,20 @@ class WorkbenchStateStore:
     ddmrp_open_supply: list[dict[str, object]] = field(default_factory=list)
     master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
+    planning_demand_commitments: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    planning_reservation_batches: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ccr_capacity_reservations: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    material_planning_allocations: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    planning_reservation_events: list[dict[str, object]] = field(default_factory=list)
+    processed_planning_event_keys: set[str] = field(default_factory=set)
     audit_events: list[dict[str, object]] = field(default_factory=list)
     revision: int = 0
 
@@ -149,6 +163,14 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "ddmrp_open_supply": self.ddmrp_open_supply,
             "master_data_versions": self.master_data_versions,
             "planning_runs": self.planning_runs,
+            "planning_demand_commitments": self.planning_demand_commitments,
+            "planning_reservation_batches": self.planning_reservation_batches,
+            "ccr_capacity_reservations": self.ccr_capacity_reservations,
+            "material_planning_allocations": self.material_planning_allocations,
+            "planning_reservation_events": self.planning_reservation_events,
+            "processed_planning_event_keys": sorted(
+                self.processed_planning_event_keys
+            ),
             "audit_events": self.audit_events,
         }
         saved_at = datetime.now(timezone.utc).isoformat()
@@ -364,6 +386,24 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.ddmrp_open_supply.extend(payloads.get("ddmrp_open_supply", []))
         self.master_data_versions.update(payloads.get("master_data_versions", {}))
         self.planning_runs.update(payloads.get("planning_runs", {}))
+        self.planning_demand_commitments.update(
+            payloads.get("planning_demand_commitments", {})
+        )
+        self.planning_reservation_batches.update(
+            payloads.get("planning_reservation_batches", {})
+        )
+        self.ccr_capacity_reservations.update(
+            payloads.get("ccr_capacity_reservations", {})
+        )
+        self.material_planning_allocations.update(
+            payloads.get("material_planning_allocations", {})
+        )
+        self.planning_reservation_events.extend(
+            payloads.get("planning_reservation_events", [])
+        )
+        self.processed_planning_event_keys.update(
+            payloads.get("processed_planning_event_keys", [])
+        )
         self.audit_events.extend(payloads.get("audit_events", []))
 
     def _create_backup(self) -> None:
@@ -407,6 +447,12 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.ddmrp_open_supply.clear()
         self.master_data_versions.clear()
         self.planning_runs.clear()
+        self.planning_demand_commitments.clear()
+        self.planning_reservation_batches.clear()
+        self.ccr_capacity_reservations.clear()
+        self.material_planning_allocations.clear()
+        self.planning_reservation_events.clear()
+        self.processed_planning_event_keys.clear()
         self.audit_events.clear()
 
 
@@ -463,6 +509,12 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "DdmrpOpenSupply": len(store.ddmrp_open_supply),
         "MasterDataVersions": len(store.master_data_versions),
         "PlanningRuns": len(store.planning_runs),
+        "PlanningDemandCommitments": len(store.planning_demand_commitments),
+        "PlanningReservationBatches": len(store.planning_reservation_batches),
+        "CcrCapacityReservations": len(store.ccr_capacity_reservations),
+        "MaterialPlanningAllocations": len(store.material_planning_allocations),
+        "PlanningReservationEvents": len(store.planning_reservation_events),
+        "ProcessedPlanningEventKeys": len(store.processed_planning_event_keys),
         "AuditEvents": len(store.audit_events),
     }
 

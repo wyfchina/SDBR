@@ -42,6 +42,7 @@ def test_shared_state_store_survives_application_recreation():
 
 
 def test_sqlite_state_store_round_trips_all_state_collections(tmp_path):
+    # Persistence evidence: BE-SDBR-007, BE-SDBR-008, BE-SDBR-009, BE-RUN-011.
     database_path = tmp_path / "workbench.db"
     store = SQLiteWorkbenchStateStore(database_path)
     captured_at = datetime(2026, 6, 20, 6, tzinfo=timezone.utc)
@@ -114,6 +115,24 @@ def test_sqlite_state_store_round_trips_all_state_collections(tmp_path):
         "DecisionPackageID": "RDP-1",
         "RequestID": replan_request.request_id,
     }
+    store.planning_demand_commitments["DC-1"] = {
+        "DemandCommitmentID": "DC-1",
+        "Status": "Active",
+    }
+    store.planning_reservation_batches["PRB-1"] = {
+        "ReservationBatchID": "PRB-1",
+        "Status": "ActivePlanReservation",
+    }
+    store.ccr_capacity_reservations["CCR-RES-1"] = {
+        "CapacityReservationID": "CCR-RES-1",
+        "ReservedMinutes": 60,
+    }
+    store.material_planning_allocations["MPA-1"] = {
+        "MaterialAllocationID": "MPA-1",
+        "AllocatedQty": 5,
+    }
+    store.planning_reservation_events.append({"EventID": "PRE-1"})
+    store.processed_planning_event_keys.add("CONFIRM-1")
 
     store.save()
     restored = SQLiteWorkbenchStateStore(database_path)
@@ -124,6 +143,42 @@ def test_sqlite_state_store_round_trips_all_state_collections(tmp_path):
     assert restored.release_authorizations == store.release_authorizations
     assert restored.operational_state_snapshots == store.operational_state_snapshots
     assert restored.release_decision_packages == store.release_decision_packages
+    assert restored.planning_demand_commitments == store.planning_demand_commitments
+    assert restored.planning_reservation_batches == store.planning_reservation_batches
+    assert restored.ccr_capacity_reservations == store.ccr_capacity_reservations
+    assert restored.material_planning_allocations == store.material_planning_allocations
+    assert restored.planning_reservation_events == store.planning_reservation_events
+    assert restored.processed_planning_event_keys == store.processed_planning_event_keys
+    assert restored.health()["StateCounts"]["PlanningDemandCommitments"] == 1
+    assert restored.health()["StateCounts"]["PlanningReservationBatches"] == 1
+    assert restored.health()["StateCounts"]["CcrCapacityReservations"] == 1
+    assert restored.health()["StateCounts"]["MaterialPlanningAllocations"] == 1
+    assert restored.health()["StateCounts"]["PlanningReservationEvents"] == 1
+    assert restored.health()["StateCounts"]["ProcessedPlanningEventKeys"] == 1
+
+
+def test_sqlite_state_store_clear_empties_shared_planning_reservation_collections(
+    tmp_path,
+):
+    # Clear-state evidence: BE-SDBR-007, BE-SDBR-008, BE-SDBR-009, BE-RUN-011.
+    store = SQLiteWorkbenchStateStore(tmp_path / "workbench.db")
+    store.planning_demand_commitments["DC-1"] = {"DemandCommitmentID": "DC-1"}
+    store.planning_reservation_batches["PRB-1"] = {"ReservationBatchID": "PRB-1"}
+    store.ccr_capacity_reservations["CCR-RES-1"] = {
+        "CapacityReservationID": "CCR-RES-1"
+    }
+    store.material_planning_allocations["MPA-1"] = {"MaterialAllocationID": "MPA-1"}
+    store.planning_reservation_events.append({"EventID": "PRE-1"})
+    store.processed_planning_event_keys.add("CONFIRM-1")
+
+    store._clear()
+
+    assert store.planning_demand_commitments == {}
+    assert store.planning_reservation_batches == {}
+    assert store.ccr_capacity_reservations == {}
+    assert store.material_planning_allocations == {}
+    assert store.planning_reservation_events == []
+    assert store.processed_planning_event_keys == set()
 
 
 def test_sqlite_state_store_is_committed_after_successful_api_write(tmp_path):

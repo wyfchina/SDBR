@@ -8,6 +8,57 @@ from sdbr.sdbr_market_control import (
 )
 
 
+def test_ccr_planned_load_adds_unconverted_shared_reservations_once():
+    # Acceptance evidence: BE-SDBR-008.
+    result = build_ccr_planned_load(
+        gantt_rows=[],
+        resources=[{
+            "ResourceID": "CCR-1",
+            "Name": "Constraint",
+            "IsConstraint": True,
+            "DailyCapacityMinutes": {"2026-07-20": 480},
+        }],
+        orders=[],
+        ddmrp_lines=[],
+        horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        capacity_reservations=[{
+            "CapacityReservationID": "R-1",
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+            "ReservedMinutes": 120,
+            "DemandClass": "MTA",
+            "Status": "ActivePlanReservation",
+        }],
+    )
+
+    bucket = result["Buckets"][0]
+    assert bucket["MtaLoadMinutes"] == 120
+    assert bucket["ReservationLoadMinutes"] == 120
+    assert bucket["TotalPlannedLoadMinutes"] == 120
+    assert bucket["LoadPercent"] == 25.0
+
+
+def test_ccr_planned_load_keeps_scheduled_load_unchanged_without_reservations():
+    result = build_ccr_planned_load(
+        gantt_rows=[],
+        resources=[{
+            "ResourceID": "CCR-1",
+            "Name": "Constraint",
+            "IsConstraint": True,
+            "DailyCapacityMinutes": {"2026-07-20": 480},
+        }],
+        orders=[],
+        ddmrp_lines=[],
+        horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+    )
+
+    bucket = result["Buckets"][0]
+    assert bucket["ReservationLoadMinutes"] == 0
+    assert bucket["MtoLoadMinutes"] == 0
+    assert bucket["MtaLoadMinutes"] == 0
+    assert bucket["TotalPlannedLoadMinutes"] == 0
+
+
 def test_ccr_planned_load_splits_mto_and_mta_load():
     result = build_ccr_planned_load(
         gantt_rows=[

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
+from sdbr.planning_reservation_view import reservation_load_by_bucket
+
 
 PROTECTIVE_CAPACITY_TARGET_PERCENT = 80.0
 PLANNED_LOAD_WARNING_PERCENT = 90.0
@@ -25,6 +27,7 @@ def build_ccr_planned_load(
     horizon_start: datetime,
     horizon_days: int = 14,
     protective_capacity_target_percent: float = PROTECTIVE_CAPACITY_TARGET_PERCENT,
+    capacity_reservations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     resources_by_id = {str(item.get("ResourceID")): item for item in resources}
     orders_by_id = {str(item.get("OrderID")): item for item in orders}
@@ -86,9 +89,24 @@ def build_ccr_planned_load(
                 }
             )
 
+    for key, reservation_load in reservation_load_by_bucket(
+        capacity_reservations or []
+    ).items():
+        bucket = buckets.get(key)
+        if bucket is None:
+            continue
+        mto_minutes = reservation_load["MtoReservationMinutes"]
+        mta_minutes = reservation_load["MtaReservationMinutes"]
+        bucket["MtoLoadMinutes"] = int(bucket["MtoLoadMinutes"]) + mto_minutes
+        bucket["MtaLoadMinutes"] = int(bucket["MtaLoadMinutes"]) + mta_minutes
+        bucket["ReservationLoadMinutes"] = reservation_load["ReservationLoadMinutes"]
+
+    for bucket in buckets.values():
+        bucket.setdefault("ReservationLoadMinutes", 0)
+
     rows = []
     for bucket in buckets.values():
-        total = int(bucket["MtoLoadMinutes"]) + int(bucket["MtaLoadMinutes"])
+        total = bucket["MtoLoadMinutes"] + bucket["MtaLoadMinutes"]
         capacity = int(bucket["CapacityMinutes"])
         load_percent = round(total / capacity * 100, 2) if capacity > 0 else 0.0
         bucket["TotalPlannedLoadMinutes"] = total
@@ -118,8 +136,8 @@ def build_ccr_planned_load(
             "Status": status,
             "BucketCount": len(rows),
             "ResourceCount": len({str(item["ResourceID"]) for item in rows}),
-            "MtoLoadMinutes": sum(int(item["MtoLoadMinutes"]) for item in rows),
-            "MtaLoadMinutes": sum(int(item["MtaLoadMinutes"]) for item in rows),
+            "MtoLoadMinutes": sum(item["MtoLoadMinutes"] for item in rows),
+            "MtaLoadMinutes": sum(item["MtaLoadMinutes"] for item in rows),
             "MaxLoadPercent": round(max_load, 2),
             "ProtectiveCapacityTargetPercent": protective_capacity_target_percent,
             "MappedMtaSuggestionCount": mta_load["MappedSuggestionCount"],

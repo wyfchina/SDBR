@@ -1,6 +1,6 @@
 """Acceptance evidence for BE-SDBR-007, BE-SDBR-008, and BE-SDBR-009."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
 
 import pytest
@@ -110,6 +110,131 @@ def test_invalid_capacity_request_builds_no_partial_write_set():
                 "ReservedMinutes": 0,
             }]
         )
+
+
+@pytest.mark.parametrize(
+    ("window_start", "window_end", "message"),
+    [
+        ("not-a-datetime", "2026-07-20T16:00:00+00:00", "ISO datetime"),
+        ("2026-07-20T08:00:00", "2026-07-20T16:00:00+00:00", "timezone-aware"),
+        (
+            "2026-07-20T08:00:00+00:00",
+            "2026-07-20T08:00:00+00:00",
+            "after start",
+        ),
+        (
+            "2026-07-20T16:00:00+00:00",
+            "2026-07-20T08:00:00+00:00",
+            "after start",
+        ),
+    ],
+)
+def test_prepare_rejects_invalid_capacity_windows(
+    window_start: str, window_end: str, message: str
+):
+    with pytest.raises(ReservationConflict, match=message):
+        _prepare(
+            capacity_requests=[{
+                "ResourceID": "CCR-1",
+                "WindowStartAt": window_start,
+                "WindowEndAt": window_end,
+                "ReservedMinutes": 120,
+            }]
+        )
+
+
+def test_prepare_deep_copies_request_rows_before_validation_records_are_returned():
+    capacity_request = {
+        "ResourceID": "CCR-1",
+        "WindowStartAt": "2026-07-20T08:00:00+00:00",
+        "WindowEndAt": "2026-07-20T16:00:00+00:00",
+        "ReservedMinutes": 120,
+        "RequestContext": {"priority": "original"},
+    }
+    material_request = {
+        "RequirementLineID": "REQ-1",
+        "ItemID": "RM-1",
+        "LocationID": "MAIN",
+        "AllocatedQty": 20,
+        "RequestContext": {"priority": "original"},
+    }
+    write_set = _prepare(
+        capacity_requests=[capacity_request], material_requests=[material_request]
+    )
+
+    capacity_request["RequestContext"]["priority"] = "changed"
+    material_request["RequestContext"]["priority"] = "changed"
+
+    assert write_set.capacity_reservations[0]["RequestContext"] == {
+        "priority": "original"
+    }
+    assert write_set.material_allocations[0]["RequestContext"] == {
+        "priority": "original"
+    }
+
+
+def test_apply_deep_copies_write_set_records_into_stored_collections():
+    write_set = _prepare(
+        capacity_requests=[{
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+            "WindowEndAt": "2026-07-20T16:00:00+00:00",
+            "ReservedMinutes": 120,
+            "RequestContext": {"priority": "original"},
+        }]
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+
+    write_set.batch["CapacityReservationIDs"].append("CALLER-INSERTED")
+    write_set.capacity_reservations[0]["RequestContext"]["priority"] = "changed"
+
+    assert "CALLER-INSERTED" not in collections[1][
+        str(write_set.batch["ReservationBatchID"])
+    ]["CapacityReservationIDs"]
+    assert next(iter(collections[2].values()))["RequestContext"] == {
+        "priority": "original"
+    }
+
+
+@pytest.mark.parametrize("target", ["capacity", "material", "event"])
+def test_duplicate_ids_inside_write_set_are_rejected_without_mutation(target: str):
+    write_set = _prepare(
+        capacity_requests=[{
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+            "WindowEndAt": "2026-07-20T16:00:00+00:00",
+            "ReservedMinutes": 120,
+        }],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+        }],
+    )
+    if target == "capacity":
+        duplicate = {**write_set.capacity_reservations[0], "Status": "Cancelled"}
+        write_set = replace(
+            write_set,
+            capacity_reservations=(*write_set.capacity_reservations, duplicate),
+        )
+    elif target == "material":
+        duplicate = {**write_set.material_allocations[0], "Status": "Cancelled"}
+        write_set = replace(
+            write_set,
+            material_allocations=(*write_set.material_allocations, duplicate),
+        )
+    else:
+        duplicate = {**write_set.events[0], "ActorID": "planner-2"}
+        write_set = replace(write_set, events=(*write_set.events, duplicate))
+
+    collections = ({}, {}, {}, {}, [], set())
+
+    with pytest.raises(ReservationConflict, match="different content"):
+        _apply(write_set, collections)
+
+    assert collections == ({}, {}, {}, {}, [], set())
 
 
 def test_request_control_fields_cannot_override_generated_reservation_values():

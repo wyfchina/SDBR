@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from hashlib import sha256
 import json
+from math import isfinite
+from numbers import Real
 from typing import Mapping
 
 
@@ -24,6 +26,28 @@ class DemandCommitmentConflict(ValueError):
     pass
 
 
+def _canonical_identity(**identity_fields: str) -> str:
+    return json.dumps(identity_fields, sort_keys=True, separators=(",", ":"))
+
+
+def _validate_quantity(quantity: float) -> float:
+    if isinstance(quantity, bool) or not isinstance(quantity, Real):
+        raise ValueError(
+            "Demand commitment quantity must be a finite, strictly positive real number."
+        )
+    try:
+        normalized_quantity = float(quantity)
+    except OverflowError as error:
+        raise ValueError(
+            "Demand commitment quantity must be a finite, strictly positive real number."
+        ) from error
+    if not isfinite(normalized_quantity) or normalized_quantity <= 0:
+        raise ValueError(
+            "Demand commitment quantity must be a finite, strictly positive real number."
+        )
+    return normalized_quantity
+
+
 def create_demand_commitment(
     *,
     demand_source_type: str,
@@ -42,20 +66,25 @@ def create_demand_commitment(
 ) -> dict[str, object]:
     if demand_source_type not in DEMAND_SOURCE_TYPES:
         raise ValueError(f"Unsupported demand source type: {demand_source_type}.")
-    if quantity <= 0:
-        raise ValueError("Demand commitment quantity must be positive.")
+    normalized_quantity = _validate_quantity(quantity)
     if required_at.tzinfo is None or required_at.utcoffset() is None:
         raise ValueError("Demand commitment required time must be timezone-aware.")
-    business_key = "|".join(
-        (
-            source_system,
-            source_object_type,
-            source_object_id,
-            source_object_version,
-            demand_line_id,
-            item_or_product_id,
-            location_id,
-        )
+    business_key = _canonical_identity(
+        SourceSystem=source_system,
+        SourceObjectType=source_object_type,
+        SourceObjectID=source_object_id,
+        SourceObjectVersion=source_object_version,
+        DemandLineID=demand_line_id,
+        ItemOrProductID=item_or_product_id,
+        LocationID=location_id,
+    )
+    logical_demand_key = _canonical_identity(
+        SourceSystem=source_system,
+        SourceObjectType=source_object_type,
+        SourceObjectID=source_object_id,
+        DemandLineID=demand_line_id,
+        ItemOrProductID=item_or_product_id,
+        LocationID=location_id,
     )
     content = {
         "DemandSourceType": demand_source_type,
@@ -66,7 +95,7 @@ def create_demand_commitment(
         "DemandLineID": demand_line_id,
         "ItemOrProductID": item_or_product_id,
         "LocationID": location_id,
-        "Quantity": float(quantity),
+        "Quantity": normalized_quantity,
         "Uom": uom,
         "RequiredAt": required_at.isoformat(),
         "DemandClass": demand_class,
@@ -78,16 +107,7 @@ def create_demand_commitment(
     return {
         "DemandCommitmentID": f"DC-{sha256(business_key.encode('utf-8')).hexdigest()[:20]}",
         "BusinessKey": business_key,
-        "LogicalDemandKey": "|".join(
-            (
-                source_system,
-                source_object_type,
-                source_object_id,
-                demand_line_id,
-                item_or_product_id,
-                location_id,
-            )
-        ),
+        "LogicalDemandKey": logical_demand_key,
         "ContentFingerprint": f"sha256:{fingerprint}",
         "Status": "PendingConfirmation",
         **content,

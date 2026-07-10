@@ -563,6 +563,33 @@
                 </article>
               </div>
               <p class="boundary-note" data-i18n="marketControlBoundary">本区使用已冻结配置、排程结果和 DDMRP 运行输入，不新增 DDAE 主参数协议。</p>
+              <details class="market-control-details">
+                <summary data-i18n="marketControlDetails">查看约束负荷和优先级明细</summary>
+                <div id="market-control-details-list" class="market-control-details-list"></div>
+              </details>
+            </section>
+
+            <section id="sdbr-what-if-panel" class="sdbr-what-if-panel" hidden>
+              <div class="panel-heading">
+                <div>
+                  <span class="panel-kicker" data-i18n="sdbrWhatIfKicker">S-DBR 执行级 What-if</span>
+                  <h2 data-i18n="sdbrWhatIfTitle">冲击会不会打爆约束</h2>
+                </div>
+              </div>
+              <div class="what-if-grid">
+                <label><span data-i18n="scenarioType">场景类型</span><select id="sdbr-what-if-scenario-type"><option value="MTO_EXPEDITE" data-i18n="scenarioMtoExpedite">插单 / 加急</option><option value="RESOURCE_DOWNTIME" data-i18n="scenarioResourceDowntime">停机冲击</option><option value="SUPPLY_DELAY" data-i18n="scenarioSupplyDelay">供应延迟</option><option value="MTA_RED_REPLENISHMENT_SHOCK" data-i18n="scenarioMtaRedShock">MTA 红区补货冲击</option></select></label>
+                <label><span data-i18n="resource">资源</span><select id="sdbr-what-if-resource"></select></label>
+                <label><span data-i18n="date">日期</span><select id="sdbr-what-if-date"></select></label>
+                <label id="sdbr-what-if-mta-candidate-wrap" hidden><span data-i18n="mtaRedCandidate">MTA 红区候选</span><select id="sdbr-what-if-mta-candidate"></select></label>
+                <label><span data-i18n="additionalLoadMinutes">新增 / 挤压负荷分钟</span><input id="sdbr-what-if-load-minutes" type="number" min="0" value="60"></label>
+                <label><span data-i18n="downtimeMinutes">停机分钟</span><input id="sdbr-what-if-downtime-minutes" type="number" min="0" value="0"></label>
+              </div>
+              <div class="what-if-actions">
+                <button id="run-sdbr-what-if" class="button secondary" type="button" data-i18n="runSdbrWhatIf">评估冲击</button>
+                <p class="inline-note" data-i18n="sdbrWhatIfBoundary">只评估执行层冲击，不修改冻结排程。</p>
+                <p id="sdbr-what-if-mta-candidate-summary" class="inline-note" hidden></p>
+              </div>
+              <div id="sdbr-what-if-result" class="what-if-result"></div>
             </section>
 
             <section id="plan-publication-governance" class="publication-governance" aria-labelledby="publication-governance-title">
@@ -661,6 +688,21 @@
             </section>
 
             <section id="schedule-panel-simulation" class="schedule-panel" data-schedule-panel="simulation" hidden>
+              <div class="simio-recommendation-help">
+                <button id="simio-recommendation-help" class="link-button" type="button" aria-describedby="simio-recommendation-tooltip" data-i18n="whenUseSimio">什么时候建议用 Simio？</button>
+                <div id="simio-recommendation-tooltip" class="simio-recommendation-tooltip" role="tooltip">
+                  <strong data-i18n="simioRecommendationTitle">建议使用 Simio 高保真验证的情形</strong>
+                  <ul>
+                    <li data-i18n="simioUseCaseCcrGroup">CCR 不是单一资源，而是一组设备/人员/夹具组合。</li>
+                    <li data-i18n="simioUseCaseDisruption">停机、返工、检测失败对结果影响很大。</li>
+                    <li data-i18n="simioUseCaseReentrant">同一个订单多次访问同一资源。</li>
+                    <li data-i18n="simioUseCaseBranching">Routing 分支多，路径选择复杂。</li>
+                    <li data-i18n="simioUseCaseQueueDrivers">搬运、等待、批处理、换型占比很高。</li>
+                    <li data-i18n="simioUseCaseQueueStory">需要展示为什么排队爆了的动态过程。</li>
+                    <li data-i18n="simioUseCaseStableModel">已经有稳定 Simio 模型和数据维护机制。</li>
+                  </ul>
+                </div>
+              </div>
               <div class="schedule-toolbar compact-toolbar">
                 <label><span data-i18n="simioRunnerMode">运行模式</span><select id="simio-runner-mode"><option value="auto" data-i18n="simioRunnerAuto">自动</option><option value="mock" data-i18n="simioRunnerMock">Mock</option><option value="local" data-i18n="simioRunnerLocal">本机 Headless</option></select></label>
                 <button id="run-simio-validation" class="button primary" type="button" data-i18n="runSimioValidation">运行仿真验证</button>
@@ -895,7 +937,7 @@
                   <h3 data-i18n="workSchedules">工作周 / 基础日历</h3>
                   <label class="field"><span data-i18n="calendarId">日历编号</span><input id="calendar-page-base-calendar-id" required readonly></label>
                   <label class="field"><span data-i18n="displayName">显示名称</span><input id="calendar-page-base-calendar-name" value="标准工作周"></label>
-                  <label class="field"><span data-i18n="timezone">时区</span><input id="calendar-page-base-timezone" value="UTC"></label>
+                  <label class="field"><span data-i18n="timezone">时区</span><input id="calendar-page-base-timezone" value="Asia/Shanghai"></label>
                   <fieldset class="weekday-field"><legend data-i18n="workingWeekdays">工作日</legend>
                     <label><input type="checkbox" data-calendar-weekday value="0" checked><span data-i18n="weekdayMonday">周一</span></label>
                     <label><input type="checkbox" data-calendar-weekday value="1" checked><span data-i18n="weekdayTuesday">周二</span></label>
@@ -947,7 +989,7 @@
                   <h3 data-i18n="calendarRules">固定规则</h3>
                   <div class="calendar-rule-list">
                     <div><strong data-i18n="conflictPriority">冲突优先级</strong><span data-i18n="calendarPriorityRule">维护 > 节假日 > 临时覆盖 > 加班 > 基础班次</span></div>
-                    <div><strong data-i18n="timezone">时区</strong><span data-i18n="timezoneRule">第一版按日历时区生成能力窗口，默认 UTC。</span></div>
+                    <div><strong data-i18n="timezone">时区</strong><span data-i18n="timezoneRule">第一版按日历时区生成能力窗口，中国现场默认 Asia/Shanghai。</span></div>
                     <div><strong data-i18n="crossShiftRule">跨班次加工规则</strong><span data-i18n="crossShiftRuleDescription">当前要求工序完整落入单个能力窗口，连续跨班次加工后续确认。</span></div>
                   </div>
                   <div id="calendar-page-base-calendars" class="calendar-mini-list"></div>
@@ -1140,6 +1182,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260709-p1-market-control" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260709-mto-safe-date-priority" defer></script>
 </body>
 </html>

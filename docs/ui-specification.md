@@ -414,6 +414,8 @@ UI 必须帮助计划员快速回答五个问题：
 
 - 页面提供资源级日历的核心操作入口：工作周/基础日历、日模式/班次时段、资源日历分配、节假日、维护、加班、临时班次覆盖。
 - 系统自动生成日历编号、分配编号和覆盖编号；资源与日历使用下拉选择；工作日使用周一到周日复选框。
+- 新建基础日历默认时区为 `Asia/Shanghai`，已保存日历列表必须显示时区，避免用户按本地班次维护但系统按 UTC 解释。
+- 资源日历分配列表必须显示全部分配记录；资源较多时列表区域独立滚动，不得截断或遮挡后续资源。
 - 管理后台不再提供日历编辑表单或日历摘要区；日历配置统一进入独立 `日历配置 / Calendar Configuration` 页面。
 - 用户选择资源和日期范围后，能看到基础班次、节假日、维护、加班、临时覆盖和最终 CP-SAT 能力窗口。
 - 缺少日能力日期、资源日历分配或时区问题必须可见，不得只显示空白。
@@ -424,6 +426,7 @@ UI 必须帮助计划员快速回答五个问题：
 - 2026-06-22：新增独立导航 `日历配置 / Calendar Configuration`，页面可调用 `GET /planner/workbench/calendar/preview` 展示事项要素、最终能力窗口、规则来源和缺失日能力日期；补充类似 Simio 的“工作周 + 日模式”轻量操作区，可创建基础日历、资源绑定和临时覆盖。
 - 2026-06-22：修正日历页产品化细节：降低表单内容字号、加重标题层级、自动生成编号、资源/日历改为下拉选择、工作日改为复选框；管理后台取消日历编辑表单和日历摘要区。
 - 2026-06-22：排程结果甘特区增加双视图：`资源占用图`按资源展示加工、维护和不可用条带，用于确认日历维护/加班窗口是否影响资源能力；`工单流程图`按工单展示工序流转，用于确认订单经过哪些资源和时间段。
+- 2026-07-09：修正日历配置页默认时区和资源分配列表展示。新建基础日历默认 `Asia/Shanghai`；已保存日历列表展示时区；资源日历分配列表取消 4 条截断并支持滚动，避免资源较多时遮挡。
 - 自动化证据：`python -m compileall -q sdbr`；`pytest tests/test_api.py -q -k "calendar_preview or ui_calendar or semantic_application_shell or admin_001_002" --basetemp .tmp/pytest-calendar-page -p no:cacheprovider`，4 passed。
 - 用户确认：待确认。
 
@@ -524,6 +527,16 @@ UI 必须帮助计划员快速回答五个问题：
 - 指标至少包括交期、约束负荷、总延迟、换用备用资源次数和缓冲风险。
 - 不显示候选方案原始 JSON。
 - 采用候选方案必须产生审计事件。
+
+### UI-SCHEDULE-006 S-DBR 执行级 What-if
+
+**状态：已验证待用户确认**
+
+- 排程结果页提供执行层 what-if 面板，支持 MTO 插单/加急、资源停机、供应延迟、MTA 红区补货冲击四类场景。
+- 面板只基于已完成排程、冻结配置、CCR planned load 和 DDMRP 运行输入进行快速评估，不修改冻结排程，不创建正式 Planning Run，不调用 CP-SAT。
+- 结果必须显示有效产能、负荷变化、CCR 状态变化、业务建议和是否建议 Simio 复核；MTA 红区补货冲击必须选择稳定候选，不显示原始 DDMRP 阈值字段。
+- 仿真结果页提供“什么时候建议使用 Simio”的 hover/focus 说明；该提示只解释适用条件，不把 Simio 作为默认主引擎。
+- 不暴露 DDAE 参数配置、原始 DDMRP 行、原始 JSON 或生产承诺口径。
 
 ### UI-PLANPUB-001 计划发布治理
 
@@ -960,6 +973,20 @@ UI 不得直接构造或修改 SQLite 数据。
 - 范围：排程结果页新增“市场承诺与约束保护”只读面板，展示约束计划负荷、MTO 安全承诺、MTA 补货负荷和统一缓冲优先级。
 - 边界：UI 不提供 DDAE 主参数编辑、DDMRP 参数配置、Buffer Profile 治理、原始 JSON 展示或正式承诺交期声明。
 - 自动化验证：`pytest tests/test_api.py::test_schedule_results_page_exposes_p1_market_control_panel -q --basetemp .tmp/pytest-p1-ui-green -p no:cacheprovider`；`node --check sdbr/web/planner-workbench.js`。
+- 2026-07-09 修正：统一缓冲优先级中 MTO 工单按建议释放时间、计划开始时间和评估时间重新计算渗透率，避免演示缓冲区与实际排程时间脱钩；“查看约束负荷和优先级明细”用于核对 MTO/MTA 来源。
+- 2026-07-09 修正：排程 KPI 将“准时工单 / 延迟工单”改为“按计划准时工单 / 按计划延迟工单”，明确这是计划结果相对承诺日期的判断；MTO 安全承诺过期时显示“已过期”；Late/Red 明细使用中文缓冲区标签，并由实际排程时间驱动。
+- 状态：已验证待用户确认。
+
+### P2 S-DBR 执行级 What-if UI 验收记录
+
+- 规格：`UI-SCHEDULE-006`
+- 后台依赖：`BE-SDBR-005`
+- 日期：2026-07-09
+- 范围：排程结果页提供只读/轻编辑 what-if 面板，支持选择 MTO 插单/加急、停机、供应延迟和 MTA 红区补货冲击；MTA 冲击从稳定投影后的红区候选下拉选择，并展示 CCR 风险、缓冲影响、建议动作和 Simio 推荐验证提示。
+- 边界：不暴露 DDAE 参数配置，不生成正式 Planning Run，不把 Simio 作为默认主引擎。
+- Simio 提示：仿真结果页提供“什么时候建议使用 Simio”的 hover/focus 悬浮说明，覆盖多 CCR 组合、停机/返工/检测失败、多次访问同资源、复杂 routing 分支、搬运/等待/批处理/换型占比高、需要展示动态排队爆发过程、已有稳定 Simio 模型和数据维护机制等条件。
+- 实现：排程结果页新增 `S-DBR 执行级 What-if` 面板，选择场景、资源、日期、新增/挤压负荷和停机分钟后调用 what-if API，显示有效产能、负荷变化、状态变化、建议动作和是否建议 Simio 复核；当 API 返回 ReviewRequired 时仍显示原因，不渲染为空白。
+- 自动化验证：`pytest tests/test_api.py::test_schedule_results_page_exposes_sdbr_native_what_if_panel tests/test_api.py::test_simulation_results_panel_exposes_simio_usage_recommendation_tooltip -q --basetemp .tmp/pytest-sdbr-what-if-ui -p no:cacheprovider`，2 passed，1 warning；`pytest tests/test_api.py -q -k "what_if or simio_usage_recommendation or schedule_results_page_exposes_p1_market_control_panel" --basetemp .tmp/pytest-sdbr-what-if-api-ui-mta-fix2 -p no:cacheprovider`，5 passed，1 warning；`node --check sdbr/web/planner-workbench.js` 通过。
 - 状态：已验证待用户确认。
 
 ### 17.5 第五验收单元记录
@@ -999,6 +1026,7 @@ UI 不得直接构造或修改 SQLite 数据。
 - 状态：已验证待用户确认
 - 实现：独立派工建议页按资源/工作中心折叠展示正式队列、候选/预警、插队冲突、现场状态、释放状态、调度员确认提示和 Mock 派工建议包生成。
 - 安全边界：第一版只生成内部 Mock 派工建议，不真实下发 MES；未来 Direct Adapter 或 UNS 适配器必须复用同一派工建议语义。
+- 2026-07-09 修正：候选/预警区中 WIP、物料或快照门控不通过时，页面明确显示“暂不进入正式派工队列”；WIP 超限原因补充当前 WIP、释放后 WIP 和实际采用 WIP 上限，避免只显示抽象原因。
 - 用户确认：待确认
 
 ### 17.7 第七验收单元记录
@@ -1082,6 +1110,11 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.34 | 2026-07-09 | 完成 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if 第一版：排程结果页新增冲击评估面板，仿真结果页新增 Simio 使用条件 hover/focus 提示；状态为已验证待用户确认 |
+| 5.33 | 2026-07-09 | 启动 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if UI 规格：排程结果页规划只读/轻编辑 what-if 面板，并在仿真结果页规划 Simio 使用条件 hover/focus 提示；状态待实现、未用户确认 |
+| 5.32 | 2026-07-09 | 修正 P1 市场控制 UI 业务口径：计划 KPI 改为“按计划准时/按计划延迟”，MTO 安全承诺过期时显示“已过期”，Late/Red 明细改为中文并由真实排程时间驱动 |
+| 5.31 | 2026-07-09 | 修正 `UI-CALENDAR-001` 日历配置页：新建基础日历默认 `Asia/Shanghai` 并显示已保存日历时区；资源日历分配列表不再截断为 4 条，改为可滚动完整展示 |
+| 5.30 | 2026-07-09 | 修正 P1 市场控制和派工建议 UI：MTO 缓冲区按实际排程时间重算；候选/预警显示 WIP 门控依据，并明确不进入正式派工队列 |
 | 5.29 | 2026-07-09 | 完成 P1 S-DBR 市场控制 UI 第一轮验证：排程结果页新增只读“市场承诺与约束保护”面板，展示约束计划负荷、MTO 安全承诺、MTA 补货负荷和统一缓冲优先级；状态为已验证待用户确认 |
 | 5.28 | 2026-07-09 | 启动 P1 S-DBR 市场控制面板规格：排程结果页后续只读展示 CCR planned load、MTO safe-date、MTA replenishment load 和 unified buffer priority；第一轮为内部执行 read model，不新增 DDAE 协议、不暴露主参数治理或 DDMRP 参数编辑 |
 | 5.27 | 2026-07-03 | `UI-SCHEDULE-001` 资源负荷页新增 S-DBR 运行控制摘要：计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能状态；明确非约束资源仅作为监控/候选约束信号，不作为自动硬约束 |

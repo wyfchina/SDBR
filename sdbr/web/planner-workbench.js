@@ -72,9 +72,56 @@ const I18N = {
     ccrPlannedLoad: "约束计划负荷", mtoSafeDate: "MTO 安全承诺", mtaReplenishmentLoad: "MTA 补货负荷", unifiedBufferPriority: "统一缓冲优先级",
     marketControlBoundary: "本区使用已冻结配置、排程结果和 DDMRP 运行输入，不新增 DDAE 主参数协议。",
     marketLoadStatus_Overloaded: "超出保护能力", marketLoadStatus_NearLimit: "接近上限", marketLoadStatus_Watch: "需要关注", marketLoadStatus_Protected: "受保护",
-    marketLoadDetail: "MTO {mto} 分钟 · MTA {mta} 分钟 · 最高负荷 {max}%",
-    marketSafeDateUnavailable: "需要产能评审", marketMtaMapped: "{count} 条已映射", marketMtaUnmapped: "{count} 条补货建议缺少执行映射",
+    marketLoadDetail: "关键资源合计 {total} 分钟（{hours} 小时）· MTO {mto} 分钟 · MTA {mta} 分钟 · 最高负荷 {max}%（按有效产能窗口计算）",
+    marketSafeDateUnavailable: "需要产能评审", marketSafeDateExpired: "已过期：{date}", marketMtaMapped: "{count} 条已映射", marketMtaUnmapped: "{count} 条补货建议缺少执行映射",
     marketPriorityCount: "{count} 条", marketPriorityDetail: "红区 {red} · 黄区 {yellow} · 绿区 {green}",
+    marketControlDetails: "查看约束负荷和优先级明细",
+    marketNoPriorityRows: "暂无统一缓冲优先级明细",
+    marketNoLoadBuckets: "暂无约束负荷明细",
+    marketLoadBucketTitle: "约束负荷",
+    marketPriorityRowsTitle: "优先级来源",
+    marketDemandClassMTO: "MTO 工单",
+    marketDemandClassMTA: "MTA 补货",
+    marketPrioritySource_MTAStockBuffer: "库存缓冲",
+    marketPrioritySource_MTOTimeBuffer: "时间缓冲",
+    marketPriorityItem: "物料 {item} · 地点 {location} · 映射工单 {order}",
+    marketPriorityOrder: "工单 {order}",
+    bufferDailyLoadScope: "工单全流程剩余负荷，不等同于约束资源负荷",
+    sdbrWhatIfKicker: "S-DBR 执行级 What-if",
+    sdbrWhatIfTitle: "冲击会不会打爆约束",
+    scenarioType: "场景类型",
+    scenarioMtoExpedite: "插单 / 加急",
+    scenarioResourceDowntime: "停机冲击",
+    scenarioSupplyDelay: "供应延迟",
+    scenarioMtaRedShock: "MTA 红区补货冲击",
+    mtaRedCandidate: "MTA 红区候选",
+    noMtaRedCandidates: "当前没有可评估的 MTA 红区补货候选。",
+    mtaCandidateSummary: "候选 {candidate} · 物料 {item} · 地点 {location} · 建议数量 {qty} · 预计约束负荷 {minutes} 分钟",
+    additionalLoadMinutes: "新增 / 挤压负荷分钟",
+    downtimeMinutes: "停机分钟",
+    runSdbrWhatIf: "评估冲击",
+    sdbrWhatIfBoundary: "只评估执行层冲击，不修改冻结排程。",
+    whatIfBeforeAfter: "负荷变化",
+    whatIfRecommendation: "建议动作",
+    whatIfSimioHint: "是否建议 Simio 复核",
+    whatIfDecision_AbsorbWithExistingPlan: "按现有计划吸收",
+    whatIfDecision_AbsorbWithBufferAndProtectiveCapacity: "用缓冲和保护产能吸收",
+    whatIfDecision_ReviewBeforeRelease: "释放前人工复核",
+    whatIfDecision_ProtectCcrAndReviewReplan: "保护约束并复核是否重排",
+    whatIfDecision_ReviewRequired: "需要人工评审",
+    effectiveCapacity: "有效产能",
+    loadChange: "负荷变化",
+    loadPercentChange: "负荷率变化",
+    beforeAfterStatus: "状态变化",
+    whenUseSimio: "什么时候建议用 Simio？",
+    simioRecommendationTitle: "建议使用 Simio 高保真验证的情形",
+    simioUseCaseCcrGroup: "CCR 不是单一资源，而是一组设备/人员/夹具组合。",
+    simioUseCaseDisruption: "停机、返工、检测失败对结果影响很大。",
+    simioUseCaseReentrant: "同一个订单多次访问同一资源。",
+    simioUseCaseBranching: "Routing 分支多，路径选择复杂。",
+    simioUseCaseQueueDrivers: "搬运、等待、批处理、换型占比很高。",
+    simioUseCaseQueueStory: "需要展示为什么排队爆了的动态过程。",
+    simioUseCaseStableModel: "已经有稳定 Simio 模型和数据维护机制。",
     businessUserView: "业务用户视图", sdbrExecutionDemo: "SDBR 执行演示",
     sdbrExecutionDemoIntro: "这部分用业务语言说明：SDBR 如何接收 DDAE 的受控演示交接，校验其可信性，转换为有界演示排程输入，并把结果反馈给 DDAE 复核。",
     demoConfidenceMeaning: "演示口径说明",
@@ -166,8 +213,8 @@ const I18N = {
     confirmAction: "确认操作", confirm: "确认", notifySuccess: "操作已完成", notifyError: "操作失败",
     resultContext: "排程结果范围", planningRun: "排程任务", scheduleResultLoadFailed: "无法读取排程结果",
     scheduleResultRetryAdvice: "请选择已完成的排程任务后重试。", noCompletedSchedules: "尚无已完成的排程结果",
-    completeRunFirst: "请先完成一项排程任务。", scheduleKpis: "排程结果指标", onTimeOrders: "准时工单",
-    lateOrders: "延迟工单", overloadMinutes: "超载分钟", redBuffers: "红区缓冲", peakLoad: "峰值负荷",
+    completeRunFirst: "请先完成一项排程任务。", scheduleKpis: "排程结果指标", onTimeOrders: "按计划准时工单",
+    lateOrders: "按计划延迟工单", overloadMinutes: "超载分钟", redBuffers: "红区缓冲", peakLoad: "峰值负荷",
     scheduleResultViews: "排程结果视图", ganttChart: "甘特图", resourceLoad: "资源负荷", orderDelivery: "订单交期",
     ganttMode: "甘特图模式", resourceOccupationView: "资源占用图", workOrderFlowView: "工单流程图",
     resource: "资源", workOrder: "工单", barType: "条带类型", bufferZone: "缓冲区", fromDate: "开始日期",
@@ -281,7 +328,7 @@ const I18N = {
     deviationMinutes: "偏差分钟", absoluteDeviationMinutes: "绝对偏差分钟", reasonCodeLabel: "业务原因", riskCount: "风险数",
     recommendedAction: "建议动作", requiresReschedule: "是否需要重排",
     reason_ROPE_TIME_NOT_REACHED: "尚未到达绳长释放时间。", reason_MATERIAL_SHORTAGE: "可用物料不足。",
-    reason_MATERIAL_INBOUND_PENDING: "物料仍在途中。", reason_WIP_LIMIT_EXCEEDED: "释放后将超过 WIP 上限。",
+    reason_MATERIAL_INBOUND_PENDING: "物料仍在途中。", reason_WIP_LIMIT_EXCEEDED: "释放后 WIP 将超过上限，暂不进入正式派工队列。",
     reason_OPERATIONAL_SNAPSHOT_STALE: "运行状态快照已过期。", reason_OPERATIONAL_SNAPSHOT_FUTURE: "运行状态快照时间晚于评估时间。",
     action_RefreshOperationalSnapshotAndReevaluate: "同步/生成新运行快照后重新评估释放",
     action_CorrectEvaluationTimeOrSnapshot: "修正评估时间或选择正确快照",
@@ -309,7 +356,7 @@ const I18N = {
     plannerConfirmation: "调度员确认", mesDispatchUnavailable: "MES 派工队列暂不可用", noDispatchRows: "当前没有可正式派工工序。",
     noDispatchWarnings: "当前没有候选/预警。", Dispatchable: "可派工", CandidateOnly: "候选/预警", FollowPlan: "按计划执行",
     SuggestQueueJump: "建议插队", NeedsReplan: "需要重排", Clear: "通过", ReleaseNotAuthorized: "未授权释放",
-    LatestOperationalStateBlocked: "最新状态阻塞", LatestOperationalStateNotReady: "最新状态未就绪",
+    LatestOperationalStateBlocked: "最新门控阻塞", LatestOperationalStateNotReady: "最新状态未就绪",
     ArrivalNotConfirmed: "缺少到达确认", DispatchRejected: "MES 已拒绝", ExceptionReported: "现场异常",
     NotArrived: "未到达", MissingArrivalConfirmation: "缺少到达确认", Arrived: "已到达", Processing: "加工中", Completed: "已完成",
     currentExecution: "现场状态", arrivalStatus: "到达状态", recommendation: "建议", recommendationReason: "建议原因",
@@ -347,7 +394,7 @@ const I18N = {
     weekdayFriday: "周五", weekdaySaturday: "周六", weekdaySunday: "周日",
     resourceCalendarAssignment: "资源日历分配", workPeriodExceptions: "加班 / 临时覆盖 / 停机", calendarRules: "固定规则",
     calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次", timezone: "时区",
-    timezoneRule: "第一版按日历时区生成能力窗口，默认 UTC。", crossShiftRule: "跨班次加工规则",
+    timezoneRule: "第一版按日历时区生成能力窗口，中国现场默认 Asia/Shanghai。", crossShiftRule: "跨班次加工规则",
     crossShiftRuleDescription: "当前要求工序完整落入单个能力窗口，连续跨班次加工后续确认。",
     noCalendarConfigRows: "尚无配置记录。", adminCalendarMoved: "日历配置已移到独立页面；管理后台只保留能力摘要和当前配置清单。",
     openCalendarConfiguration: "打开日历配置", baseCalendarSummary: "基础日历摘要", calendarOverrideSummary: "日历临时覆盖摘要",
@@ -451,9 +498,56 @@ const I18N = {
     ccrPlannedLoad: "Constraint planned load", mtoSafeDate: "MTO safe promise", mtaReplenishmentLoad: "MTA replenishment load", unifiedBufferPriority: "Unified buffer priority",
     marketControlBoundary: "This panel consumes frozen configuration, schedule output, and DDMRP runtime input. It does not add DDAE-governed master parameters.",
     marketLoadStatus_Overloaded: "Beyond protective capacity", marketLoadStatus_NearLimit: "Near limit", marketLoadStatus_Watch: "Needs attention", marketLoadStatus_Protected: "Protected",
-    marketLoadDetail: "MTO {mto} min · MTA {mta} min · peak load {max}%",
-    marketSafeDateUnavailable: "Capacity review needed", marketMtaMapped: "{count} mapped", marketMtaUnmapped: "{count} replenishment suggestions need execution mapping",
+    marketLoadDetail: "CCR total {total} min ({hours} h) · MTO {mto} min · MTA {mta} min · peak load {max}% by effective capacity window",
+    marketSafeDateUnavailable: "Capacity review needed", marketSafeDateExpired: "Expired: {date}", marketMtaMapped: "{count} mapped", marketMtaUnmapped: "{count} replenishment suggestions need execution mapping",
     marketPriorityCount: "{count} rows", marketPriorityDetail: "Red {red} · Yellow {yellow} · Green {green}",
+    marketControlDetails: "View load and priority details",
+    marketNoPriorityRows: "No unified buffer priority detail",
+    marketNoLoadBuckets: "No constraint load detail",
+    marketLoadBucketTitle: "Constraint load",
+    marketPriorityRowsTitle: "Priority source",
+    marketDemandClassMTO: "MTO order",
+    marketDemandClassMTA: "MTA replenishment",
+    marketPrioritySource_MTAStockBuffer: "Stock buffer",
+    marketPrioritySource_MTOTimeBuffer: "Time buffer",
+    marketPriorityItem: "Item {item} · location {location} · mapped order {order}",
+    marketPriorityOrder: "Order {order}",
+    bufferDailyLoadScope: "Remaining full-route order load, not the same as constraint-resource load",
+    sdbrWhatIfKicker: "S-DBR execution what-if",
+    sdbrWhatIfTitle: "Will the shock break the constraint?",
+    scenarioType: "Scenario type",
+    scenarioMtoExpedite: "Order insertion / expedite",
+    scenarioResourceDowntime: "Downtime shock",
+    scenarioSupplyDelay: "Supply delay",
+    scenarioMtaRedShock: "MTA red replenishment shock",
+    mtaRedCandidate: "MTA red candidate",
+    noMtaRedCandidates: "No MTA red replenishment candidate is available for evaluation.",
+    mtaCandidateSummary: "Candidate {candidate} · item {item} · location {location} · suggested qty {qty} · projected constraint load {minutes} min",
+    additionalLoadMinutes: "Added / compressed load minutes",
+    downtimeMinutes: "Downtime minutes",
+    runSdbrWhatIf: "Evaluate shock",
+    sdbrWhatIfBoundary: "Execution-layer impact only; the frozen schedule is not changed.",
+    whatIfBeforeAfter: "Load change",
+    whatIfRecommendation: "Recommended action",
+    whatIfSimioHint: "Simio review suggested",
+    whatIfDecision_AbsorbWithExistingPlan: "Absorb with current plan",
+    whatIfDecision_AbsorbWithBufferAndProtectiveCapacity: "Absorb with buffer and protective capacity",
+    whatIfDecision_ReviewBeforeRelease: "Review before release",
+    whatIfDecision_ProtectCcrAndReviewReplan: "Protect CCR and review replan",
+    whatIfDecision_ReviewRequired: "Manual review required",
+    effectiveCapacity: "Effective capacity",
+    loadChange: "Load change",
+    loadPercentChange: "Load percent change",
+    beforeAfterStatus: "Status change",
+    whenUseSimio: "When should Simio be used?",
+    simioRecommendationTitle: "When high-fidelity Simio validation is recommended",
+    simioUseCaseCcrGroup: "The CCR is a group of machines, people, fixtures, or handling capacity.",
+    simioUseCaseDisruption: "Downtime, rework, or inspection failure materially changes the result.",
+    simioUseCaseReentrant: "The same order visits the same resource more than once.",
+    simioUseCaseBranching: "Routing has many branches and path choices.",
+    simioUseCaseQueueDrivers: "Handling, waiting, batching, or changeover dominates the flow time.",
+    simioUseCaseQueueStory: "The team needs to see why queues exploded over time.",
+    simioUseCaseStableModel: "A stable Simio model and data-maintenance process already exists.",
     businessUserView: "Business user view", sdbrExecutionDemo: "SDBR execution demo",
     sdbrExecutionDemoIntro: "This section explains in business language how SDBR receives the controlled DDAE handoff, validates whether it is trustworthy, converts it into bounded demo scheduling input, and sends feedback to DDAE for review.",
     demoConfidenceMeaning: "Demo confidence wording",
@@ -545,8 +639,8 @@ const I18N = {
     confirmAction: "Confirm action", confirm: "Confirm", notifySuccess: "Action completed", notifyError: "Action failed",
     resultContext: "Schedule result scope", planningRun: "Planning run", scheduleResultLoadFailed: "Schedule result could not be loaded",
     scheduleResultRetryAdvice: "Select a completed planning run and retry.", noCompletedSchedules: "No completed schedule results",
-    completeRunFirst: "Complete a planning run first.", scheduleKpis: "Schedule result metrics", onTimeOrders: "On-time orders",
-    lateOrders: "Late orders", overloadMinutes: "Overload minutes", redBuffers: "Red buffers", peakLoad: "Peak load",
+    completeRunFirst: "Complete a planning run first.", scheduleKpis: "Schedule result metrics", onTimeOrders: "Plan on-time orders",
+    lateOrders: "Plan late orders", overloadMinutes: "Overload minutes", redBuffers: "Red buffers", peakLoad: "Peak load",
     scheduleResultViews: "Schedule result views", ganttChart: "Gantt chart", resourceLoad: "Resource load", orderDelivery: "Order delivery",
     ganttMode: "Gantt mode", resourceOccupationView: "Resource occupation", workOrderFlowView: "Work-order flow",
     resource: "Resource", workOrder: "Work order", barType: "Bar type", bufferZone: "Buffer zone", fromDate: "From date",
@@ -660,7 +754,7 @@ const I18N = {
     deviationMinutes: "Deviation minutes", absoluteDeviationMinutes: "Absolute deviation minutes", reasonCodeLabel: "Business reason", riskCount: "Risk count",
     recommendedAction: "Recommended action", requiresReschedule: "Requires reschedule",
     reason_ROPE_TIME_NOT_REACHED: "Rope release time has not been reached.", reason_MATERIAL_SHORTAGE: "Available material is insufficient.",
-    reason_MATERIAL_INBOUND_PENDING: "Required material is still inbound.", reason_WIP_LIMIT_EXCEEDED: "Release would exceed the WIP limit.",
+    reason_MATERIAL_INBOUND_PENDING: "Required material is still inbound.", reason_WIP_LIMIT_EXCEEDED: "Projected WIP would exceed the limit; keep as a warning, not a formal dispatch.",
     reason_OPERATIONAL_SNAPSHOT_STALE: "The operational snapshot is stale.", reason_OPERATIONAL_SNAPSHOT_FUTURE: "The operational snapshot is later than the evaluation time.",
     action_RefreshOperationalSnapshotAndReevaluate: "Sync/create a fresh operational snapshot and re-evaluate release",
     action_CorrectEvaluationTimeOrSnapshot: "Correct the evaluation time or selected snapshot",
@@ -688,7 +782,7 @@ const I18N = {
     plannerConfirmation: "Planner confirmation", mesDispatchUnavailable: "MES dispatch queue unavailable", noDispatchRows: "No dispatchable operations.",
     noDispatchWarnings: "No candidates or warnings.", Dispatchable: "Dispatchable", CandidateOnly: "Candidate / warning", FollowPlan: "Follow plan",
     SuggestQueueJump: "Suggest queue jump", NeedsReplan: "Needs replan", Clear: "Clear", ReleaseNotAuthorized: "Release not authorized",
-    LatestOperationalStateBlocked: "Latest state blocked", LatestOperationalStateNotReady: "Latest state not ready",
+    LatestOperationalStateBlocked: "Latest gate blocked", LatestOperationalStateNotReady: "Latest state not ready",
     ArrivalNotConfirmed: "Arrival not confirmed", DispatchRejected: "MES rejected", ExceptionReported: "Shop-floor exception",
     NotArrived: "Not arrived", MissingArrivalConfirmation: "Arrival not confirmed", Arrived: "Arrived", Processing: "Processing", Completed: "Completed",
     currentExecution: "Shop-floor status", arrivalStatus: "Arrival status", recommendation: "Recommendation", recommendationReason: "Reason",
@@ -726,7 +820,7 @@ const I18N = {
     weekdayFriday: "Friday", weekdaySaturday: "Saturday", weekdaySunday: "Sunday",
     resourceCalendarAssignment: "Resource calendar assignment", workPeriodExceptions: "Overtime / Temporary overrides / Downtime", calendarRules: "Fixed rules",
     calendarPriorityRule: "Maintenance > holiday > temporary override > overtime > base shift", timezone: "Timezone",
-    timezoneRule: "Version 1 generates capacity windows in the calendar timezone; UTC is the default.", crossShiftRule: "Cross-shift processing rule",
+    timezoneRule: "Version 1 generates capacity windows in the calendar timezone; Asia/Shanghai is the China-site default.", crossShiftRule: "Cross-shift processing rule",
     crossShiftRuleDescription: "Operations must currently fit inside one availability window; continuous cross-shift processing needs later confirmation.",
     noCalendarConfigRows: "No configuration records yet.", adminCalendarMoved: "Calendar configuration has moved to the dedicated page; administration keeps only capability summaries and current records.",
     openCalendarConfiguration: "Open calendar configuration", baseCalendarSummary: "Base calendar summary", calendarOverrideSummary: "Temporary override summary",
@@ -794,6 +888,8 @@ let selectedScheduleRunID = null;
 let planPublicationData = null;
 let scheduleOutputGovernanceData = null;
 let scheduleOutputPackageData = null;
+let sdbrWhatIfWorkspace = null;
+let sdbrWhatIfResult = null;
 let activeScheduleTab = "gantt";
 let activeGanttMode = "resource";
 let scheduledOrdersData = null;
@@ -1073,12 +1169,12 @@ function compactFingerprint(value) {
   return value ? `${String(value).slice(0, 16)}...` : "-";
 }
 
-function formatNumber(value) {
+function formatNumber(value, maximumFractionDigits = 2) {
   if (value === null || value === undefined || value === "") return "-";
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value);
   return new Intl.NumberFormat(currentLanguage === "zh" ? "zh-CN" : "en-US", {
-    maximumFractionDigits: 2
+    maximumFractionDigits
   }).format(number);
 }
 
@@ -2441,6 +2537,7 @@ function renderScheduleResult() {
     element.textContent = key === "MaxLoadPercent" ? `${value}%` : String(value);
   });
   renderSdbrMarketControl(scheduleResultData);
+  loadSdbrWhatIfWorkspace(selectedScheduleRunID);
   prepareScheduleFilters();
   renderGanttBoard();
   renderSystemLoad();
@@ -2674,13 +2771,19 @@ function renderSdbrMarketControl(data) {
   const safeDate = market.MTOSafeDate || {};
   const mta = market.MTAReplenishmentLoad || market.CCRPlannedLoad?.MTAReplenishmentLoad || {};
   const prioritySummary = market.UnifiedBufferPriority?.Summary || {};
+  const totalLoadMinutes = Number(loadSummary.MtoLoadMinutes || 0) + Number(loadSummary.MtaLoadMinutes || 0);
   setText("market-control-load-status", marketLoadStatusLabel(loadSummary.Status));
   setText("market-control-load-detail", translateWith("marketLoadDetail", {
+    total: formatNumber(totalLoadMinutes),
+    hours: formatNumber(totalLoadMinutes / 60, 1),
     mto: formatNumber(loadSummary.MtoLoadMinutes || 0),
     mta: formatNumber(loadSummary.MtaLoadMinutes || 0),
     max: formatNumber(loadSummary.MaxLoadPercent || 0)
   }));
-  setText("market-control-safe-date", safeDate.EarliestSafeDate || translate("marketSafeDateUnavailable"));
+  const safeDateText = safeDate.Status === "Expired"
+    ? translateWith("marketSafeDateExpired", { date: safeDate.EarliestSafeDate || "-" })
+    : (safeDate.EarliestSafeDate || translate("marketSafeDateUnavailable"));
+  setText("market-control-safe-date", safeDateText);
   setText("market-control-safe-date-detail", safeDate.BusinessMeaning || "-");
   setText("market-control-mta-load", translateWith("marketMtaMapped", { count: formatNumber(mta.MappedSuggestionCount || 0) }));
   setText("market-control-mta-detail", translateWith("marketMtaUnmapped", { count: formatNumber(mta.UnmappedSuggestionCount || 0) }));
@@ -2690,12 +2793,270 @@ function renderSdbrMarketControl(data) {
     yellow: formatNumber(prioritySummary.YellowCount || 0),
     green: formatNumber(prioritySummary.GreenCount || 0)
   }));
+  renderMarketControlDetails(market);
+}
+
+async function loadSdbrWhatIfWorkspace(runId) {
+  const panel = document.getElementById("sdbr-what-if-panel");
+  if (!panel || !runId) return;
+  try {
+    const response = await fetch(`/planner/workbench/schedule-results/runs/${encodeURIComponent(runId)}/what-if/workspace`, {
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    sdbrWhatIfWorkspace = payload.Data;
+    sdbrWhatIfResult = null;
+    renderSdbrWhatIfWorkspace();
+    renderSdbrWhatIfResult();
+  } catch (_error) {
+    sdbrWhatIfWorkspace = null;
+    sdbrWhatIfResult = null;
+    panel.hidden = true;
+  }
+}
+
+function renderSdbrWhatIfWorkspace() {
+  const panel = document.getElementById("sdbr-what-if-panel");
+  if (!panel || !sdbrWhatIfWorkspace) return;
+  const buckets = Array.isArray(sdbrWhatIfWorkspace.CcrBuckets) ? sdbrWhatIfWorkspace.CcrBuckets : [];
+  if (!buckets.length) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const resourceSelect = document.getElementById("sdbr-what-if-resource");
+  const dateSelect = document.getElementById("sdbr-what-if-date");
+  const existingResource = resourceSelect.value;
+  const existingDate = dateSelect.value;
+  const resourceOptions = [...new Map(buckets.map((item) => [
+    item.ResourceID,
+    { ResourceID: item.ResourceID, Label: `${item.ResourceName || item.ResourceID} · ${item.ResourceID}` }
+  ])).values()].filter((item) => item.ResourceID);
+  replaceSelectOptions(resourceSelect, resourceOptions, { valueKey: "ResourceID", labelKey: "Label" });
+  if (existingResource && resourceOptions.some((item) => item.ResourceID === existingResource)) resourceSelect.value = existingResource;
+  const visibleDates = [...new Set(buckets
+    .filter((item) => !resourceSelect.value || item.ResourceID === resourceSelect.value)
+    .map((item) => item.Date)
+    .filter(Boolean))];
+  replaceSelectOptions(dateSelect, visibleDates);
+  if (existingDate && visibleDates.includes(existingDate)) dateSelect.value = existingDate;
+  const candidateSelect = document.getElementById("sdbr-what-if-mta-candidate");
+  if (candidateSelect) {
+    const candidates = Array.isArray(sdbrWhatIfWorkspace.MtaRedCandidates) ? sdbrWhatIfWorkspace.MtaRedCandidates : [];
+    const candidateOptions = candidates.map((item) => ({
+      CandidateID: item.CandidateID,
+      Label: `${item.ItemID || "-"} · ${item.LocationID || "-"} · ${formatNumber(item.ProjectedLoadMinutes || 0)} min`
+    })).filter((item) => item.CandidateID);
+    replaceSelectOptions(candidateSelect, candidateOptions, { valueKey: "CandidateID", labelKey: "Label" });
+  }
+  updateSdbrWhatIfMtaCandidateDisplay(true);
+}
+
+function selectedSdbrWhatIfMtaCandidate() {
+  const candidateSelect = document.getElementById("sdbr-what-if-mta-candidate");
+  const candidateID = candidateSelect?.value;
+  const candidates = Array.isArray(sdbrWhatIfWorkspace?.MtaRedCandidates) ? sdbrWhatIfWorkspace.MtaRedCandidates : [];
+  return candidates.find((item) => item.CandidateID === candidateID) || null;
+}
+
+function updateSdbrWhatIfMtaCandidateDisplay(applyLoadDefault = false) {
+  const scenarioType = document.getElementById("sdbr-what-if-scenario-type")?.value;
+  const wrap = document.getElementById("sdbr-what-if-mta-candidate-wrap");
+  const summary = document.getElementById("sdbr-what-if-mta-candidate-summary");
+  const loadInput = document.getElementById("sdbr-what-if-load-minutes");
+  const isMta = scenarioType === "MTA_RED_REPLENISHMENT_SHOCK";
+  if (wrap) wrap.hidden = !isMta;
+  if (!summary) return;
+  if (!isMta) {
+    summary.hidden = true;
+    summary.textContent = "";
+    return;
+  }
+  const candidate = selectedSdbrWhatIfMtaCandidate();
+  if (!candidate) {
+    summary.hidden = false;
+    summary.textContent = translate("noMtaRedCandidates");
+    return;
+  }
+  if (applyLoadDefault && loadInput && Number(candidate.ProjectedLoadMinutes || 0) > 0) {
+    loadInput.value = String(candidate.ProjectedLoadMinutes);
+  }
+  summary.hidden = false;
+  summary.textContent = translateWith("mtaCandidateSummary", {
+    candidate: candidate.CandidateID || "-",
+    item: candidate.ItemID || "-",
+    location: candidate.LocationID || "-",
+    qty: formatNumber(candidate.SuggestedShockQty || 0),
+    minutes: formatNumber(candidate.ProjectedLoadMinutes || 0)
+  });
+}
+
+async function runSdbrWhatIf() {
+  if (!selectedScheduleRunID) return;
+  const button = document.getElementById("run-sdbr-what-if");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const selectedCandidate = selectedSdbrWhatIfMtaCandidate();
+    const response = await fetch(`/planner/workbench/schedule-results/runs/${encodeURIComponent(selectedScheduleRunID)}/what-if/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        ScenarioType: document.getElementById("sdbr-what-if-scenario-type").value,
+        ResourceID: document.getElementById("sdbr-what-if-resource").value,
+        BucketDate: document.getElementById("sdbr-what-if-date").value,
+        AdditionalLoadMinutes: Number(document.getElementById("sdbr-what-if-load-minutes").value || 0),
+        DowntimeMinutes: Number(document.getElementById("sdbr-what-if-downtime-minutes").value || 0),
+        CandidateID: selectedCandidate?.CandidateID || null,
+        CandidateItemID: selectedCandidate?.ItemID || null,
+        CandidateLocationID: selectedCandidate?.LocationID || null,
+        ProjectedLoadMinutes: Number(selectedCandidate?.ProjectedLoadMinutes || 0),
+        SuggestedShockQty: Number(selectedCandidate?.SuggestedShockQty || 0)
+      })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    sdbrWhatIfResult = payload.Data;
+    renderSdbrWhatIfResult();
+  } catch (error) {
+    showNotification(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function whatIfDecisionLabel(value) {
+  const key = `whatIfDecision_${value || "ReviewRequired"}`;
+  const translated = translate(key);
+  return translated === key ? displayValue(value) : translated;
+}
+
+function renderSdbrWhatIfResult() {
+  const container = document.getElementById("sdbr-what-if-result");
+  if (!container) return;
+  container.replaceChildren();
+  const result = sdbrWhatIfResult;
+  if (!result) return;
+  const impact = result.Impact || {};
+  const recommendation = result.Recommendation || {};
+  const simio = result.SimioRecommendation || {};
+  const sections = [];
+  if (result.Impact) {
+    const beforeAfterRows = [
+      ["resource", `${impact.ResourceName || "-"} · ${impact.ResourceID || "-"}`],
+      ["effectiveCapacity", `${formatNumber(impact.CapacityMinutes || 0)} -> ${formatNumber(impact.EffectiveCapacityMinutes || 0)} min`],
+      ["loadChange", `${formatNumber(impact.BeforeLoadMinutes || 0)} -> ${formatNumber(impact.AfterLoadMinutes || 0)} min`],
+      ["loadPercentChange", `${formatNumber(impact.BeforeLoadPercent || 0)}% -> ${formatNumber(impact.AfterLoadPercent || 0)}%`],
+      ["beforeAfterStatus", `${marketLoadStatusLabel(impact.BeforeStatus)} -> ${marketLoadStatusLabel(impact.AfterStatus)}`]
+    ];
+    if (impact.Candidate?.CandidateID) {
+      beforeAfterRows.push(["mtaRedCandidate", `${impact.Candidate.CandidateID} · ${impact.Candidate.ItemID || "-"} · ${impact.Candidate.LocationID || "-"}`]);
+    }
+    sections.push(detailSection("whatIfBeforeAfter", beforeAfterRows));
+  } else {
+    sections.push(detailSection("whatIfBeforeAfter", [
+      ["status", whatIfDecisionLabel(recommendation.Decision)],
+      ["reason", displayValue(recommendation.ReasonCode || recommendation.BusinessMeaning)]
+    ]));
+  }
+  sections.push(
+    detailSection("whatIfRecommendation", [
+      ["recommendedAction", `${whatIfDecisionLabel(recommendation.Decision)} · ${displayValue(recommendation.BusinessMeaning)}`],
+      ["requiresReschedule", recommendation.RequiresFormalReplan ? translate("yes") : translate("no")]
+    ]),
+    detailSection("whatIfSimioHint", [
+      ["status", simio.Recommended ? translate("yes") : translate("no")],
+      ["businessDiagnosis", displayValue(simio.BusinessMeaning)]
+    ])
+  );
+  container.append(...sections);
 }
 
 function marketLoadStatusLabel(status) {
   const key = `marketLoadStatus_${status || "Protected"}`;
   const translated = translate(key);
   return translated === key ? displayValue(status) : translated;
+}
+
+function bufferZoneLabel(zone) {
+  const key = String(zone || "Green");
+  const translated = translate(key);
+  return translated === key ? displayValue(zone) : translated;
+}
+
+function renderMarketControlDetails(market) {
+  const container = document.getElementById("market-control-details-list");
+  if (!container) return;
+  container.replaceChildren();
+
+  const loadSection = document.createElement("section");
+  const loadTitle = document.createElement("h3");
+  loadTitle.textContent = translate("marketLoadBucketTitle");
+  loadSection.append(loadTitle);
+  const buckets = Array.isArray(market.CCRPlannedLoad?.Buckets) ? market.CCRPlannedLoad.Buckets : [];
+  if (buckets.length) {
+    const list = document.createElement("div");
+    list.className = "market-detail-list";
+    buckets
+      .filter((bucket) => Number(bucket.TotalPlannedLoadMinutes || 0) > 0)
+      .forEach((bucket) => {
+        const row = document.createElement("div");
+        row.className = "market-detail-row";
+        const title = document.createElement("strong");
+        title.textContent = `${bucket.ResourceName || bucket.ResourceID || "-"} · ${bucket.Date || "-"}`;
+        const detail = document.createElement("span");
+        detail.textContent = `${formatNumber(bucket.TotalPlannedLoadMinutes || 0)} 分钟 / ${formatNumber((bucket.TotalPlannedLoadMinutes || 0) / 60, 1)} 小时 · ${translate("marketDemandClassMTO")} ${formatNumber(bucket.MtoLoadMinutes || 0)} 分钟 · ${translate("marketDemandClassMTA")} ${formatNumber(bucket.MtaLoadMinutes || 0)} 分钟 · ${formatNumber(bucket.LoadPercent || 0)}%`;
+        row.append(title, detail);
+        list.append(row);
+      });
+    loadSection.append(list.childElementCount ? list : emptyMarketDetail("marketNoLoadBuckets"));
+  } else {
+    loadSection.append(emptyMarketDetail("marketNoLoadBuckets"));
+  }
+
+  const prioritySection = document.createElement("section");
+  const priorityTitle = document.createElement("h3");
+  priorityTitle.textContent = translate("marketPriorityRowsTitle");
+  prioritySection.append(priorityTitle);
+  const rows = Array.isArray(market.UnifiedBufferPriority?.Rows) ? market.UnifiedBufferPriority.Rows : [];
+  if (rows.length) {
+    const list = document.createElement("div");
+    list.className = "market-detail-list";
+    rows.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = `market-detail-row zone-${item.PriorityZone || "Green"}`;
+      const demandClass = item.DemandClass === "MTA" ? translate("marketDemandClassMTA") : translate("marketDemandClassMTO");
+      const sourceKey = `marketPrioritySource_${item.Source || ""}`;
+      const source = translate(sourceKey) === sourceKey ? displayValue(item.Source) : translate(sourceKey);
+      const title = document.createElement("strong");
+      title.textContent = `${bufferZoneLabel(item.PriorityZone)} · ${demandClass} · ${source}`;
+      const detail = document.createElement("span");
+      detail.textContent = item.DemandClass === "MTA"
+        ? translateWith("marketPriorityItem", {
+            item: item.ItemID || "-",
+            location: item.LocationID || "-",
+            order: item.OrderID || "-"
+          })
+        : translateWith("marketPriorityOrder", { order: item.OrderID || "-" });
+      const action = document.createElement("small");
+      action.textContent = item.RecommendedAction || "-";
+      row.append(title, detail, action);
+      list.append(row);
+    });
+    prioritySection.append(list);
+  } else {
+    prioritySection.append(emptyMarketDetail("marketNoPriorityRows"));
+  }
+
+  container.append(loadSection, prioritySection);
+}
+
+function emptyMarketDetail(messageKey) {
+  const item = document.createElement("p");
+  item.className = "muted";
+  item.textContent = translate(messageKey);
+  return item;
 }
 
 function renderSdbrFlowControl() {
@@ -3981,7 +4342,7 @@ function renderBufferBoard() {
   summary.replaceChildren();
   [
     ["location", context.LocationID], ["constraint", `${context.ConstraintResourceName || "-"} · ${context.ConstraintResourceID || "-"}`],
-    ["bufferOwner", context.BufferOwnerID], ["dailyLoad", `${(context.DailyLoadMinutes / 60).toFixed(1)} ${translate("hours")}`],
+    ["bufferOwner", context.BufferOwnerID], ["dailyLoad", `${(context.DailyLoadMinutes / 60).toFixed(1)} ${translate("hours")} · ${translate("bufferDailyLoadScope")}`],
     ["lastScheduled", formatDate(context.LastScheduledAt)]
   ].forEach(([labelKey, value]) => summary.append(detailMetric(labelKey, value)));
 
@@ -4173,10 +4534,31 @@ function dispatchOperationCard(row, isWarning) {
   if ((row.LatestGateBlockingReasons || []).length) {
     const note = document.createElement("p");
     note.className = "inline-warning";
-    note.textContent = row.LatestGateBlockingReasons.map((reason) => translate(`reason_${reason.Code}`) || reason.Code).join(" / ");
+    note.textContent = row.LatestGateBlockingReasons.map(formatDispatchGateReason).join(" / ");
     card.append(note);
   }
   return card;
+}
+
+function formatDispatchGateReason(reason) {
+  const code = reason?.Code;
+  const base = translate(`reason_${code}`) || displayValue(code);
+  if (code === "WIP_LIMIT_EXCEEDED") {
+    const risks = Array.isArray(reason?.Details?.Risks) ? reason.Details.Risks : [];
+    const evidence = risks.map(formatDispatchWipRisk).filter(Boolean).join("；");
+    return evidence ? `${base} ${evidence}` : base;
+  }
+  if (String(code || "").startsWith("OPERATIONAL_SNAPSHOT_")) {
+    return `${base} ${translate("snapshotRefreshAdvice")}`;
+  }
+  return base;
+}
+
+function formatDispatchWipRisk(risk) {
+  if (!risk) return "";
+  const scope = risk.ScopeID || risk.ResourceID || risk.ItemID || "-";
+  const effectiveLimit = risk.EffectiveMaxWipCount ?? risk.MaxWipCount;
+  return `${scope}: ${translate("actualWipCount")} ${displayValue(risk.CurrentWipCount)}, ${translate("projectedWipCount")} ${displayValue(risk.ProjectedWipCount)}, ${translate("effectiveMaxWipCount")} ${displayValue(effectiveLimit)}`;
 }
 
 async function issueMesDispatchSuggestions() {
@@ -4741,6 +5123,7 @@ function renderCalendarConfiguration() {
     item.CalendarID,
     item.DisplayName || translate("notProvided"),
     `${translate("status")}: ${translate(item.Status) || item.Status}`,
+    `${translate("timezone")}: ${item.Timezone || translate("notProvided")}`,
     `${translate("workingWeekdays")}: ${(item.WorkingWeekdays || []).join(", ")}`,
     `${translate("shiftName")}: ${(item.Shifts || []).map((shift) => `${shift.Name} ${shift.Start}-${shift.End}`).join(" / ") || "-"}`
   ]);
@@ -4797,7 +5180,7 @@ function renderCalendarMiniList(containerId, rows, rowTextFactory) {
     container.append(empty);
     return;
   }
-  rows.slice(0, 4).forEach((item) => {
+  rows.forEach((item) => {
     const row = document.createElement("div");
     row.className = "calendar-mini-row";
     rowTextFactory(item).forEach((text, index) => {
@@ -5287,7 +5670,7 @@ async function submitCalendarPageBaseCalendar(event) {
     Shifts: shifts,
     MaintenanceWindows: maintenanceStart && maintenanceEnd ? [{ Start: maintenanceStart, End: maintenanceEnd }] : [],
     Holidays: holidayDate ? [holidayDate] : [],
-    Timezone: document.getElementById("calendar-page-base-timezone").value.trim() || "UTC",
+    Timezone: document.getElementById("calendar-page-base-timezone").value.trim() || "Asia/Shanghai",
     CreatedAt: new Date().toISOString(),
     CreatedBy: "planner",
     Status: document.getElementById("calendar-page-base-status").value
@@ -5344,7 +5727,7 @@ async function submitBaseCalendar(event) {
     }],
     MaintenanceWindows: [],
     Holidays: [],
-    Timezone: "UTC",
+    Timezone: "Asia/Shanghai",
     CreatedAt: new Date().toISOString(),
     CreatedBy: "planner",
     Status: "Active"
@@ -5578,6 +5961,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("schedule-result-run-select").addEventListener("change", (event) => loadScheduleResult(event.target.value));
   document.getElementById("refresh-schedule-result").addEventListener("click", () => loadScheduleResult(selectedScheduleRunID));
   document.querySelectorAll("[data-schedule-tab]").forEach((button) => button.addEventListener("click", () => setScheduleTab(button.dataset.scheduleTab)));
+  document.getElementById("sdbr-what-if-resource").addEventListener("change", renderSdbrWhatIfWorkspace);
+  document.getElementById("sdbr-what-if-scenario-type").addEventListener("change", () => updateSdbrWhatIfMtaCandidateDisplay(true));
+  document.getElementById("sdbr-what-if-mta-candidate").addEventListener("change", () => updateSdbrWhatIfMtaCandidateDisplay(true));
+  document.getElementById("run-sdbr-what-if").addEventListener("click", runSdbrWhatIf);
   document.getElementById("run-simio-validation").addEventListener("click", runSimioValidation);
   document.getElementById("refresh-simio-validation").addEventListener("click", () => loadScheduleOutputGovernance(selectedScheduleRunID));
   document.getElementById("simio-adherence-search").addEventListener("input", () => { simioAdherencePage = 1; renderSimulationResults(); });

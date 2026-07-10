@@ -123,6 +123,10 @@ from sdbr.schedule_output_governance import (
     output_context_for_order,
     release_context_for_order,
 )
+from sdbr.sdbr_what_if import (
+    build_sdbr_what_if_workspace,
+    evaluate_sdbr_what_if_scenario,
+)
 from sdbr.work_order_release_view import (
     build_release_management_workbench,
     build_scheduled_work_order_detail,
@@ -602,6 +606,27 @@ class PlanningRunExecutionPayload(BaseModel):
     CompletedAt: datetime | None = None
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
     LeaseToken: str | None = None
+
+
+class SdbrWhatIfScenarioPayload(BaseModel):
+    ScenarioType: Literal[
+        "MTO_EXPEDITE",
+        "RESOURCE_DOWNTIME",
+        "SUPPLY_DELAY",
+        "MTA_RED_REPLENISHMENT_SHOCK",
+    ] = "MTO_EXPEDITE"
+    ResourceID: str
+    BucketDate: str
+    AdditionalLoadMinutes: int = Field(default=0, ge=0)
+    DowntimeMinutes: int = Field(default=0, ge=0)
+    CandidateID: str | None = None
+    CandidateItemID: str | None = None
+    CandidateLocationID: str | None = None
+    ProjectedLoadMinutes: int = Field(default=0, ge=0)
+    SuggestedShockQty: float = Field(default=0, ge=0)
+    DemandClass: str | None = None
+    Reason: str | None = None
+    UseSimioRecommended: bool = False
 
 
 class DdsopFeedbackDeliveryPayload(BaseModel):
@@ -3983,6 +4008,147 @@ def create_app(
                 planning_run=planning_run,
                 master_data_version=master_data_version,
                 released_order_ids=released_order_ids,
+            ),
+        }
+
+    @app.get(
+        "/planner/workbench/schedule-results/runs/{run_id}/what-if/workspace"
+    )
+    def planner_workbench_schedule_result_what_if_workspace(run_id: str):
+        endpoint = (
+            f"/planner/workbench/schedule-results/runs/{run_id}/what-if/workspace"
+        )
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        if planning_run.get("Status") != "Completed" or not isinstance(
+            planning_run.get("Schedule"), dict
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "ScheduleResultUnavailable",
+                        "CurrentStatus": planning_run.get("Status"),
+                        "Message": "The planning run has no completed schedule result.",
+                    },
+                },
+            )
+        master_data_version_id = str(planning_run.get("MasterDataVersionID") or "")
+        master_data_version = master_data_versions.get(master_data_version_id)
+        if not isinstance(master_data_version, dict):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "SourceMasterDataUnavailable",
+                        "MasterDataVersionID": master_data_version_id,
+                        "Message": (
+                            "The completed schedule references a master data "
+                            "version that is not available for what-if evaluation."
+                        ),
+                    },
+                },
+            )
+        schedule_workbench = build_schedule_result_workbench(
+            planning_run=planning_run,
+            master_data_version=master_data_version,
+            released_order_ids={
+                item.order_id
+                for item in release_authorizations
+                if item.status == "Authorized"
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_sdbr_what_if_workspace(
+                ccr_planned_load=schedule_workbench.get("SDBRMarketControl", {}).get(
+                    "CCRPlannedLoad", {}
+                ),
+                ddmrp_lines=[
+                    item
+                    for item in (
+                        master_data_version.get("DdmrpRuntimeLines")
+                        or master_data_version.get("DdmrpNetFlowLines")
+                        or []
+                    )
+                    if isinstance(item, dict)
+                ],
+            ),
+        }
+
+    @app.post(
+        "/planner/workbench/schedule-results/runs/{run_id}/what-if/evaluate"
+    )
+    def planner_workbench_schedule_result_what_if_evaluate(
+        run_id: str,
+        payload: SdbrWhatIfScenarioPayload,
+    ):
+        endpoint = (
+            f"/planner/workbench/schedule-results/runs/{run_id}/what-if/evaluate"
+        )
+        planning_run = planning_runs.get(run_id)
+        if planning_run is None:
+            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+        if planning_run.get("Status") != "Completed" or not isinstance(
+            planning_run.get("Schedule"), dict
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "ScheduleResultUnavailable",
+                        "CurrentStatus": planning_run.get("Status"),
+                        "Message": "The planning run has no completed schedule result.",
+                    },
+                },
+            )
+        master_data_version_id = str(planning_run.get("MasterDataVersionID") or "")
+        master_data_version = master_data_versions.get(master_data_version_id)
+        if not isinstance(master_data_version, dict):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "SourceMasterDataUnavailable",
+                        "MasterDataVersionID": master_data_version_id,
+                        "Message": (
+                            "The completed schedule references a master data "
+                            "version that is not available for what-if evaluation."
+                        ),
+                    },
+                },
+            )
+        schedule_workbench = build_schedule_result_workbench(
+            planning_run=planning_run,
+            master_data_version=master_data_version,
+            released_order_ids={
+                item.order_id
+                for item in release_authorizations
+                if item.status == "Authorized"
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": evaluate_sdbr_what_if_scenario(
+                ccr_planned_load=schedule_workbench.get("SDBRMarketControl", {}).get(
+                    "CCRPlannedLoad", {}
+                ),
+                scenario=payload.model_dump(mode="json"),
             ),
         }
 

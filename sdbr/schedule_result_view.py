@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from sdbr.release_policy import effective_rope_buffer_minutes
 from sdbr.sdbr_flow_control import build_sdbr_flow_control
@@ -134,6 +134,7 @@ def _build_sdbr_market_control(
     resource_load_rows: list[dict[str, object]],
     schedule: dict[str, object],
 ) -> dict[str, object]:
+    evaluated_at = datetime.now(timezone.utc)
     ddmrp_lines = _dict_list(master_data_version.get("DdmrpRuntimeLines"))
     orders = _dict_list(master_data_version.get("Orders"))
     ccr_load = build_ccr_planned_load(
@@ -166,11 +167,16 @@ def _build_sdbr_market_control(
                     planning_run.get("TimeBufferMinutes", 0)
                 ),
             ),
+            evaluated_at=evaluated_at,
         ),
         "MTAReplenishmentLoad": mta_load,
         "UnifiedBufferPriority": build_unified_buffer_priority(
-            mto_candidates=_market_control_mto_candidates(schedule),
+            mto_candidates=_market_control_mto_candidates(
+                schedule=schedule,
+                gantt_rows=gantt_rows,
+            ),
             mta_lines=ddmrp_lines,
+            evaluated_at=evaluated_at,
         ),
     }
 
@@ -224,8 +230,11 @@ def _market_control_horizon_start(
 
 
 def _market_control_mto_candidates(
+    *,
     schedule: dict[str, object],
+    gantt_rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
+    first_processing_start_by_order = _first_processing_start_by_order(gantt_rows)
     release_by_order = {
         str(item.get("OrderID")): item
         for item in _dict_list(schedule.get("ReleaseRecommendations"))
@@ -245,9 +254,33 @@ def _market_control_mto_candidates(
                 "SuggestedReleaseAt": row.get("SuggestedReleaseDate")
                 or release.get("SuggestedReleaseDate")
                 or release.get("SuggestedReleaseAt"),
+                "ScheduledStart": row.get("ScheduledStart")
+                or release.get("ScheduledStart")
+                or first_processing_start_by_order.get(order_id)
+                or row.get("TargetStartDate"),
             }
         )
     return candidates
+
+
+def _first_processing_start_by_order(
+    gantt_rows: list[dict[str, object]],
+) -> dict[str, str]:
+    result: dict[str, datetime] = {}
+    for row in gantt_rows:
+        for bar in _dict_list(row.get("Bars")):
+            if bar.get("BarType") != "Processing":
+                continue
+            order_id = str(bar.get("OrderID") or "")
+            if not order_id:
+                continue
+            start = _parse_datetime(bar.get("Start"))
+            if start is None:
+                continue
+            existing = result.get(order_id)
+            if existing is None or start < existing:
+                result[order_id] = start
+    return {order_id: start.isoformat() for order_id, start in result.items()}
 
 
 def compare_schedule_results(

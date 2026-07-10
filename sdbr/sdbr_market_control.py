@@ -132,7 +132,9 @@ def build_mto_safe_date_summary(
     *,
     ccr_planned_load: dict[str, object],
     time_buffer_minutes: int,
+    evaluated_at: datetime | None = None,
 ) -> dict[str, object]:
+    evaluated_at = _normalize_datetime(evaluated_at)
     for bucket in _dict_list(ccr_planned_load.get("Buckets")):
         if bucket.get("Status") != "Protected":
             continue
@@ -143,6 +145,17 @@ def build_mto_safe_date_summary(
             time(0, 0),
             tzinfo=timezone.utc,
         ) + timedelta(minutes=half_buffer)
+        if evaluated_at is not None and safe_at < evaluated_at:
+            return {
+                "Status": "Expired",
+                "EarliestSafeDate": safe_date,
+                "SafePromiseAt": safe_at.isoformat(),
+                "Rule": "FirstProtectedCcrBucketPlusHalfTimeBuffer",
+                "BusinessMeaning": (
+                    "该 MTO 安全承诺日期已过期，不能作为当前插单或客户承诺依据；"
+                    "需要按最新排程、约束负荷和缓冲状态重新评估。"
+                ),
+            }
         return {
             "Status": "Available",
             "EarliestSafeDate": safe_date,
@@ -215,19 +228,22 @@ def build_unified_buffer_priority(
     *,
     mto_candidates: list[dict[str, object]],
     mta_lines: list[dict[str, object]],
+    evaluated_at: datetime | None = None,
 ) -> dict[str, object]:
     rows = []
     for candidate in mto_candidates:
-        zone = _zone(candidate.get("BufferZone"))
+        penetration, zone = _mto_time_buffer_position(
+            candidate=candidate,
+            evaluated_at=evaluated_at,
+        )
         rows.append(
             {
                 "DemandClass": _demand_class(candidate),
                 "PriorityZone": zone,
-                "PriorityPenetrationPercent": float(
-                    candidate.get("BufferPenetrationPercent") or 0
-                ),
+                "PriorityPenetrationPercent": penetration,
                 "OrderID": candidate.get("OrderID"),
                 "SuggestedReleaseAt": candidate.get("SuggestedReleaseAt"),
+                "ScheduledStart": candidate.get("ScheduledStart"),
                 "RecommendedAction": _priority_action(zone, "MTO"),
                 "Source": "MTOTimeBuffer",
             }
@@ -307,6 +323,39 @@ def _duration_minutes(bar: dict[str, object]) -> int:
     return max(int((end - start).total_seconds() // 60), 0)
 
 
+def _mto_time_buffer_position(
+    *,
+    candidate: dict[str, object],
+    evaluated_at: datetime | None,
+) -> tuple[float, str]:
+    release_at = _parse_datetime(candidate.get("SuggestedReleaseAt"))
+    start_at = _parse_datetime(candidate.get("ScheduledStart"))
+    evaluated_at = _normalize_datetime(evaluated_at)
+    if (
+        evaluated_at is not None
+        and release_at is not None
+        and start_at is not None
+        and start_at > release_at
+    ):
+        penetration = round(
+            (evaluated_at - release_at).total_seconds()
+            / (start_at - release_at).total_seconds()
+            * 100,
+            2,
+        )
+        if penetration > 100:
+            return penetration, "Late"
+        if penetration >= 66:
+            return max(penetration, 0.0), "Red"
+        if penetration >= 33:
+            return max(penetration, 0.0), "Yellow"
+        return max(penetration, 0.0), "Green"
+    return (
+        float(candidate.get("BufferPenetrationPercent") or 0),
+        _zone(candidate.get("BufferZone")),
+    )
+
+
 def _is_controlled_resource(resource: dict[str, object]) -> bool:
     role = str(resource.get("ResourceRole") or resource.get("Role") or "").upper()
     return bool(resource.get("IsConstraint")) or bool(
@@ -330,13 +379,23 @@ def _load_status(
 
 def _parse_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return _normalize_datetime(value)
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return _normalize_datetime(
+            datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
     except ValueError:
         return None
+
+
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _priority_action(zone: str, demand_class: str) -> str:

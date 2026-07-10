@@ -616,6 +616,32 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
 .market-control-grid strong { display: block; color: var(--color-text); font-size: 17px; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .market-control-grid p { margin: 6px 0 0; color: var(--color-muted); font-size: 11px; line-height: 1.45; }
 .market-control-panel .boundary-note { margin: 0; color: var(--color-muted); font-size: 11px; line-height: 1.45; }
+.market-control-details { border-top: 1px solid var(--color-border); padding-top: 8px; }
+.market-control-details summary { cursor: pointer; color: var(--color-primary); font-size: 12px; font-weight: 700; }
+.market-control-details-list { display: grid; gap: 10px; margin-top: 10px; }
+.market-control-details-list section { display: grid; gap: 6px; }
+.market-control-details-list h3 { margin: 0; font-size: 12px; color: var(--color-text); }
+.market-detail-list { display: grid; gap: 6px; }
+.market-detail-row { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--color-border); border-left: 4px solid var(--color-border); border-radius: 6px; background: #fff; }
+.market-detail-row.zone-Red { border-left-color: var(--color-danger); background: #fff7f6; }
+.market-detail-row.zone-Yellow { border-left-color: #d99a1b; background: #fffaf0; }
+.market-detail-row.zone-Green { border-left-color: var(--color-success); background: #f6fbf8; }
+.market-detail-row strong { font-size: 12px; color: var(--color-text); }
+.market-detail-row span, .market-detail-row small { font-size: 11px; color: var(--color-muted); line-height: 1.45; }
+.sdbr-what-if-panel { margin-top: 14px; display: grid; gap: 12px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
+.sdbr-what-if-panel[hidden] { display: none; }
+.what-if-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.what-if-grid label { display: grid; gap: 5px; min-width: 0; color: var(--color-muted); font-size: 11px; }
+.what-if-grid select, .what-if-grid input { min-height: 34px; min-width: 0; padding: 6px 9px; border: 1px solid var(--color-border); border-radius: 5px; background: #fff; color: var(--color-text); }
+.what-if-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.what-if-actions .inline-note { margin: 0; color: var(--color-muted); font-size: 11px; line-height: 1.45; }
+.what-if-result { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+.simio-recommendation-help { position: relative; display: inline-block; margin-bottom: 12px; }
+.simio-recommendation-tooltip { display: none; position: absolute; z-index: 20; top: calc(100% + 8px); left: 0; width: min(520px, calc(100vw - 48px)); padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: #fff; box-shadow: var(--shadow-popover, 0 12px 28px rgba(16, 43, 76, 0.16)); color: var(--color-text); }
+.simio-recommendation-tooltip strong { display: block; margin-bottom: 8px; font-size: 13px; }
+.simio-recommendation-tooltip ul { margin: 0; padding-left: 18px; color: var(--color-muted); font-size: 12px; line-height: 1.55; }
+.simio-recommendation-help:hover .simio-recommendation-tooltip,
+.simio-recommendation-help:focus-within .simio-recommendation-tooltip { display: block; }
 .schedule-tabs, .load-view-toggle { display: flex; max-width: 100%; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--color-border); }
 .schedule-tab { flex: 0 0 auto; padding: 9px 14px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--color-muted); cursor: pointer; font-weight: 650; }
 .schedule-tab.is-active { border-bottom-color: var(--color-primary); color: var(--color-primary); }
@@ -1075,7 +1101,16 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
 .calendar-rule-list div, .calendar-mini-row { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); }
 .calendar-rule-list strong, .calendar-mini-row strong { color: var(--color-text); }
 .calendar-rule-list span, .calendar-mini-row span { color: var(--color-muted); font-size: 11px; overflow-wrap: anywhere; }
-.calendar-mini-list { display: grid; gap: 8px; margin-top: 8px; }
+.calendar-mini-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  max-height: min(50vh, 520px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+#calendar-page-assignments.calendar-mini-list { max-height: min(58vh, 640px); }
+.calendar-mini-row { min-width: 0; }
 .calendar-preview-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .calendar-element-list, .calendar-window-list, .calendar-source-grid { display: grid; gap: 10px; min-width: 0; }
 .calendar-element-card, .calendar-window-card, .calendar-source-card { min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: #fff; }
@@ -1153,6 +1188,8 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
   .schedule-kpis div { border-bottom: 1px solid var(--color-border); }
   .market-control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .market-control-grid article { border-bottom: 1px solid var(--color-border); }
+  .what-if-grid, .what-if-result { grid-template-columns: 1fr; }
+  .simio-recommendation-tooltip { position: static; width: auto; margin-top: 8px; box-shadow: none; }
   .schedule-toolbar, .compact-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .load-row { grid-template-columns: 130px minmax(200px, 1fr) 70px; }
   .flow-control-summary { grid-template-columns: 1fr; }

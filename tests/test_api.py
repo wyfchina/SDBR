@@ -2082,7 +2082,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'id="calendar-page-holiday-date"' in html
     assert 'id="calendar-page-maintenance-start"' in html
     assert 'id="calendar-page-override-type"' in html
-    assert 'id="calendar-page-base-timezone"' in html
+    assert 'id="calendar-page-base-timezone" value="Asia/Shanghai"' in html
     assert 'data-i18n="crossShiftRule"' in html
     assert "/planner/workbench/calendar/preview" in script
     assert "/planner/workbench/admin/base-calendars" in script
@@ -2093,6 +2093,11 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert "submitCalendarPageAssignment" in script
     assert "submitCalendarPageOverride" in script
     assert "weekdaysFromCalendarCheckboxes" in script
+    assert "rows.forEach((item) =>" in script
+    assert "rows.slice(0, 4)" not in script
+    style = client.get("/planner/assets/planner-workbench.css").text
+    assert "#calendar-page-assignments.calendar-mini-list" in style
+    assert "overflow-y: auto" in style
     assert 'navCalendar: "日历配置"' in script
     assert 'navCalendar: "Calendar Configuration"' in script
     assert 'calendarRequiredElements: "事项要素检查"' in script
@@ -2102,7 +2107,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260709-p1-market-control"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260709-mto-safe-date-priority"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -2656,13 +2661,117 @@ def test_schedule_results_returns_p1_market_control_read_model():
     market = response.json()["Data"]["SDBRMarketControl"]
     assert market["CCRPlannedLoad"]["Summary"]["Status"] == "Protected"
     assert market["CCRPlannedLoad"]["Summary"]["MtoLoadMinutes"] == 120
-    assert market["MTOSafeDate"]["Status"] == "Available"
+    assert market["MTOSafeDate"]["Status"] == "Expired"
+    assert "已过期" in market["MTOSafeDate"]["BusinessMeaning"]
     assert market["MTAReplenishmentLoad"]["MappedSuggestionCount"] == 0
     assert market["UnifiedBufferPriority"]["Summary"]["RedCount"] == 1
+    assert market["UnifiedBufferPriority"]["Rows"][0]["PriorityZone"] == "Late"
     assert (
         market["Boundary"]
         == "Internal S-DBR execution read model; no new DDAE protocol required."
     )
+
+
+def test_schedule_result_what_if_workspace_and_evaluate_api():
+    store = _schedule_result_test_store()
+    store.master_data_versions["MDV-RESULT"]["DdmrpRuntimeLines"] = [
+        {
+            "ItemID": "FG-MTA-RED",
+            "LocationID": "MAIN",
+            "PlanningStatus": "red",
+            "SuggestedReplenishmentQty": 12,
+            "ProjectedLoadMinutes": 80,
+            "RawPayload": {"do_not_expose": True},
+        }
+    ]
+    client = TestClient(create_app(state_store=store))
+
+    workspace = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/workspace"
+    )
+
+    assert workspace.status_code == 200
+    data = workspace.json()["Data"]
+    assert data["Mode"] == "SDBRNativeWhatIfWorkspaceV1"
+    assert "MTO_EXPEDITE" in data["ScenarioTypes"]
+    assert data["Boundary"].startswith("Workspace data")
+    assert data["MtaRedCandidates"][0]["CandidateID"] == "MTA-RED-FG-MTA-RED-MAIN"
+    assert data["MtaRedCandidates"][0]["ProjectedLoadMinutes"] == 80
+    assert "RawPayload" not in data["MtaRedCandidates"][0]
+    assert "TopOfRed" not in data["MtaRedCandidates"][0]
+
+    evaluate = client.post(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/evaluate",
+        json={
+            "ScenarioType": "MTO_EXPEDITE",
+            "ResourceID": "WC-DRUM",
+            "BucketDate": "2026-06-19",
+            "AdditionalLoadMinutes": 60,
+            "DemandClass": "MTO",
+        },
+    )
+
+    assert evaluate.status_code == 200
+    result = evaluate.json()["Data"]
+    assert result["Mode"] == "SDBRNativeWhatIfV1"
+    assert result["Impact"]["AdditionalLoadMinutes"] == 60
+    assert result["SimioRecommendation"]["Title"] == "建议使用 Simio 高保真验证的情形"
+
+    mta_evaluate = client.post(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/evaluate",
+        json={
+            "ScenarioType": "MTA_RED_REPLENISHMENT_SHOCK",
+            "ResourceID": "WC-DRUM",
+            "BucketDate": "2026-06-19",
+            "CandidateID": "MTA-RED-FG-MTA-RED-MAIN",
+            "CandidateItemID": "FG-MTA-RED",
+            "CandidateLocationID": "MAIN",
+            "ProjectedLoadMinutes": 80,
+            "SuggestedShockQty": 12,
+        },
+    )
+
+    assert mta_evaluate.status_code == 200
+    mta_result = mta_evaluate.json()["Data"]
+    assert mta_result["ScenarioType"] == "MTA_RED_REPLENISHMENT_SHOCK"
+    assert mta_result["Impact"]["AdditionalLoadMinutes"] == 80
+    assert mta_result["Impact"]["Candidate"]["CandidateID"] == "MTA-RED-FG-MTA-RED-MAIN"
+
+    invalid = client.post(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/evaluate",
+        json={
+            "ScenarioType": "UNSUPPORTED",
+            "ResourceID": "WC-DRUM",
+            "BucketDate": "2026-06-19",
+            "AdditionalLoadMinutes": 60,
+        },
+    )
+
+    assert invalid.status_code == 422
+
+
+def test_schedule_result_what_if_rejects_missing_source_master_data_version():
+    store = _schedule_result_test_store()
+    del store.master_data_versions["MDV-RESULT"]
+    client = TestClient(create_app(state_store=store))
+
+    workspace = client.get(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/workspace"
+    )
+    evaluate = client.post(
+        "/planner/workbench/schedule-results/runs/RUN-RESULT/what-if/evaluate",
+        json={
+            "ScenarioType": "MTO_EXPEDITE",
+            "ResourceID": "WC-DRUM",
+            "BucketDate": "2026-06-19",
+            "AdditionalLoadMinutes": 60,
+        },
+    )
+
+    assert workspace.status_code == 409
+    assert workspace.json()["Data"]["Status"] == "SourceMasterDataUnavailable"
+    assert evaluate.status_code == 409
+    assert evaluate.json()["Data"]["Status"] == "SourceMasterDataUnavailable"
 
 
 def test_p1_market_control_case_executes_and_returns_mto_mta_load():
@@ -2698,9 +2807,49 @@ def test_schedule_results_page_exposes_p1_market_control_panel():
     css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
 
     assert 'id="sdbr-market-control-panel"' in html
+    assert 'id="market-control-details-list"' in html
+    assert "marketControlDetails" in script
+    assert "bufferDailyLoadScope" in script
+    assert 'onTimeOrders: "按计划准时工单"' in script
+    assert 'lateOrders: "按计划延迟工单"' in script
+    assert "marketSafeDateExpired" in script
+    assert "bufferZoneLabel(item.PriorityZone)" in script
     assert "renderSdbrMarketControl" in script
     assert "CCR planned load" not in html
     assert ".market-control-grid" in css
+    assert ".market-detail-row.zone-Red" in css
+
+
+def test_schedule_results_page_exposes_sdbr_native_what_if_panel():
+    html = Path("sdbr/web/planner-workbench.html").read_text(encoding="utf-8")
+    script = Path("sdbr/web/planner-workbench.js").read_text(encoding="utf-8")
+    css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
+
+    assert 'id="sdbr-what-if-panel"' in html
+    assert 'id="sdbr-what-if-scenario-type"' in html
+    assert 'id="sdbr-what-if-mta-candidate"' in html
+    assert 'id="run-sdbr-what-if"' in html
+    assert "/what-if/workspace" in script
+    assert "/what-if/evaluate" in script
+    assert "renderSdbrWhatIfWorkspace" in script
+    assert "selectedSdbrWhatIfMtaCandidate" in script
+    assert "MtaRedCandidates" in script
+    assert "CandidateID" in script
+    assert "mtaCandidateSummary" in script
+    assert 'whatIfDecision_AbsorbWithBufferAndProtectiveCapacity: "用缓冲和保护产能吸收"' in script
+    assert 'whatIfDecision_ProtectCcrAndReviewReplan: "保护约束并复核是否重排"' in script
+    assert ".sdbr-what-if-panel" in css
+
+
+def test_simulation_results_panel_exposes_simio_usage_recommendation_tooltip():
+    html = Path("sdbr/web/planner-workbench.html").read_text(encoding="utf-8")
+    script = Path("sdbr/web/planner-workbench.js").read_text(encoding="utf-8")
+    css = Path("sdbr/web/planner-workbench.css").read_text(encoding="utf-8")
+
+    assert 'id="simio-recommendation-help"' in html
+    assert "simioRecommendationTitle" in script
+    assert "CCR 不是单一资源" in script
+    assert ".simio-recommendation-tooltip" in css
 
 
 def test_be_ui_003_schedule_result_rejects_incomplete_run():
@@ -3969,6 +4118,10 @@ def test_ui_dispatch_001_workbench_exposes_independent_dispatch_suggestions_page
     assert 'SuggestQueueJump: "建议插队"' in script
     assert 'NeedsReplan: "需要重排"' in script
     assert 'Hold: "暂不派工"' in script
+    assert "formatDispatchGateReason" in script
+    assert "formatDispatchWipRisk" in script
+    assert "释放后 WIP 将超过上限，暂不进入正式派工队列。" in script
+    assert "LatestOperationalStateBlocked: \"最新门控阻塞\"" in script
     assert 'QueueJump: "建议插队"' in script
     assert 'ReviewAndReplan: "复核并考虑重排"' in script
     assert ".dispatch-priority-panel .panel-heading h2" in css

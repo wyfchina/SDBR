@@ -122,6 +122,30 @@ def test_mto_safe_date_uses_first_protected_ccr_bucket_plus_half_buffer():
     assert summary["Rule"] == "FirstProtectedCcrBucketPlusHalfTimeBuffer"
 
 
+def test_mto_safe_date_expires_when_evaluation_time_passes_safe_promise():
+    planned_load = {
+        "Buckets": [
+            {
+                "ResourceID": "CCR-1",
+                "Date": "2026-07-11",
+                "Status": "Protected",
+                "LoadPercent": 70.0,
+            },
+        ]
+    }
+
+    summary = build_mto_safe_date_summary(
+        ccr_planned_load=planned_load,
+        time_buffer_minutes=480,
+        evaluated_at=datetime(2026, 7, 11, 5, 0, tzinfo=timezone.utc),
+    )
+
+    assert summary["Status"] == "Expired"
+    assert summary["EarliestSafeDate"] == "2026-07-11"
+    assert summary["SafePromiseAt"] == "2026-07-11T04:00:00+00:00"
+    assert "已过期" in summary["BusinessMeaning"]
+
+
 def test_mta_replenishment_load_separates_mapped_and_unmapped_suggestions():
     result = build_mta_replenishment_load(
         ddmrp_lines=[
@@ -180,3 +204,43 @@ def test_unified_buffer_priority_places_red_mto_and_mta_before_yellow():
     assert rows[1]["DemandClass"] == "MTO"
     assert rows[1]["PriorityZone"] == "Yellow"
     assert result["Summary"]["RedCount"] == 1
+
+
+def test_unified_buffer_priority_recomputes_mto_zone_from_schedule_timing():
+    result = build_unified_buffer_priority(
+        mto_candidates=[
+            {
+                "OrderID": "WO-MTO-LATE",
+                "DemandClass": "MTO",
+                "BufferZone": "Green",
+                "SuggestedReleaseAt": "2026-07-10T08:00:00+00:00",
+                "ScheduledStart": "2026-07-10T12:00:00+00:00",
+            }
+        ],
+        mta_lines=[],
+        evaluated_at=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["Rows"][0]["PriorityZone"] == "Late"
+    assert result["Rows"][0]["PriorityPenetrationPercent"] == 125.0
+    assert result["Summary"]["RedCount"] == 1
+
+
+def test_unified_buffer_priority_does_not_fallback_to_seed_zone_when_scheduled_start_exists():
+    result = build_unified_buffer_priority(
+        mto_candidates=[
+            {
+                "OrderID": "WO-MTO-LATE",
+                "DemandClass": "MTO",
+                "BufferZone": "Red",
+                "BufferPenetrationPercent": 70,
+                "SuggestedReleaseAt": "2026-07-10T08:00:00+00:00",
+                "ScheduledStart": "2026-07-10T12:00:00+00:00",
+            }
+        ],
+        mta_lines=[],
+        evaluated_at=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["Rows"][0]["PriorityZone"] == "Late"
+    assert result["Rows"][0]["PriorityPenetrationPercent"] == 125.0

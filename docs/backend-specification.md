@@ -144,6 +144,7 @@ DDOM 与 DDS&OP 分工：
 | `BE-SDBR-002` | MTO safe-date execution signal | `[PARTIAL]` | `C` `build_mto_safe_date_summary`; `T` `tests/test_sdbr_market_control.py` | 基于 CCR planned load 和冻结时间缓冲策略生成执行层安全承诺信号；不在 SDBR 内治理或重算时间缓冲主参数 |
 | `BE-SDBR-003` | MTA replenishment load bridge | `[PARTIAL]` | `C` `build_mta_replenishment_load`; `T` `tests/test_sdbr_market_control.py` | 将 MTA replenishment load 可执行映射纳入 CCR 负荷可见性；缺少执行工单映射的补货建议必须输出 issue，不得隐式写入产能 |
 | `BE-SDBR-004` | Unified MTO/MTA buffer priority | `[PARTIAL]` | `C` `build_unified_buffer_priority`; `A` 释放管理和派工建议 read model; `T` `tests/test_sdbr_market_control.py`, `tests/test_dispatch_priority.py` | 用 shared red/yellow/green priority scale 统一 MTO time-buffer 与 MTA stock-buffer 的运行优先级；release authorization、物料/WIP 门控和 MES 到达仍是硬门槛 |
+| `BE-SDBR-005` | Native execution-level what-if | `[PARTIAL]` | `C` `sdbr/sdbr_what_if.py`; `A` `/planner/workbench/schedule-results/runs/{run_id}/what-if/workspace`, `/planner/workbench/schedule-results/runs/{run_id}/what-if/evaluate`; `T` `tests/test_sdbr_what_if.py`, `tests/test_api.py` | Evaluates execution-level shocks including MTO expedite/order insertion, downtime, supply delay, and MTA red-zone replenishment pressure against frozen CCR load, buffer status, and release assumptions. Does not mutate schedule, does not run CP-SAT, does not add DDAE protocol fields, and does not claim formal customer promise. |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -780,6 +781,13 @@ Simio 集成工作约束：
 - 业务验收：预览阶段重点检查事项是否齐全，包括资源日历分配、基础班次、工作日、节假日、维护、加班、临时覆盖、冲突优先级、时区和跨班次加工规则；最终能力窗口与 CP-SAT 能力桶语义一致
 - 已知限制：本阶段完成独立页面的预览、要素检查和核心配置操作，不实现审批流、节假日强制加班例外、跨班次连续加工、复杂表格编辑器和企业节假日同步
 
+### BE-DATA-010 / UI-CALENDAR-001 日历配置可见性修正记录
+
+- 状态变更：`BE-DATA-010` 保持 `[PARTIAL]`；本轮不改变 Planning Run 的日历冻结语义。
+- 日期：2026-07-09
+- 实现证据：`sdbr/web/planner-workbench.html` 将独立日历页面的新建基础日历默认时区改为 `Asia/Shanghai`；`sdbr/web/planner-workbench.js` 保存基础日历时使用相同默认值，并在已保存基础日历列表中展示时区；`sdbr/web/planner-workbench.js` 取消资源日历分配小列表的 4 条截断；`sdbr/web/planner-workbench.css` 为日历小列表增加滚动展示，避免资源较多时遮挡。
+- 业务验收：计划员可以看到全部资源日历分配记录；若基础日历仍为 `UTC`，界面会在已保存日历列表中显示该时区，便于判断班次是否按本地时间解释。历史 Planning Run 不会因后续日历修改自动重算；新建或重排 Planning Run 才会冻结并消费当前 Active 日历配置。
+
 ### BE-DATA-012 / BE-INT-* / BE-SOLVER-014 第一版交付边界验收记录
 
 - 状态变更：`BE-DATA-012` 从 `[NOT-STARTED]` 推进到 `[PARTIAL]`；`BE-INT-001`、`BE-INT-002`、`BE-INT-004`、`BE-INT-005` 保持 `[PARTIAL]` 并明确第一版采用 Mock API；`BE-SOLVER-014` 保持 `[PARTIAL]` 并明确第一版默认目标策略
@@ -946,10 +954,41 @@ Simio 集成工作约束：
 - 边界：本轮不新增 DDAE 协议；不配置、审批或重算 DDAE 主参数；不声明正式承诺交期；MTA 补货建议缺少执行工单映射时只输出 issue，不隐式写入 CCR 负荷。
 - 用户确认：待确认。
 
+### BE-SDBR-004 / BE-REL-011 / BE-INT-005 时间缓冲与派工门控解释修正记录
+
+- 日期：2026-07-09
+- 状态变更：保持 `[PARTIAL]`，修正 P1 内部 read model 与派工建议解释，不改变对外集成边界。
+- 实现证据：`sdbr/sdbr_market_control.py` 在 unified buffer priority 中按 MTO 建议释放时间、计划开始时间和评估时间重新计算渗透率与红黄绿/逾期区，避免演示字段与真实排程时间脱钩；`sdbr/schedule_result_view.py` 将计划开始时间传入市场控制 read model；`sdbr/dispatch_priority.py` 将 WIP/物料/快照阻塞解释为“候选预警，不进入 MES 正式派工队列”。
+- 测试证据：`pytest tests/test_sdbr_market_control.py -q --basetemp .tmp/pytest-market-control-time-bound -p no:cacheprovider`，6 passed；`pytest tests/test_dispatch_priority.py -q --basetemp .tmp/pytest-dispatch-reasons -p no:cacheprovider`，5 passed；`pytest tests/test_api.py -q -k "ui_dispatch_001 or schedule_results_page_exposes_p1_market_control_panel or p1_market_control_case or schedule_results_returns_p1_market_control" --basetemp .tmp/pytest-p1-dispatch-ui -p no:cacheprovider`，4 passed。
+- 业务验收：MTO 缓冲颜色必须由实际排程时间窗口和评估时间驱动；派工建议不得绕过释放门控，WIP 超限、物料不足或快照异常只能进入候选/预警，并保留 WIP 快照/策略证据供计划员判断。
+
+### BE-SDBR-002 / BE-SDBR-004 MTO 安全承诺与 Late/Red 判定修正记录
+
+- 日期：2026-07-09
+- 状态变更：保持 `[PARTIAL]`，修正 P1 内部 read model 的时间口径，不新增 DDAE 协议、不声明正式客户承诺。
+- 实现证据：`sdbr/sdbr_market_control.py` 为 `build_mto_safe_date_summary` 增加评估时间，若 `SafePromiseAt` 已早于当前评估时间则返回 `Expired`；`sdbr/schedule_result_view.py` 在 unified buffer priority 中优先使用甘特图真实首工序开始时间，避免 `BufferBoard.TargetStartDate` 只有日期时被误读成午夜并回退到 seed 缓冲区。
+- 业务验收：MTO 安全承诺已过期时必须显示过期并要求重新评估；Late 与 Red 均来自同一套“建议释放时间 -> 计划开始时间 -> 当前评估时间”的时间缓冲渗透率计算，不能一部分用真实排程、一部分用演示 seed。
+
+### BE-SDBR-005 Native execution-level what-if 验收记录
+
+- 日期：2026-07-09
+- 范围：P2 第一版只做执行层 what-if read model，覆盖 MTO 插单/加急、停机、供应延迟、MTA 红区补货冲击是否会把 CCR 负荷推入关注、接近上限或超载。
+- 边界：不创建新 Planning Run；不修改冻结排程；不调用 CP-SAT；不新增 DDAE 协议；不将 Simio 作为主决策引擎。
+- 业务输出：返回 CCR 负荷变化、保护能力状态、建议动作和是否建议用 Simio 高保真验证；MTA 红区冲击必须选择稳定投影后的红区候选，不暴露原始 DDMRP 阈值字段；MTO 安全承诺与 MTA/MTO 统一缓冲优先级继续由 `BE-SDBR-002` / `BE-SDBR-004` read model 提供上下文。
+- 实现证据：新增 `sdbr/sdbr_what_if.py`，提供 `build_sdbr_what_if_workspace`、`evaluate_sdbr_what_if_scenario` 和 `simio_recommendation_hint`；`sdbr/api.py` 新增 `/planner/workbench/schedule-results/runs/{run_id}/what-if/workspace` 与 `/planner/workbench/schedule-results/runs/{run_id}/what-if/evaluate`，仅消费已完成 Planning Run 的冻结排程结果和 CCR planned load。
+- 异常边界：未知场景由 API schema 拒绝；内部调用返回 `UNSUPPORTED_SCENARIO_TYPE`；缺少 Planning Run 引用的 Master Data Version 时 what-if workspace/evaluate 返回 `SourceMasterDataUnavailable`，不得静默降级为空输入。
+- 测试证据：`pytest tests/test_sdbr_what_if.py -q --basetemp .tmp/pytest-sdbr-what-if-mta-fix2 -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "what_if or simio_usage_recommendation or schedule_results_page_exposes_p1_market_control_panel" --basetemp .tmp/pytest-sdbr-what-if-api-ui-mta-fix2 -p no:cacheprovider`，5 passed，1 warning；`python -m compileall -q sdbr` 和 `node --check sdbr/web/planner-workbench.js` 通过；全量 `pytest -q --basetemp .tmp/pytest-full-sdbr-what-if-mta-fix2 -p no:cacheprovider`，471 passed，1 warning。
+- 状态：`[PARTIAL]`，执行层原生 what-if 第一版已具备 repeatable test evidence；正式 CP-SAT 重排、Simio 高保真仿真执行和生产承诺仍在后续范围。
+
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.72 | 2026-07-09 | 完成 `BE-SDBR-005` P2 S-DBR 原生 execution-level what-if 第一版：新增纯 read model、已完成排程 API、MTO 插单/加急、停机、供应延迟、MTA 红区补货冲击评估和 Simio 使用建议；保持不改冻结排程、不调用 CP-SAT、不新增 DDAE 协议 |
+| 2.71 | 2026-07-09 | 启动 P2 S-DBR 原生 execution-level what-if 规格：插单、停机、供应延迟、MTA 红区补货冲击先由 S-DBR 快速评估 CCR 风险；Simio 作为复杂动态系统的可选高保真验证提示 |
+| 2.70 | 2026-07-09 | 修正 P1 MTO 安全承诺和 Late/Red 判定：安全承诺已过评估时间时返回 `Expired`；MTO 优先级优先使用甘特真实首工序开始时间，避免 date-only 字段导致回退到演示 seed 缓冲区 |
+| 2.69 | 2026-07-09 | 修正日历配置可见性：新建基础日历默认 `Asia/Shanghai`，已保存日历列表显示时区，资源日历分配列表取消 4 条截断并支持滚动；Planning Run 日历冻结语义不变 |
+| 2.68 | 2026-07-09 | 修正 P1 市场控制和 MES 派工建议解释：MTO unified buffer priority 按建议释放时间、计划开始和评估时间计算渗透率；候选/预警区明确不进入正式派工队列，并显示 WIP 门控依据 |
 | 2.67 | 2026-07-09 | 完成 P1 S-DBR market-control 第一轮验收记录：新增内部执行 read model、释放/派工市场优先级证据、P1 测试案例和排程结果只读面板；仍保持 `[PARTIAL]`，不新增 DDAE 协议、不声明正式承诺交期 |
 | 2.66 | 2026-07-09 | Start P1 S-DBR market-control scope: CCR planned load, MTO safe-date signal, MTA replenishment load visibility, and unified buffer priority. First round uses existing DDAE contracts and frozen runtime inputs; no new DDAE protocol is required. |
 | 2.65 | 2026-07-03 | 新增 S-DBR 计划负荷与保护产能 read model：排程结果接口返回 `SDBRFlowControl`，展示计划负荷、安全日期、释放纪律、稳定性建议和非约束资源保护产能；明确非约束资源保持监控/候选约束信号，不自动转为 CP-SAT 硬约束、不自动重排、不声明正式承诺交期 |

@@ -272,7 +272,7 @@ def _enrich_dispatch_recommendation(row: dict[str, object]) -> None:
         elif status == "ExceptionReported":
             row["RecommendationReason"] = "MES 已上报异常，需处理异常后再派工"
         elif row.get("LatestGateBlockingReasons"):
-            row["RecommendationReason"] = "最新释放门控未通过，暂不派工"
+            row["RecommendationReason"] = _gate_blocking_recommendation_reason(row)
         else:
             row["RecommendationReason"] = "暂不满足正式派工条件"
         return
@@ -286,6 +286,22 @@ def _enrich_dispatch_recommendation(row: dict[str, object]) -> None:
     else:
         row["DispatchRecommendation"] = "FollowPlan"
         row["RecommendationReason"] = "释放、物料、WIP 和现场状态通过，按计划顺序加工"
+
+
+def _gate_blocking_recommendation_reason(row: dict[str, object]) -> str:
+    codes = {
+        str(reason.get("Code"))
+        for reason in _dict_list(row.get("LatestGateBlockingReasons"))
+    }
+    if "WIP_LIMIT_EXCEEDED" in codes:
+        return "释放后 WIP 将超过上限，保留为候选预警，暂不进入 MES 正式派工队列"
+    if "MATERIAL_SHORTAGE" in codes:
+        return "物料可用性未通过，保留为候选预警，暂不进入 MES 正式派工队列"
+    if "MATERIAL_INBOUND_PENDING" in codes:
+        return "物料仍在途中，保留为候选预警，暂不进入 MES 正式派工队列"
+    if any(code.startswith("OPERATIONAL_SNAPSHOT_") for code in codes):
+        return "运行状态快照不可用，请刷新快照并重新评估后再派工"
+    return "最新释放门控未通过，保留为候选预警，暂不进入 MES 正式派工队列"
 
 
 def _dispatch_sort_key(row: dict[str, object]) -> tuple[object, ...]:

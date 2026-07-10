@@ -76,6 +76,10 @@ def test_mes_dispatch_priority_keeps_unreleased_or_blocked_orders_as_warnings():
     warnings = {row["OrderID"]: row for row in resource["CandidateWarnings"]}
     assert warnings["WO-B"]["LatestGateStatus"] == "LatestOperationalStateBlocked"
     assert warnings["WO-B"]["LatestGateBlockingReasons"][0]["Code"] == "WIP_LIMIT_EXCEEDED"
+    assert (
+        warnings["WO-B"]["RecommendationReason"]
+        == "释放后 WIP 将超过上限，保留为候选预警，暂不进入 MES 正式派工队列"
+    )
     assert warnings["WO-C"]["LatestGateStatus"] == "ReleaseNotAuthorized"
     assert queue["Summary"]["CandidateWarningCount"] == 2
 

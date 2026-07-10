@@ -145,6 +145,10 @@ DDOM 与 DDS&OP 分工：
 | `BE-SDBR-003` | MTA replenishment load bridge | `[PARTIAL]` | `C` `build_mta_replenishment_load`; `T` `tests/test_sdbr_market_control.py` | 将 MTA replenishment load 可执行映射纳入 CCR 负荷可见性；缺少执行工单映射的补货建议必须输出 issue，不得隐式写入产能 |
 | `BE-SDBR-004` | Unified MTO/MTA buffer priority | `[PARTIAL]` | `C` `build_unified_buffer_priority`; `A` 释放管理和派工建议 read model; `T` `tests/test_sdbr_market_control.py`, `tests/test_dispatch_priority.py` | 用 shared red/yellow/green priority scale 统一 MTO time-buffer 与 MTA stock-buffer 的运行优先级；release authorization、物料/WIP 门控和 MES 到达仍是硬门槛 |
 | `BE-SDBR-005` | Native execution-level what-if | `[PARTIAL]` | `C` `sdbr/sdbr_what_if.py`; `A` `/planner/workbench/schedule-results/runs/{run_id}/what-if/workspace`, `/planner/workbench/schedule-results/runs/{run_id}/what-if/evaluate`; `T` `tests/test_sdbr_what_if.py`, `tests/test_api.py` | Evaluates execution-level shocks including MTO expedite/order insertion, downtime, supply delay, and MTA red-zone replenishment pressure against frozen CCR load, buffer status, and release assumptions. Does not mutate schedule, does not run CP-SAT, does not add DDAE protocol fields, and does not claim formal customer promise. |
+| `BE-SDBR-006` | Shared demand commitment identity | `[PARTIAL]` | `C` `sdbr/planning_commitments.py`; `T` `tests/test_planning_commitments.py` | MTO、MTA、DependentDemand 和外部正式订单使用统一需求身份、版本、幂等键和来源分类；相同业务键不得产生两个活动承诺 |
+| `BE-SDBR-007` | Atomic planning reservation batch | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`; `T` `tests/test_planning_reservations.py` | 计划员确认产生的候选、CCR 容量预留和物料计划分配全部成功或全部失败；Phase 0 不提供独立确认 UI |
+| `BE-SDBR-008` | Shared CCR capacity reservation ledger | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`, `sdbr/planning_reservation_view.py`; `T` `tests/test_planning_reservations.py`, `tests/test_planning_reservation_view.py`, `tests/test_sdbr_market_control.py` | MTO/MTA 使用同一负荷台账；正式工序转正后不得重复计入 Planned Load |
+| `BE-SDBR-009` | Shared material planning allocation ledger | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`, `sdbr/planning_reservation_view.py`; `T` `tests/test_planning_reservations.py`, `tests/test_planning_reservation_view.py` | 计划分配防止其他需求重复使用供应，但不得把同一需求再次扣减净流；ERP/WMS 权威分配接管后停止额外扣减 |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -160,6 +164,7 @@ DDOM 与 DDS&OP 分工：
 | `BE-RUN-008` | 运行幂等键与重复请求去重 | `[PARTIAL]` | `C` 状态机和版本冲突可阻止部分重复写入 | 增加显式 idempotency key、请求摘要和重复响应语义 |
 | `BE-RUN-009` | 计划确认、发布和撤销发布生命周期 | `[VERIFIED]` | `C` `sdbr/plan_publication.py`; `A` `/planning-runs/{run_id}/publication/*`; `T` `tests/test_business_closure.py` | 已实现 Draft/Reviewed/Approved/Published/Superseded/PublicationRevoked 状态、权限、审计和非法跳转保护 |
 | `BE-RUN-010` | Planning Run 冻结 Operating Model Configuration | `[PARTIAL]` | `C/A` `sdbr/ddsop_contracts.py`, `/planner/workbench/ddsop/config-inbound`, `/planner/workbench/planning-runs`; `T` `tests/test_ddsop_contracts.py`; `R` `D:\Documents\DDAE_INTERFACE_CONTRACT\reviews\SDBR-open-gates-report.md` | 已支持按 `D:\Documents\DDAE_INTERFACE_CONTRACT\contracts\ddsop-config-inbound-v1` 接收、校验、ACK 并保存 DDAE Operating Model Configuration；引用可用配置创建 Planning Run 时深度解析所选 `MasterDataVersionID` 下 ProductID、PrimaryRoutingID、ResourceID、ItemID、LocationID 等 required references，无法解析时拒绝创建并返回 `REFERENCE_NOT_FOUND`；成功时冻结 `OperatingModelConfigurationID`、`OperatingModelFingerprint`、`SchedulingConfigurationID`、`DDMRPConfigurationID` 和完整配置快照；旧 Planning Run 兼容路径仍允许不带配置，但标记为 `LegacyNonDdsopConfigInboundV1`，不作为 DDSOP-CONFIG-INBOUND-V1 合规路径；重排强制继承/替换 Operating Model Configuration 的策略仍需后续补齐 |
+| `BE-RUN-011` | Planning Run freezes and converts planning reservations | `[PARTIAL]` | `C` `sdbr/planning_run_reservation_bridge.py`, `sdbr/api.py`; `T` `tests/test_planning_run_reservation_bridge.py`, `tests/test_api.py` | Planning Run 显式冻结有效批次；Completed 转正式工序占用，Failed/DeadLetter 保留并标记异常，Queued 重试不提前转状态 |
 
 ## 6. 求解器接口与排程模型
 
@@ -980,10 +985,19 @@ Simio 集成工作约束：
 - 测试证据：`pytest tests/test_sdbr_what_if.py -q --basetemp .tmp/pytest-sdbr-what-if-mta-fix2 -p no:cacheprovider`，9 passed；`pytest tests/test_api.py -q -k "what_if or simio_usage_recommendation or schedule_results_page_exposes_p1_market_control_panel" --basetemp .tmp/pytest-sdbr-what-if-api-ui-mta-fix2 -p no:cacheprovider`，5 passed，1 warning；`python -m compileall -q sdbr` 和 `node --check sdbr/web/planner-workbench.js` 通过；全量 `pytest -q --basetemp .tmp/pytest-full-sdbr-what-if-mta-fix2 -p no:cacheprovider`，471 passed，1 warning。
 - 状态：`[PARTIAL]`，执行层原生 what-if 第一版已具备 repeatable test evidence；正式 CP-SAT 重排、Simio 高保真仿真执行和生产承诺仍在后续范围。
 
+### BE-SDBR-006 至 BE-SDBR-009 / BE-RUN-011 共享计划预留阶段 0
+
+- 日期：2026-07-10
+- 范围：统一 MTO/MTA 需求身份、CCR 计划级容量预留、物料计划分配、状态存储、Planning Run 冻结与转正。
+- 核心不变量：需求只计一次；计划预留转正式工序后不重复计负荷；权威物料分配接管后不重复扣减；确认批次原子写入；重放不产生重复对象。
+- 边界：不实现 MTO 影子排程、DDMRP 新算法、BOM 展开、ERP 正式订单创建或 UI 页面。
+- 状态：`[PARTIAL]`，待实现与重复测试证据。
+
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.73 | 2026-07-10 | 启动 MTO/MTA 共享计划预留阶段 0：统一需求身份、CCR 预留、物料计划分配、Planning Run 转正和事件幂等，避免订单承诺与 DDMRP 补货重复占用能力和物料 |
 | 2.72 | 2026-07-09 | 完成 `BE-SDBR-005` P2 S-DBR 原生 execution-level what-if 第一版：新增纯 read model、已完成排程 API、MTO 插单/加急、停机、供应延迟、MTA 红区补货冲击评估和 Simio 使用建议；保持不改冻结排程、不调用 CP-SAT、不新增 DDAE 协议 |
 | 2.71 | 2026-07-09 | 启动 P2 S-DBR 原生 execution-level what-if 规格：插单、停机、供应延迟、MTA 红区补货冲击先由 S-DBR 快速评估 CCR 风险；Simio 作为复杂动态系统的可选高保真验证提示 |
 | 2.70 | 2026-07-09 | 修正 P1 MTO 安全承诺和 Late/Red 判定：安全承诺已过评估时间时返回 `Expired`；MTO 优先级优先使用甘特真实首工序开始时间，避免 date-only 字段导致回退到演示 seed 缓冲区 |

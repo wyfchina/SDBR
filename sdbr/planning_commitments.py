@@ -23,7 +23,11 @@ ACTIVE_DEMAND_STATUSES = {
 
 
 class DemandCommitmentConflict(ValueError):
-    pass
+    status = "DemandCommitmentConflict"
+
+
+class DemandCommitmentMigrationRequired(DemandCommitmentConflict):
+    status = "DemandCommitmentMigrationRequired"
 
 
 BUSINESS_CONTENT_FIELDS = (
@@ -169,10 +173,31 @@ def register_demand_commitment(
     for existing in commitments.values():
         if existing.get("BusinessKey") != candidate.get("BusinessKey"):
             continue
+        existing_content = _business_content_from_record(existing)
+        if existing_content is None:
+            raise DemandCommitmentMigrationRequired(
+                "Persisted demand commitment cannot be verified without explicit "
+                "migration."
+            )
+        candidate_content = _business_content_from_record(candidate)
+        if candidate_content is None:
+            raise DemandCommitmentConflict(
+                "Candidate demand commitment business content is invalid."
+            )
+        existing_fingerprint = demand_commitment_content_fingerprint(existing)
+        candidate_fingerprint = demand_commitment_content_fingerprint(candidate)
+        if existing.get("ContentFingerprint") != existing_fingerprint:
+            raise DemandCommitmentMigrationRequired(
+                "Persisted demand commitment fingerprint cannot be verified without "
+                "explicit migration."
+            )
+        if candidate.get("ContentFingerprint") != candidate_fingerprint:
+            raise DemandCommitmentConflict(
+                "Candidate demand commitment fingerprint does not match its content."
+            )
         if (
-            existing.get("ContentFingerprint") == candidate.get("ContentFingerprint")
-            or _business_content_from_record(existing)
-            == _business_content_from_record(candidate)
+            existing_content == candidate_content
+            and existing_fingerprint == candidate_fingerprint
         ):
             return "Duplicate", dict(existing)
         raise DemandCommitmentConflict(

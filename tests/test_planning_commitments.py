@@ -136,6 +136,42 @@ def test_trace_id_change_is_idempotent_business_replay_metadata():
     assert registered == existing
 
 
+@pytest.mark.parametrize("forged_record", ["existing", "candidate"])
+def test_register_recomputes_persisted_and_candidate_fingerprints(
+    forged_record: str,
+):
+    existing = _commitment()
+    candidate = _commitment()
+    target = existing if forged_record == "existing" else candidate
+    target["ContentFingerprint"] = "sha256:forged"
+
+    with pytest.raises(DemandCommitmentConflict) as error:
+        register_demand_commitment(
+            {str(existing["DemandCommitmentID"]): existing}, candidate
+        )
+
+    expected_status = (
+        "DemandCommitmentMigrationRequired"
+        if forged_record == "existing"
+        else "DemandCommitmentConflict"
+    )
+    assert error.value.status == expected_status
+
+
+def test_register_does_not_treat_two_malformed_business_records_as_equal():
+    existing = _commitment()
+    candidate = _commitment()
+    existing.pop("RequiredAt")
+    candidate.pop("RequiredAt")
+
+    with pytest.raises(DemandCommitmentConflict) as error:
+        register_demand_commitment(
+            {str(existing["DemandCommitmentID"]): existing}, candidate
+        )
+
+    assert error.value.status == "DemandCommitmentMigrationRequired"
+
+
 def test_create_demand_commitment_delimited_source_identifiers_remain_distinct():
     first = _commitment(source_system="ERP|A", source_object_type="Order")
     second = _commitment(source_system="ERP", source_object_type="A|Order")

@@ -101,6 +101,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
             "WindowStartAt": "2026-07-20T08:00:00+00:00",
             "WindowEndAt": "2026-07-20T10:00:00+00:00",
             "ReservedMinutes": 120,
+            "LatestAllowedCompletionAt": "2026-07-20T10:00:00+00:00",
             "Status": status,
             "Details": {"resource": "CCR-A"},
             "RecordVersion": 1,
@@ -117,6 +118,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
             "WindowStartAt": "2026-07-20T10:00:00+00:00",
             "WindowEndAt": "2026-07-20T11:00:00+00:00",
             "ReservedMinutes": 60,
+            "LatestAllowedCompletionAt": "2026-07-20T11:00:00+00:00",
             "Status": "LinkedToFormalOrder",
             "RecordVersion": 1,
         },
@@ -159,6 +161,37 @@ def _allocations(
 
 def _occurred_at() -> datetime:
     return datetime(2026, 7, 20, 12, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("latest_allowed_completion_at", "message"),
+    [
+        (None, "LatestAllowedCompletionAt"),
+        ("2026-07-20T09:30:00", "timezone-aware"),
+        ("2026-07-20T07:59:00+00:00", "inside the reservation window"),
+        ("2026-07-20T10:01:00+00:00", "inside the reservation window"),
+    ],
+)
+def test_freeze_requires_aware_latest_completion_inside_capacity_window(
+    latest_allowed_completion_at: object,
+    message: str,
+):
+    capacities = _capacities()
+    if latest_allowed_completion_at is None:
+        capacities["CCR-1"].pop("LatestAllowedCompletionAt")
+    else:
+        capacities["CCR-1"]["LatestAllowedCompletionAt"] = (
+            latest_allowed_completion_at
+        )
+
+    with pytest.raises(ReservationBatchReferenceError, match=message):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
+            batches=_batches(),
+            capacity_reservations=capacities,
+            material_allocations=_allocations(),
+        )
 
 
 def _exact_schedule(*, include_second: bool = False) -> dict[str, object]:
@@ -963,6 +996,65 @@ def test_completed_run_rejects_declared_duration_inconsistent_with_timestamps():
         )
 
     assert "timestamp duration" in error.value.reasons["CCR-1"].lower()
+
+
+def test_completed_run_rejects_schedule_after_latest_allowed_completion():
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    capacities["CCR-1"]["LatestAllowedCompletionAt"] = (
+        "2026-07-20T09:30:00+00:00"
+    )
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    with pytest.raises(ScheduledOccupancyEvidenceError) as error:
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=_exact_schedule(),
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert "latest allowed completion" in error.value.reasons["CCR-1"].lower()
+
+
+def test_transition_requires_top_level_selected_ids_to_match_frozen_graph():
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    with pytest.raises(ReservationGraphDriftError, match="selected batch"):
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Failed",
+            occurred_at=_occurred_at(),
+            batch_ids=[],
+            frozen_reservations=frozen,
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
 
 
 def test_completed_run_rejects_partial_scheduled_occupancy_evidence():

@@ -9,7 +9,10 @@ from math import isfinite
 from numbers import Real
 from typing import Iterable, Mapping, MutableMapping, MutableSequence, MutableSet
 
-from sdbr.planning_commitments import assert_no_active_predecessor
+from sdbr.planning_commitments import (
+    assert_no_active_predecessor,
+    demand_commitment_content_fingerprint,
+)
 
 
 ACTIVE_CAPACITY_RESERVATION_STATUSES = {
@@ -18,12 +21,47 @@ ACTIVE_CAPACITY_RESERVATION_STATUSES = {
 ACTIVE_MATERIAL_ALLOCATION_STATUSES = {
     "ActivePlanReservation", "LinkedToFormalOrder", "HeldForPlanningError"
 }
+
+
 class ReservationConflict(ValueError):
-    pass
+    status = "PlanningReservationConflict"
 
 
 class ReservationLegacyMigrationRequired(ReservationConflict):
     status = "PlanningReservationLegacyMigrationRequired"
+
+
+_REPLAY_TRANSITION_FIELDS = {
+    "Status",
+    "RecordVersion",
+    "PlanningRunID",
+    "LastTransitionAt",
+    "EventType",
+}
+_DEMAND_REPLAY_STATUSES = {
+    "Active",
+    "LinkedToFormalOrder",
+    "HeldForPlanningError",
+    "AdjustmentRequired",
+    "Released",
+    "Superseded",
+    "Cancelled",
+}
+_RESERVATION_REPLAY_STATUSES = {
+    "ActivePlanReservation",
+    "LinkedToFormalOrder",
+    "ConvertedToScheduledOccupancy",
+    "HeldForPlanningError",
+    "AdjustmentRequired",
+    "Released",
+    "Cancelled",
+    "Rejected",
+}
+_MATERIAL_REPLAY_STATUSES = _RESERVATION_REPLAY_STATUSES | {
+    "Externalized",
+    "AuthorityTransferred",
+}
+_MATERIAL_AUTHORITY_STATUSES = {"Externalized", "AuthorityTransferred"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +109,23 @@ def _validate_capacity_requests(rows: tuple[dict[str, object], ...]) -> None:
         if window_end <= window_start:
             raise ReservationConflict(
                 "Capacity request window end must be strictly after start."
+            )
+        if not isinstance(row.get("LatestAllowedCompletionAt"), str) or not str(
+            row.get("LatestAllowedCompletionAt")
+        ).strip():
+            raise ReservationConflict(
+                "Capacity request LatestAllowedCompletionAt is required."
+            )
+        latest_allowed_completion = _parse_timezone_aware_iso_datetime(
+            row["LatestAllowedCompletionAt"],
+            "LatestAllowedCompletionAt",
+        )
+        if not (
+            window_start < latest_allowed_completion <= window_end
+        ):
+            raise ReservationConflict(
+                "Capacity request LatestAllowedCompletionAt must be inside the "
+                "reservation window."
             )
         line_id = _required_string(
             row.get("ReservationLineID"), "Capacity ReservationLineID is required."
@@ -375,9 +430,96 @@ def _assert_write_set_fingerprint_and_result(
     return current_fingerprint, expected_result
 
 
+def _replay_record(
+    *,
+    records: Mapping[str, dict[str, object]],
+    record_id: str,
+    id_field: str,
+    record_name: str,
+) -> dict[str, object]:
+    record = records.get(record_id)
+    if not isinstance(record, Mapping):
+        raise ReservationLegacyMigrationRequired(
+            f"Persisted reservation replay is missing verifiable {record_name} "
+            f"{record_id}."
+        )
+    if record.get(id_field) != record_id:
+        raise ReservationLegacyMigrationRequired(
+            f"Persisted reservation replay {record_name} identity is unverifiable."
+        )
+    return dict(record)
+
+
+def _assert_replay_record_content(
+    *,
+    persisted: Mapping[str, object],
+    candidate: Mapping[str, object],
+    record_name: str,
+    allowed_statuses: set[str],
+    allow_material_authority_handoff: bool = False,
+) -> None:
+    persisted_status = persisted.get("Status")
+    if persisted_status not in allowed_statuses:
+        raise ReservationConflict(
+            f"Persisted reservation replay {record_name} has an unsupported "
+            "lifecycle status."
+        )
+    persisted_version = persisted.get("RecordVersion")
+    candidate_version = candidate.get("RecordVersion")
+    if (
+        isinstance(persisted_version, bool)
+        or not isinstance(persisted_version, int)
+        or isinstance(candidate_version, bool)
+        or not isinstance(candidate_version, int)
+        or persisted_version < candidate_version
+    ):
+        raise ReservationLegacyMigrationRequired(
+            f"Persisted reservation replay {record_name} version is unverifiable."
+        )
+    mutable_fields = set(_REPLAY_TRANSITION_FIELDS)
+    if (
+        allow_material_authority_handoff
+        and persisted_status in _MATERIAL_AUTHORITY_STATUSES
+        and persisted_version > candidate_version
+        and isinstance(persisted.get("ExternalAllocationRef"), str)
+        and str(persisted.get("ExternalAllocationRef")).strip()
+        and isinstance(persisted.get("MaterialSnapshotID"), str)
+        and str(persisted.get("MaterialSnapshotID")).strip()
+        and persisted.get("MaterialSnapshotID") != candidate.get("MaterialSnapshotID")
+    ):
+        mutable_fields.update({"ExternalAllocationRef", "MaterialSnapshotID"})
+    persisted_immutable = {
+        key: deepcopy(value)
+        for key, value in persisted.items()
+        if key not in mutable_fields
+    }
+    candidate_immutable = {
+        key: deepcopy(value)
+        for key, value in candidate.items()
+        if key not in mutable_fields
+    }
+    if persisted_immutable != candidate_immutable:
+        raise ReservationConflict(
+            f"Persisted reservation replay {record_name} immutable content drifted."
+        )
+    lifecycle_changed = any(
+        persisted.get(field) != candidate.get(field)
+        for field in mutable_fields
+    )
+    if lifecycle_changed and persisted_version <= candidate_version:
+        raise ReservationConflict(
+            f"Persisted reservation replay {record_name} lifecycle changed without "
+            "a newer version."
+        )
+
+
 def _assert_idempotent_replay_matches(
     *,
     write_set: PlanningReservationWriteSet,
+    commitments: Mapping[str, dict[str, object]],
+    batches: Mapping[str, dict[str, object]],
+    capacity_reservations: Mapping[str, dict[str, object]],
+    material_allocations: Mapping[str, dict[str, object]],
     events: MutableSequence[dict[str, object]],
     current_fingerprint: str,
     expected_result: dict[str, object],
@@ -387,6 +529,10 @@ def _assert_idempotent_replay_matches(
         for event in events
         if event.get("IdempotencyKey") == write_set.idempotency_key
     ]
+    if not matching_events:
+        raise ReservationLegacyMigrationRequired(
+            "Processed reservation idempotency key has no persisted replay result."
+        )
     if len(matching_events) != 1:
         raise ReservationConflict(
             "Processed reservation idempotency key has no unique persisted result."
@@ -406,6 +552,79 @@ def _assert_idempotent_replay_matches(
     ):
         raise ReservationConflict(
             "Reservation idempotency key was already used with different content."
+        )
+    demand_id = str(expected_result["DemandCommitmentID"])
+    batch_id = str(expected_result["ReservationBatchID"])
+    persisted_demand = _replay_record(
+        records=commitments,
+        record_id=demand_id,
+        id_field="DemandCommitmentID",
+        record_name="demand commitment",
+    )
+    persisted_batch = _replay_record(
+        records=batches,
+        record_id=batch_id,
+        id_field="ReservationBatchID",
+        record_name="reservation batch",
+    )
+    try:
+        persisted_demand_fingerprint = demand_commitment_content_fingerprint(
+            persisted_demand
+        )
+    except ValueError as error:
+        raise ReservationLegacyMigrationRequired(
+            "Persisted reservation replay demand content is unverifiable."
+        ) from error
+    if persisted_demand.get("ContentFingerprint") != persisted_demand_fingerprint:
+        raise ReservationLegacyMigrationRequired(
+            "Persisted reservation replay demand fingerprint is unverifiable."
+        )
+    _assert_replay_record_content(
+        persisted=persisted_demand,
+        candidate=write_set.demand_commitment,
+        record_name="demand commitment",
+        allowed_statuses=_DEMAND_REPLAY_STATUSES,
+    )
+    _assert_replay_record_content(
+        persisted=persisted_batch,
+        candidate=write_set.batch,
+        record_name="reservation batch",
+        allowed_statuses=_RESERVATION_REPLAY_STATUSES,
+    )
+    candidate_capacities = {
+        str(record["CapacityReservationID"]): record
+        for record in write_set.capacity_reservations
+    }
+    candidate_materials = {
+        str(record["MaterialAllocationID"]): record
+        for record in write_set.material_allocations
+    }
+    for capacity_id in expected_result["CapacityReservationIDs"]:
+        persisted_capacity = _replay_record(
+            records=capacity_reservations,
+            record_id=str(capacity_id),
+            id_field="CapacityReservationID",
+            record_name="capacity reservation",
+        )
+        _assert_replay_record_content(
+            persisted=persisted_capacity,
+            candidate=candidate_capacities[str(capacity_id)],
+            record_name="capacity reservation",
+            allowed_statuses=_RESERVATION_REPLAY_STATUSES,
+        )
+    for material_id in expected_result["MaterialAllocationIDs"]:
+        persisted_material = _replay_record(
+            records=material_allocations,
+            record_id=str(material_id),
+            id_field="MaterialAllocationID",
+            record_name="material allocation",
+        )
+        _assert_replay_record_content(
+            persisted=persisted_material,
+            candidate=candidate_materials[str(material_id)],
+            record_name="material allocation",
+            allowed_statuses=_MATERIAL_REPLAY_STATUSES,
+            allow_material_authority_handoff=True,
         )
 
 
@@ -450,6 +669,10 @@ def apply_reservation_write_set(
     if write_set.idempotency_key in processed_event_keys:
         _assert_idempotent_replay_matches(
             write_set=write_set,
+            commitments=commitments,
+            batches=batches,
+            capacity_reservations=capacity_reservations,
+            material_allocations=material_allocations,
             events=events,
             current_fingerprint=current_fingerprint,
             expected_result=expected_result,

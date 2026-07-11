@@ -67,6 +67,7 @@ def _capacity_request(
     order_id: str = "WO-1",
     operation_id: str = "WO-1:CCR",
     reserved_minutes: float = 120,
+    latest_allowed_completion_at: object = "2026-07-20T16:00:00+00:00",
 ) -> dict[str, object]:
     return {
         "ReservationLineID": reservation_line_id,
@@ -76,7 +77,7 @@ def _capacity_request(
         "WindowStartAt": "2026-07-20T08:00:00+00:00",
         "WindowEndAt": "2026-07-20T16:00:00+00:00",
         "ReservedMinutes": reserved_minutes,
-        "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
+        "LatestAllowedCompletionAt": latest_allowed_completion_at,
     }
 
 
@@ -115,6 +116,114 @@ def test_duplicate_confirmation_does_not_create_second_batch():
     collections = ({}, {}, {}, {}, [], set())
 
     _apply(write_set, collections)
+    _apply(write_set, collections)
+
+    assert len(collections[1]) == 1
+    assert len(collections[4]) == 1
+
+
+def test_idempotent_replay_requires_every_persisted_result_child():
+    write_set = _prepare(
+        capacity_requests=[_capacity_request()],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    capacity_id = str(write_set.capacity_reservations[0]["CapacityReservationID"])
+    collections[2].pop(capacity_id)
+    before = deepcopy(collections)
+
+    with pytest.raises(ReservationConflict) as error:
+        _apply(write_set, collections)
+
+    assert error.value.status == "PlanningReservationLegacyMigrationRequired"
+    assert collections == before
+
+
+@pytest.mark.parametrize(
+    ("collection_index", "record_id_field", "immutable_field"),
+    [
+        (2, "CapacityReservationID", "ResourceID"),
+        (3, "MaterialAllocationID", "ItemID"),
+    ],
+)
+def test_idempotent_replay_rejects_immutable_persisted_child_drift(
+    collection_index: int,
+    record_id_field: str,
+    immutable_field: str,
+):
+    write_set = _prepare(
+        capacity_requests=[_capacity_request()],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    candidate_rows = (
+        write_set.capacity_reservations
+        if collection_index == 2
+        else write_set.material_allocations
+    )
+    record_id = str(candidate_rows[0][record_id_field])
+    collections[collection_index][record_id][immutable_field] = "DRIFTED"
+    before = deepcopy(collections)
+
+    with pytest.raises(ReservationConflict, match="immutable"):
+        _apply(write_set, collections)
+
+    assert collections == before
+
+
+def test_idempotent_replay_allows_documented_lifecycle_changes():
+    write_set = _prepare(
+        capacity_requests=[_capacity_request()],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+            "MaterialSnapshotID": "OPS-1",
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    demand = collections[0][str(write_set.demand_commitment["DemandCommitmentID"])]
+    batch = collections[1][str(write_set.batch["ReservationBatchID"])]
+    capacity = collections[2][
+        str(write_set.capacity_reservations[0]["CapacityReservationID"])
+    ]
+    material = collections[3][
+        str(write_set.material_allocations[0]["MaterialAllocationID"])
+    ]
+    demand.update({"Status": "LinkedToFormalOrder", "RecordVersion": 2})
+    for record in (batch, capacity):
+        record.update(
+            {
+                "Status": "ConvertedToScheduledOccupancy",
+                "RecordVersion": 2,
+                "PlanningRunID": "RUN-1",
+                "LastTransitionAt": "2026-07-20T12:00:00+00:00",
+                "EventType": "PlanningRunCompleted",
+            }
+        )
+    material.update(
+        {
+            "Status": "Externalized",
+            "RecordVersion": 2,
+            "ExternalAllocationRef": "ERP-ALLOC-1",
+            "MaterialSnapshotID": "OPS-AUTHORITY-2",
+        }
+    )
+
     _apply(write_set, collections)
 
     assert len(collections[1]) == 1
@@ -247,7 +356,15 @@ def test_converted_demand_allows_only_exact_idempotent_replay_not_new_confirmati
     collections = ({}, {}, {}, {}, [], set())
     _apply(first, collections)
     first_batch_id = str(first.batch["ReservationBatchID"])
-    collections[1][first_batch_id]["Status"] = "ConvertedToScheduledOccupancy"
+    collections[1][first_batch_id].update(
+        {
+            "Status": "ConvertedToScheduledOccupancy",
+            "RecordVersion": 2,
+            "PlanningRunID": "RUN-CONVERTED",
+            "LastTransitionAt": "2026-07-20T12:00:00+00:00",
+            "EventType": "PlanningRunCompleted",
+        }
+    )
 
     _apply(first, collections)
     before_competing = deepcopy(collections)
@@ -377,6 +494,29 @@ def test_prepare_rejects_invalid_capacity_windows(
         )
 
 
+@pytest.mark.parametrize(
+    ("latest_allowed_completion_at", "message"),
+    [
+        (None, "LatestAllowedCompletionAt is required"),
+        ("2026-07-20T12:00:00", "timezone-aware"),
+        ("2026-07-20T07:59:00+00:00", "inside the reservation window"),
+        ("2026-07-20T16:01:00+00:00", "inside the reservation window"),
+    ],
+)
+def test_prepare_requires_aware_latest_completion_inside_capacity_window(
+    latest_allowed_completion_at: object,
+    message: str,
+):
+    request = _capacity_request(
+        latest_allowed_completion_at=latest_allowed_completion_at
+    )
+    if latest_allowed_completion_at is None:
+        request.pop("LatestAllowedCompletionAt")
+
+    with pytest.raises(ReservationConflict, match=message):
+        _prepare(capacity_requests=[request])
+
+
 def test_prepare_deep_copies_request_rows_before_validation_records_are_returned():
     capacity_request = {
         "ReservationLineID": "CAP-LINE-1",
@@ -386,6 +526,7 @@ def test_prepare_deep_copies_request_rows_before_validation_records_are_returned
         "WindowStartAt": "2026-07-20T08:00:00+00:00",
         "WindowEndAt": "2026-07-20T16:00:00+00:00",
         "ReservedMinutes": 120,
+        "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
         "RequestContext": {"priority": "original"},
     }
     material_request = {
@@ -483,6 +624,7 @@ def test_request_control_fields_cannot_override_generated_reservation_values():
             "WindowStartAt": "2026-07-20T08:00:00+00:00",
             "WindowEndAt": "2026-07-20T16:00:00+00:00",
             "ReservedMinutes": 120,
+            "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
         }],
         material_requests=[{
             "MaterialAllocationID": "CALLER-MATERIAL-ID",

@@ -977,6 +977,12 @@ def _lease_token_hash(lease_token: str) -> str:
     return sha256(lease_token.encode("utf-8")).hexdigest()
 
 
+class _StoreManagedRequestRejected(RuntimeError):
+    def __init__(self, response: JSONResponse) -> None:
+        super().__init__("Store-managed request was rejected.")
+        self.response = response
+
+
 def _effective_actor_id(request: Request, fallback: str) -> str:
     return str(getattr(request.state, "actor_id", fallback))
 
@@ -1051,59 +1057,6 @@ def _latest_completed_run_id(
         reverse=True,
     )
     return str(completed[0].get("RunID"))
-
-
-_RESERVATION_PERSISTENCE_ROLLBACK_FIELDS = (
-    "planning_runs",
-    "planning_demand_commitments",
-    "planning_reservation_batches",
-    "ccr_capacity_reservations",
-    "material_planning_allocations",
-    "planning_reservation_events",
-    "processed_planning_event_keys",
-    "audit_events",
-    "execution_events",
-)
-
-
-def _snapshot_reservation_persistence_state(
-    store: WorkbenchStateStore,
-) -> dict[str, object]:
-    snapshot = {
-        field: deepcopy(getattr(store, field))
-        for field in _RESERVATION_PERSISTENCE_ROLLBACK_FIELDS
-    }
-    snapshot["revision"] = store.revision
-    if hasattr(store, "_revision"):
-        snapshot["_revision"] = getattr(store, "_revision")
-    if hasattr(store, "_last_saved_at"):
-        snapshot["_last_saved_at"] = getattr(store, "_last_saved_at")
-    return snapshot
-
-
-def _restore_reservation_persistence_state(
-    store: WorkbenchStateStore,
-    snapshot: Mapping[str, object],
-) -> None:
-    for field in _RESERVATION_PERSISTENCE_ROLLBACK_FIELDS:
-        current = getattr(store, field)
-        saved = snapshot[field]
-        if isinstance(current, dict) and isinstance(saved, dict):
-            current.clear()
-            current.update(deepcopy(saved))
-        elif isinstance(current, list) and isinstance(saved, list):
-            current.clear()
-            current.extend(deepcopy(saved))
-        elif isinstance(current, set) and isinstance(saved, set):
-            current.clear()
-            current.update(deepcopy(saved))
-        else:
-            raise TypeError(f"Unsupported rollback collection: {field}.")
-    store.revision = int(snapshot["revision"])
-    if "_revision" in snapshot:
-        setattr(store, "_revision", int(snapshot["_revision"]))
-    if "_last_saved_at" in snapshot:
-        setattr(store, "_last_saved_at", snapshot["_last_saved_at"])
 
 
 def _enrich_test_case_openability(cases: list[dict[str, object]]) -> None:
@@ -1203,6 +1156,23 @@ def create_app(
                 return auth_error
         is_write = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         if not is_write:
+            await run_in_threadpool(active_store.state_lock.acquire)
+            try:
+                response = await call_next(request)
+            finally:
+                active_store.state_lock.release()
+            response.headers["X-Workbench-Revision"] = str(
+                active_store.current_revision()
+            )
+            response.headers["X-SDBR-Environment"] = active_environment.environment_id
+            return response
+
+        store_managed_execution = request.url.path.startswith(
+            "/planner/workbench/planning-runs/"
+        ) and request.url.path.endswith(
+            ("/execute", "/process-queued", "/renew-lease")
+        )
+        if store_managed_execution:
             response = await call_next(request)
             response.headers["X-Workbench-Revision"] = str(
                 active_store.current_revision()
@@ -1210,7 +1180,7 @@ def create_app(
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
-        await run_in_threadpool(active_store.request_write_lock.acquire)
+        await run_in_threadpool(active_store.state_lock.acquire)
         try:
             expected_revision = _client_revision_from_if_match(
                 request.headers.get("if-match")
@@ -1225,17 +1195,11 @@ def create_app(
                     current_revision=active_store.current_revision(),
                     message="Workbench state changed; reload the latest state before retrying.",
                 )
-            with reservation_graph_lock:
-                persistence_snapshot = _snapshot_reservation_persistence_state(
-                    active_store
-                )
+            persistence_snapshot = active_store.snapshot_state()
             try:
                 response = await call_next(request)
             except Exception:
-                with reservation_graph_lock:
-                    _restore_reservation_persistence_state(
-                        active_store, persistence_snapshot
-                    )
+                active_store.restore_state(persistence_snapshot)
                 raise
             if response.status_code < 400 or getattr(
                 request.state, "persist_workbench_write", False
@@ -1243,8 +1207,7 @@ def create_app(
                 try:
                     active_store.save()
                 except StateStoreRevisionConflict as error:
-                    with reservation_graph_lock:
-                        active_store.reload()
+                    active_store.reload()
                     return _revision_conflict_response(
                         endpoint=request.url.path,
                         expected_revision=error.expected_revision,
@@ -1252,23 +1215,17 @@ def create_app(
                         message="Workbench state changed; reload completed and the request can be retried.",
                     )
                 except Exception:
-                    with reservation_graph_lock:
-                        _restore_reservation_persistence_state(
-                            active_store, persistence_snapshot
-                        )
+                    active_store.restore_state(persistence_snapshot)
                     raise
             else:
-                with reservation_graph_lock:
-                    _restore_reservation_persistence_state(
-                        active_store, persistence_snapshot
-                    )
+                active_store.restore_state(persistence_snapshot)
             response.headers["X-Workbench-Revision"] = str(
                 active_store.current_revision()
             )
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
         finally:
-            active_store.request_write_lock.release()
+            active_store.state_lock.release()
 
     def resolve_release_operational_state(
         payload: ReleaseCandidatePayload,
@@ -2641,6 +2598,7 @@ def create_app(
     @app.post("/planner/workbench/integrations/messages")
     def planner_workbench_integration_message_create(
         payload: IntegrationMessagePayload,
+        request: Request,
     ):
         endpoint = "/planner/workbench/integrations/messages"
         contract = find_integration_contract(payload.ContractID)
@@ -2665,7 +2623,8 @@ def create_app(
             existing_messages=integration_messages,
             received_at=received_at,
         )
-        if validation["Status"] == "Accepted" or validation["Status"] == "Rejected":
+        message_recorded = validation["Status"] in {"Accepted", "Rejected"}
+        if message_recorded:
             integration_messages.append(
                 integration_message_record(
                     contract=contract,
@@ -2680,7 +2639,8 @@ def create_app(
             "Data": validation,
         }
         if status_code != 200:
-            active_store.save()
+            if message_recorded:
+                request.state.persist_workbench_write = True
             return JSONResponse(status_code=status_code, content=body)
         return body
 
@@ -3502,6 +3462,16 @@ def create_app(
             lease_token = token_urlsafe(24)
             claimed_run = dict(planning_run)
             claimed_run.pop("LeaseToken", None)
+            if recovered:
+                claimed_run.pop("ExecutionTokenHash", None)
+                claimed_run.pop("ExecutionClaimedAt", None)
+                claimed_run.pop("ExecutionClaimedBy", None)
+                claimed_run["ExecutionClaimInvalidatedAt"] = (
+                    payload.ClaimedAt.isoformat()
+                )
+                claimed_run["ExecutionClaimInvalidationReason"] = (
+                    "ExpiredLeaseRecovery"
+                )
             claimed_run.update(
                 {
                     "Status": "Running",
@@ -3566,92 +3536,167 @@ def create_app(
         )
         if identity_error is not None:
             return identity_error
-        planning_run = planning_runs.get(run_id)
-        if planning_run is None:
-            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
-        if planning_run.get("SolverBackendID") in PAUSED_SOLVER_BACKEND_IDS:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "Endpoint": endpoint,
-                    "StatusCode": 409,
-                    "Data": {
-                        "RunID": run_id,
-                        "SolverBackendID": planning_run.get("SolverBackendID"),
-                        "Status": "SolverBackendPaused",
-                        "Message": "Paused solver runs must be copied to a new CP-SAT planning run.",
-                    },
-                },
-            )
-        direct_execution = planning_run["Status"] == "Pending"
-        worker_execution = planning_run["Status"] == "Running"
-        if not direct_execution and not worker_execution:
-            return _planning_run_transition_conflict(
-                endpoint=endpoint,
-                planning_run=planning_run,
-                message=f"Planning run {run_id} is not pending and cannot be executed.",
-            )
-        if worker_execution:
-            lease_error = _planning_run_execution_lease_error(
-                planning_run=planning_run,
-                executed_by=payload.ExecutedBy,
-                lease_token=payload.LeaseToken,
-                started_at=payload.StartedAt,
-            )
-            if lease_error is not None:
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "Endpoint": endpoint,
-                        "StatusCode": 409,
-                        "Data": {
-                            "RunID": run_id,
-                            **lease_error,
-                        },
-                    },
-                )
-
-        execution_version = int(planning_run.get("ExecutionVersion", 0)) + 1
-        execution_token_hash = _lease_token_hash(token_urlsafe(24))
-        claimed_execution_run = dict(planning_run)
-        claimed_execution_run.update(
-            {
-                "Status": "Running",
-                "ExecutionVersion": execution_version,
-                "ExecutionTokenHash": execution_token_hash,
-                "ExecutionClaimedAt": payload.StartedAt.isoformat(),
-                "ExecutionClaimedBy": payload.ExecutedBy,
-            }
+        expected_revision = (
+            None
+            if getattr(request.state, "skip_execution_if_match", False)
+            else _client_revision_from_if_match(request.headers.get("if-match"))
         )
-        claimed_status_history = list(planning_run["StatusHistory"])
-        if direct_execution:
-            claimed_status_history.append(
+        execution_token_hash = _lease_token_hash(token_urlsafe(24))
+
+        def persist_execution_claim() -> dict[str, object]:
+            planning_run = planning_runs.get(run_id)
+            if planning_run is None:
+                raise _StoreManagedRequestRejected(
+                    _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+                )
+            if planning_run.get("SolverBackendID") in PAUSED_SOLVER_BACKEND_IDS:
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "RunID": run_id,
+                                "SolverBackendID": planning_run.get(
+                                    "SolverBackendID"
+                                ),
+                                "Status": "SolverBackendPaused",
+                                "Message": (
+                                    "Paused solver runs must be copied to a new "
+                                    "CP-SAT planning run."
+                                ),
+                            },
+                        },
+                    )
+                )
+            direct_execution = planning_run.get("Status") == "Pending"
+            worker_execution = planning_run.get("Status") == "Running"
+            if not direct_execution and not worker_execution:
+                raise _StoreManagedRequestRejected(
+                    _planning_run_transition_conflict(
+                        endpoint=endpoint,
+                        planning_run=planning_run,
+                        message=(
+                            f"Planning run {run_id} is not pending and cannot be "
+                            "executed."
+                        ),
+                    )
+                )
+            if planning_run.get("ExecutionTokenHash"):
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "RunID": run_id,
+                                "Status": "PlanningRunExecutionAlreadyClaimed",
+                                "ExecutionVersion": planning_run.get(
+                                    "ExecutionVersion"
+                                ),
+                                "Message": (
+                                    "Planning run already has a persisted execution "
+                                    "owner."
+                                ),
+                            },
+                        },
+                    )
+                )
+            if worker_execution:
+                lease_error = _planning_run_execution_lease_error(
+                    planning_run=planning_run,
+                    executed_by=payload.ExecutedBy,
+                    lease_token=payload.LeaseToken,
+                    started_at=payload.StartedAt,
+                )
+                if lease_error is not None:
+                    raise _StoreManagedRequestRejected(
+                        JSONResponse(
+                            status_code=409,
+                            content={
+                                "Endpoint": endpoint,
+                                "StatusCode": 409,
+                                "Data": {"RunID": run_id, **lease_error},
+                            },
+                        )
+                    )
+
+            execution_version = int(planning_run.get("ExecutionVersion", 0)) + 1
+            claimed_execution_run = deepcopy(planning_run)
+            claimed_execution_run.update(
                 {
                     "Status": "Running",
-                    "ChangedAt": payload.StartedAt.isoformat(),
-                    "ChangedBy": payload.ExecutedBy,
-                    "Reason": "DirectExecution",
+                    "ExecutionVersion": execution_version,
+                    "ExecutionTokenHash": execution_token_hash,
+                    "ExecutionClaimedAt": payload.StartedAt.isoformat(),
+                    "ExecutionClaimedBy": payload.ExecutedBy,
                 }
             )
-        claimed_execution_run["StatusHistory"] = claimed_status_history
-        planning_runs[run_id] = claimed_execution_run
-        planning_run = claimed_execution_run
+            claimed_status_history = list(planning_run["StatusHistory"])
+            if direct_execution:
+                claimed_status_history.append(
+                    {
+                        "Status": "Running",
+                        "ChangedAt": payload.StartedAt.isoformat(),
+                        "ChangedBy": payload.ExecutedBy,
+                        "Reason": "DirectExecution",
+                    }
+                )
+            claimed_execution_run["StatusHistory"] = claimed_status_history
+            planning_runs[run_id] = claimed_execution_run
+            return {
+                "PlanningRun": deepcopy(claimed_execution_run),
+                "MasterDataVersion": deepcopy(
+                    master_data_versions[
+                        str(claimed_execution_run["MasterDataVersionID"])
+                    ]
+                ),
+                "OperationalSnapshot": deepcopy(
+                    operational_state_snapshots[
+                        str(claimed_execution_run["OperationalStateSnapshotID"])
+                    ]
+                ),
+                "SchedulingStrategyVersions": deepcopy(
+                    scheduling_strategy_versions
+                ),
+                "DirectExecution": direct_execution,
+                "WorkerExecution": worker_execution,
+                "ExecutionVersion": execution_version,
+                "LeaseOwnerWorkerID": planning_run.get("WorkerID"),
+                "LeaseOwnerTokenHash": planning_run.get("LeaseTokenHash"),
+            }
 
-        master_data_version = master_data_versions[
-            str(planning_run["MasterDataVersionID"])
-        ]
-        operational_snapshot = operational_state_snapshots[
-            str(planning_run["OperationalStateSnapshotID"])
-        ]
-        execution_request = _planning_run_payload_from_record(planning_run)
-        status_history = list(planning_run["StatusHistory"])
         try:
-            completed_run = _execute_planning_run(
+            claim, _ = active_store.atomic_update(
+                persist_execution_claim,
+                expected_revision=expected_revision,
+            )
+        except _StoreManagedRequestRejected as error:
+            return error.response
+        except StateStoreRevisionConflict as error:
+            return _revision_conflict_response(
+                endpoint=endpoint,
+                expected_revision=error.expected_revision,
+                current_revision=error.current_revision,
+                message=(
+                    "Workbench state changed before the execution claim was "
+                    "persisted."
+                ),
+            )
+
+        planning_run = claim["PlanningRun"]
+        master_data_version = claim["MasterDataVersion"]
+        operational_snapshot = claim["OperationalSnapshot"]
+        execution_request = _planning_run_payload_from_record(planning_run)
+        try:
+            solver_result = _execute_planning_run(
                 payload=execution_request,
                 master_data_version=master_data_version,
                 operational_snapshot=operational_snapshot,
                 solver_time_limit_seconds=payload.TimeLimitSeconds,
-                scheduling_strategy_versions=scheduling_strategy_versions,
+                scheduling_strategy_versions=claim["SchedulingStrategyVersions"],
                 frozen_scheduling_strategy=planning_run.get("FrozenSchedulingStrategy"),
                 frozen_base_calendars=(
                     planning_run.get("FrozenBaseCalendars")
@@ -3676,110 +3721,134 @@ def create_app(
                     else None
                 ),
             )
-            completed_run = {**planning_run, **completed_run}
         except Exception as error:
-            completed_run = dict(planning_run)
+            solver_result = {
+                "Status": "Failed",
+                "SolverStatus": "Error",
+                "SolverMessage": str(error),
+                "Schedule": None,
+            }
+        completed_at = payload.CompletedAt or datetime.now(timezone.utc)
+
+        def persist_execution_finalization() -> dict[str, object]:
+            live_execution_run = planning_runs.get(run_id)
+            ownership_matches = (
+                live_execution_run is not None
+                and live_execution_run.get("Status") == "Running"
+                and live_execution_run.get("ExecutionVersion")
+                == claim["ExecutionVersion"]
+                and live_execution_run.get("ExecutionClaimedBy")
+                == payload.ExecutedBy
+                and compare_digest(
+                    str(live_execution_run.get("ExecutionTokenHash") or ""),
+                    execution_token_hash,
+                )
+            )
+            if ownership_matches and claim["WorkerExecution"]:
+                ownership_matches = (
+                    live_execution_run.get("WorkerID")
+                    == claim["LeaseOwnerWorkerID"]
+                    and compare_digest(
+                        str(live_execution_run.get("LeaseTokenHash") or ""),
+                        str(claim["LeaseOwnerTokenHash"] or ""),
+                    )
+                )
+            if not ownership_matches:
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "RunID": run_id,
+                                "Status": "PlanningRunExecutionOwnershipLost",
+                                "ExecutionVersion": claim["ExecutionVersion"],
+                                "Message": (
+                                    "Planning run execution or lease ownership changed "
+                                    "before finalization."
+                                ),
+                            },
+                        },
+                    )
+                )
+
+            completed_run = {**deepcopy(live_execution_run), **deepcopy(solver_result)}
+            status_history = list(live_execution_run["StatusHistory"])
             completed_run.update(
                 {
-                    "Status": "Failed",
-                    "SolverStatus": "Error",
-                    "SolverMessage": str(error),
-                    "Schedule": None,
+                    "StartedAt": payload.StartedAt.isoformat(),
+                    "CompletedAt": completed_at.isoformat(),
+                    "ExecutedBy": payload.ExecutedBy,
+                    "TimeLimitSeconds": payload.TimeLimitSeconds,
                 }
             )
-        live_execution_run = planning_runs.get(run_id)
-        if (
-            live_execution_run is None
-            or live_execution_run.get("Status") != "Running"
-            or live_execution_run.get("ExecutionVersion") != execution_version
-            or not compare_digest(
-                str(live_execution_run.get("ExecutionTokenHash") or ""),
-                execution_token_hash,
+            if (
+                completed_run["Status"] == "Completed"
+                and completed_run.get("PublicationStatus") is None
+            ):
+                completed_run["PublicationStatus"] = "Draft"
+            if claim["WorkerExecution"] and completed_run["Status"] == "Failed":
+                completed_run = _apply_planning_run_failure_policy(
+                    planning_run=completed_run,
+                    failed_at=completed_at,
+                )
+            reservation_fields_present = (
+                "PlanningReservationBatchIDs" in completed_run
+                or "FrozenPlanningReservations" in completed_run
             )
-        ):
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "Endpoint": endpoint,
-                    "StatusCode": 409,
-                    "Data": {
-                        "RunID": run_id,
-                        "Status": "PlanningRunExecutionOwnershipLost",
-                        "ExecutionVersion": execution_version,
-                        "Message": (
-                            "Planning run execution ownership changed before "
-                            "finalization."
-                        ),
-                    },
-                },
+            selected_value = completed_run.get("PlanningReservationBatchIDs", [])
+            selected_run_batch_ids = (
+                list(selected_value) if isinstance(selected_value, list) else []
             )
-        completed_at = payload.CompletedAt or datetime.now(timezone.utc)
-        completed_run.update(
-            {
-                "StartedAt": payload.StartedAt.isoformat(),
-                "CompletedAt": completed_at.isoformat(),
-                "ExecutedBy": payload.ExecutedBy,
-                "TimeLimitSeconds": payload.TimeLimitSeconds,
-            }
-        )
-        if (
-            completed_run["Status"] == "Completed"
-            and completed_run.get("PublicationStatus") is None
-        ):
-            completed_run["PublicationStatus"] = "Draft"
-        if worker_execution and completed_run["Status"] == "Failed":
-            completed_run = _apply_planning_run_failure_policy(
-                planning_run=completed_run,
-                failed_at=completed_at,
+            frozen_planning_reservations = completed_run.get(
+                "FrozenPlanningReservations"
             )
-        frozen_planning_reservations = completed_run.get(
-            "FrozenPlanningReservations"
-        )
-        selected_run_batch_ids = completed_run.get(
-            "PlanningReservationBatchIDs", []
-        )
-        selected_run_batch_ids = (
-            selected_run_batch_ids
-            if isinstance(selected_run_batch_ids, list)
-            else []
-        )
-        frozen_batch_ids_value = (
-            frozen_planning_reservations.get("ReservationBatchIDs")
-            if isinstance(frozen_planning_reservations, dict)
-            else None
-        )
-        frozen_batch_ids = (
-            list(selected_run_batch_ids)
-            if selected_run_batch_ids
-            else (
+            frozen_transition_graph = (
+                frozen_planning_reservations
+                if isinstance(frozen_planning_reservations, Mapping)
+                else {}
+            )
+            frozen_batch_ids_value = frozen_transition_graph.get(
+                "ReservationBatchIDs"
+            )
+            frozen_batch_ids = (
                 list(frozen_batch_ids_value)
                 if isinstance(frozen_batch_ids_value, list)
-                else []
+                else list(selected_run_batch_ids)
             )
-        )
-        reservation_transition_required = bool(selected_run_batch_ids) or bool(
-            isinstance(frozen_planning_reservations, dict)
-            and frozen_planning_reservations.get("Batches")
-        )
-        frozen_transition_graph = (
-            frozen_planning_reservations
-            if isinstance(frozen_planning_reservations, dict)
-            else {}
-        )
-        reservation_audit_details: dict[str, object] = {}
-        reservation_error: dict[str, object] | None = None
-        if reservation_transition_required and completed_run["Status"] in {
-            "Completed",
-            "Failed",
-            "DeadLetter",
-        }:
-            with reservation_graph_lock:
-                transitioned = None
+            reservation_audit_details: dict[str, object] = {}
+            reservation_error: dict[str, object] | None = None
+            transitioned = None
+            reservation_transition_attempted = (
+                reservation_fields_present
+                and completed_run["Status"]
+                in {"Completed", "Failed", "DeadLetter"}
+            )
+            if not isinstance(selected_value, list):
+                reservation_error = {
+                    "Status": "PlanningReservationGraphDrift",
+                    "ReservationBatchIDs": [],
+                    "Message": (
+                        "Planning Run selected reservation batch IDs must be a list."
+                    ),
+                }
+                completed_run.update(
+                    {
+                        "Status": "Failed",
+                        "SolverStatus": "Error",
+                        "SolverMessage": reservation_error["Message"],
+                        "PublicationStatus": None,
+                        "PlanningError": deepcopy(reservation_error),
+                    }
+                )
+            elif reservation_transition_attempted:
                 try:
                     transitioned = transition_planning_reservations_for_run(
                         run_id=run_id,
                         run_status=str(completed_run["Status"]),
                         occurred_at=completed_at,
+                        batch_ids=selected_run_batch_ids,
                         frozen_reservations=frozen_transition_graph,
                         schedule=(
                             completed_run.get("Schedule")
@@ -3814,6 +3883,7 @@ def create_app(
                             run_id=run_id,
                             run_status="Failed",
                             occurred_at=completed_at,
+                            batch_ids=selected_run_batch_ids,
                             frozen_reservations=frozen_transition_graph,
                             demand_commitments=planning_demand_commitments,
                             batches=planning_reservation_batches,
@@ -3885,61 +3955,85 @@ def create_app(
                     material_planning_allocations.update(
                         transitioned["MaterialAllocations"]
                     )
-            if reservation_error is not None:
-                detail_name = (
-                    "PlanningReservationsHeldForError"
-                    if transitioned is not None
-                    else "PlanningReservationsPreservedForGraphDrift"
-                )
-            else:
-                detail_name = (
-                    "PlanningReservationsConverted"
-                    if completed_run["Status"] == "Completed"
-                    else "PlanningReservationsHeldForError"
-                )
-            reservation_audit_details[detail_name] = list(frozen_batch_ids)
-        status_history.append(
-            {
-                "Status": completed_run["Status"],
-                "ChangedAt": completed_at.isoformat(),
-                "ChangedBy": payload.ExecutedBy,
-                "Reason": completed_run.get("DeadLetterReason")
-                or (
-                    completed_run.get("PlanningError", {}).get("Status")
-                    if isinstance(completed_run.get("PlanningError"), dict)
-                    else None
-                )
-                or (
-                    "RetryScheduled"
-                    if completed_run["Status"] == "Queued"
-                    else "ExecutionFinished"
-                ),
+            if reservation_transition_attempted:
+                if reservation_error is not None:
+                    detail_name = (
+                        "PlanningReservationsHeldForError"
+                        if transitioned is not None
+                        else "PlanningReservationsPreservedForGraphDrift"
+                    )
+                else:
+                    detail_name = (
+                        "PlanningReservationsConverted"
+                        if completed_run["Status"] == "Completed"
+                        else "PlanningReservationsHeldForError"
+                    )
+                reservation_audit_details[detail_name] = list(frozen_batch_ids)
+            status_history.append(
+                {
+                    "Status": completed_run["Status"],
+                    "ChangedAt": completed_at.isoformat(),
+                    "ChangedBy": payload.ExecutedBy,
+                    "Reason": completed_run.get("DeadLetterReason")
+                    or (
+                        completed_run.get("PlanningError", {}).get("Status")
+                        if isinstance(completed_run.get("PlanningError"), dict)
+                        else None
+                    )
+                    or (
+                        "RetryScheduled"
+                        if completed_run["Status"] == "Queued"
+                        else "ExecutionFinished"
+                    ),
+                }
+            )
+            completed_run["StatusHistory"] = status_history
+            completed_run.pop("ExecutionTokenHash", None)
+            completed_run["CompletedExecutionVersion"] = claim["ExecutionVersion"]
+            planning_runs[run_id] = completed_run
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=run_id,
+                action="PlanningRunExecuted",
+                actor_id=_effective_actor_id(request, payload.ExecutedBy),
+                occurred_at=completed_at,
+                details={
+                    "Status": completed_run["Status"],
+                    "SolverStatus": completed_run.get("SolverStatus"),
+                    "AttemptCount": completed_run.get("AttemptCount", 0),
+                    **(
+                        {"PlanningError": deepcopy(reservation_error)}
+                        if reservation_error is not None
+                        else {}
+                    ),
+                    **reservation_audit_details,
+                },
+            )
+            return {
+                "PlanningRun": deepcopy(completed_run),
+                "ReservationError": deepcopy(reservation_error),
             }
-        )
-        completed_run["StatusHistory"] = status_history
-        completed_run.pop("ExecutionTokenHash", None)
-        completed_run["CompletedExecutionVersion"] = execution_version
-        planning_runs[run_id] = completed_run
-        _append_planning_run_audit_event(
-            audit_events=audit_events,
-            run_id=run_id,
-            action="PlanningRunExecuted",
-            actor_id=_effective_actor_id(request, payload.ExecutedBy),
-            occurred_at=completed_at,
-            details={
-                "Status": completed_run["Status"],
-                "SolverStatus": completed_run.get("SolverStatus"),
-                "AttemptCount": completed_run.get("AttemptCount", 0),
-                **(
-                    {"PlanningError": deepcopy(reservation_error)}
-                    if reservation_error is not None
-                    else {}
+
+        try:
+            finalization, _ = active_store.atomic_update(
+                persist_execution_finalization
+            )
+        except _StoreManagedRequestRejected as error:
+            return error.response
+        except StateStoreRevisionConflict as error:
+            return _revision_conflict_response(
+                endpoint=endpoint,
+                expected_revision=error.expected_revision,
+                current_revision=error.current_revision,
+                message=(
+                    "Workbench state changed before execution finalization; the "
+                    "persisted execution owner was not overwritten."
                 ),
-                **reservation_audit_details,
-            },
-        )
+            )
+
+        completed_run = finalization["PlanningRun"]
+        reservation_error = finalization["ReservationError"]
         if reservation_error is not None:
-            request.state.persist_workbench_write = True
             return JSONResponse(
                 status_code=409,
                 content={
@@ -3966,54 +4060,70 @@ def create_app(
         request: Request,
     ):
         endpoint = f"/planner/workbench/planning-runs/{run_id}/process-queued"
-        with claim_lock:
-            identity_error = _worker_identity_mismatch_response(
-                request=request,
-                claimed_worker_id=payload.WorkerID,
-                endpoint=endpoint,
-            )
-            if identity_error is not None:
-                return identity_error
+        identity_error = _worker_identity_mismatch_response(
+            request=request,
+            claimed_worker_id=payload.WorkerID,
+            endpoint=endpoint,
+        )
+        if identity_error is not None:
+            return identity_error
+        lease_token = token_urlsafe(24)
+
+        def persist_interactive_worker_claim() -> None:
             planning_run = planning_runs.get(run_id)
             if planning_run is None:
-                return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+                raise _StoreManagedRequestRejected(
+                    _planning_run_not_found(endpoint=endpoint, run_id=run_id)
+                )
             if planning_run.get("SolverBackendID") in PAUSED_SOLVER_BACKEND_IDS:
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "Endpoint": endpoint,
-                        "StatusCode": 409,
-                        "Data": {
-                            "RunID": run_id,
-                            "SolverBackendID": planning_run.get("SolverBackendID"),
-                            "Status": "SolverBackendPaused",
-                            "Message": "Paused solver runs must be copied to a new CP-SAT planning run.",
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "RunID": run_id,
+                                "SolverBackendID": planning_run.get(
+                                    "SolverBackendID"
+                                ),
+                                "Status": "SolverBackendPaused",
+                                "Message": (
+                                    "Paused solver runs must be copied to a new "
+                                    "CP-SAT planning run."
+                                ),
+                            },
                         },
-                    },
+                    )
                 )
             if planning_run.get("Status") != "Queued":
-                return _planning_run_transition_conflict(
-                    endpoint=endpoint,
-                    planning_run=planning_run,
-                    message=(
-                        f"Planning run {run_id} is not queued and cannot be "
-                        "processed by the interactive worker."
-                    ),
+                raise _StoreManagedRequestRejected(
+                    _planning_run_transition_conflict(
+                        endpoint=endpoint,
+                        planning_run=planning_run,
+                        message=(
+                            f"Planning run {run_id} is not queued and cannot be "
+                            "processed by the interactive worker."
+                        ),
+                    )
                 )
-            if not _planning_run_ready_for_claim(planning_run, payload.ProcessedAt):
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "Endpoint": endpoint,
-                        "StatusCode": 409,
-                        "Data": {
-                            "RunID": run_id,
-                            "Status": "PlanningRunNotReadyForClaim",
-                            "NextAttemptAt": planning_run.get("NextAttemptAt"),
+            if not _planning_run_ready_for_claim(
+                planning_run, payload.ProcessedAt
+            ):
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "RunID": run_id,
+                                "Status": "PlanningRunNotReadyForClaim",
+                                "NextAttemptAt": planning_run.get("NextAttemptAt"),
+                            },
                         },
-                    },
+                    )
                 )
-            lease_token = token_urlsafe(24)
             claimed_run = dict(planning_run)
             claimed_run.pop("LeaseToken", None)
             claimed_run.update(
@@ -4052,6 +4162,24 @@ def create_app(
                     "Mode": "InteractiveWorker",
                 },
             )
+
+        try:
+            active_store.atomic_update(
+                persist_interactive_worker_claim,
+                expected_revision=_client_revision_from_if_match(
+                    request.headers.get("if-match")
+                )
+            )
+        except _StoreManagedRequestRejected as error:
+            return error.response
+        except StateStoreRevisionConflict as error:
+            return _revision_conflict_response(
+                endpoint=endpoint,
+                expected_revision=error.expected_revision,
+                current_revision=error.current_revision,
+                message="Workbench state changed before the worker claim persisted.",
+            )
+        request.state.skip_execution_if_match = True
         execution_response = planner_workbench_planning_run_execute(
             run_id,
             PlanningRunExecutionPayload(
@@ -4086,53 +4214,83 @@ def create_app(
         )
         if identity_error is not None:
             return identity_error
-        planning_run = planning_runs.get(run_id)
-        if planning_run is None:
-            return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
-        if planning_run["Status"] != "Running":
-            return _planning_run_transition_conflict(
-                endpoint=endpoint,
-                planning_run=planning_run,
-                message=f"Planning run {run_id} is not running and cannot renew a lease.",
-            )
-        lease_error = _planning_run_execution_lease_error(
-            planning_run=planning_run,
-            executed_by=payload.WorkerID,
-            lease_token=payload.LeaseToken,
-            started_at=payload.RenewedAt,
-        )
-        if lease_error is not None:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "Endpoint": endpoint,
-                    "StatusCode": 409,
-                    "Data": {"RunID": run_id, **lease_error},
-                },
-            )
-        renewed_run = dict(planning_run)
-        renewed_run.update(
-            {
-                "LastHeartbeatAt": payload.RenewedAt.isoformat(),
-                "LeaseExpiresAt": (
-                    payload.RenewedAt + timedelta(seconds=payload.LeaseSeconds)
-                ).isoformat(),
-                "LeaseSeconds": payload.LeaseSeconds,
-                "LeaseRenewalCount": int(
-                    planning_run.get("LeaseRenewalCount", 0)
+
+        def persist_lease_renewal() -> dict[str, object]:
+            planning_run = planning_runs.get(run_id)
+            if planning_run is None:
+                raise _StoreManagedRequestRejected(
+                    _planning_run_not_found(endpoint=endpoint, run_id=run_id)
                 )
-                + 1,
-            }
-        )
-        planning_runs[run_id] = renewed_run
-        _append_planning_run_audit_event(
-            audit_events=audit_events,
-            run_id=run_id,
-            action="PlanningRunLeaseRenewed",
-            actor_id=_effective_actor_id(request, payload.WorkerID),
-            occurred_at=payload.RenewedAt,
-            details={"LeaseRenewalCount": renewed_run["LeaseRenewalCount"]},
-        )
+            if planning_run["Status"] != "Running":
+                raise _StoreManagedRequestRejected(
+                    _planning_run_transition_conflict(
+                        endpoint=endpoint,
+                        planning_run=planning_run,
+                        message=(
+                            f"Planning run {run_id} is not running and cannot renew "
+                            "a lease."
+                        ),
+                    )
+                )
+            lease_error = _planning_run_execution_lease_error(
+                planning_run=planning_run,
+                executed_by=payload.WorkerID,
+                lease_token=payload.LeaseToken,
+                started_at=payload.RenewedAt,
+            )
+            if lease_error is not None:
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {"RunID": run_id, **lease_error},
+                        },
+                    )
+                )
+            renewed_run = dict(planning_run)
+            renewed_run.update(
+                {
+                    "LastHeartbeatAt": payload.RenewedAt.isoformat(),
+                    "LeaseExpiresAt": (
+                        payload.RenewedAt
+                        + timedelta(seconds=payload.LeaseSeconds)
+                    ).isoformat(),
+                    "LeaseSeconds": payload.LeaseSeconds,
+                    "LeaseRenewalCount": int(
+                        planning_run.get("LeaseRenewalCount", 0)
+                    )
+                    + 1,
+                }
+            )
+            planning_runs[run_id] = renewed_run
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=run_id,
+                action="PlanningRunLeaseRenewed",
+                actor_id=_effective_actor_id(request, payload.WorkerID),
+                occurred_at=payload.RenewedAt,
+                details={"LeaseRenewalCount": renewed_run["LeaseRenewalCount"]},
+            )
+            return deepcopy(renewed_run)
+
+        try:
+            renewed_run, _ = active_store.atomic_update(
+                persist_lease_renewal,
+                expected_revision=_client_revision_from_if_match(
+                    request.headers.get("if-match")
+                ),
+            )
+        except _StoreManagedRequestRejected as error:
+            return error.response
+        except StateStoreRevisionConflict as error:
+            return _revision_conflict_response(
+                endpoint=endpoint,
+                expected_revision=error.expected_revision,
+                current_revision=error.current_revision,
+                message="Workbench state changed before lease renewal persisted.",
+            )
         return {
             "Endpoint": endpoint,
             "StatusCode": 200,
@@ -6107,7 +6265,10 @@ def create_app(
         }
 
     @app.post("/planner/workbench/release")
-    def planner_workbench_release(payload: PlannerWorkbenchReleasePayload):
+    def planner_workbench_release(
+        payload: PlannerWorkbenchReleasePayload,
+        request: Request,
+    ):
         validation = _validate_master_data_payload(payload)
         if not validation.is_valid:
             return JSONResponse(
@@ -6203,6 +6364,7 @@ def create_app(
             consecutive_blocked_count=consecutive_blocked_count,
             replan_required=stability.replan_required,
         )
+        replan_request_created = False
         if replan_request is not None:
             existing_request = next(
                 (
@@ -6214,6 +6376,7 @@ def create_app(
             )
             if existing_request is None:
                 replan_requests.append(replan_request)
+                replan_request_created = True
             else:
                 replan_request = existing_request
         body["Data"]["ReplanRequest"] = (
@@ -6222,6 +6385,8 @@ def create_app(
             else None
         )
         if status_code != 200:
+            if replan_request_created:
+                request.state.persist_workbench_write = True
             return JSONResponse(status_code=status_code, content=body)
         return body
 

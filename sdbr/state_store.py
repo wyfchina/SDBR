@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
 import sqlite3
 from threading import Lock, RLock
+from typing import Callable, TypeVar
 
 from sdbr.operational_state import (
     OperationalStateSnapshot,
@@ -31,6 +33,9 @@ class StateStoreSaveOutcome:
     revision: int
     backup_succeeded: bool | None
     maintenance_error: str | None = None
+
+
+MutationResult = TypeVar("MutationResult")
 
 
 @dataclass(slots=True)
@@ -123,6 +128,41 @@ class WorkbenchStateStore:
     def request_write_lock(self) -> Lock:
         return self._request_write_lock
 
+    @property
+    def state_lock(self) -> Lock:
+        return self._request_write_lock
+
+    def snapshot_state(self) -> dict[str, object]:
+        return _snapshot_complete_state(self)
+
+    def restore_state(self, snapshot: dict[str, object]) -> None:
+        _restore_complete_state(self, snapshot)
+
+    def atomic_update(
+        self,
+        mutation: Callable[[], MutationResult],
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[MutationResult, StateStoreSaveOutcome]:
+        with self._request_write_lock:
+            current_revision = self.current_revision()
+            if (
+                expected_revision is not None
+                and expected_revision != current_revision
+            ):
+                raise StateStoreRevisionConflict(
+                    expected_revision=expected_revision,
+                    current_revision=current_revision,
+                )
+            snapshot = self.snapshot_state()
+            try:
+                result = mutation()
+                outcome = self.save()
+            except Exception:
+                self.restore_state(snapshot)
+                raise
+            return result, outcome
+
 
 class SQLiteWorkbenchStateStore(WorkbenchStateStore):
     SCHEMA_VERSION = 1
@@ -152,7 +192,119 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             self._recovery_status = "RecoveredFromBackup"
 
     def save(self) -> StateStoreSaveOutcome:
-        payloads = {
+        saved_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            connection = sqlite3.connect(self.database_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                current_revision = self._database_revision(connection)
+                if current_revision != self._revision:
+                    raise StateStoreRevisionConflict(
+                        expected_revision=self._revision,
+                        current_revision=current_revision,
+                    )
+                next_revision = current_revision + 1
+                self._write_connection_state(
+                    connection,
+                    saved_at=saved_at,
+                    next_revision=next_revision,
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        return self._committed_outcome(
+            saved_at=saved_at,
+            next_revision=next_revision,
+        )
+
+    def atomic_update(
+        self,
+        mutation: Callable[[], MutationResult],
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[MutationResult, StateStoreSaveOutcome]:
+        with self._request_write_lock:
+            pre_transaction_snapshot = self.snapshot_state()
+            authoritative_snapshot: dict[str, object] | None = None
+            saved_at = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                connection = sqlite3.connect(self.database_path)
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    payloads, metadata = self._read_connection_state(connection)
+                    self._replace_loaded_state(payloads, metadata)
+                    authoritative_snapshot = self.snapshot_state()
+                    current_revision = self._revision
+                    if (
+                        expected_revision is not None
+                        and expected_revision != current_revision
+                    ):
+                        raise StateStoreRevisionConflict(
+                            expected_revision=expected_revision,
+                            current_revision=current_revision,
+                        )
+                    result = mutation()
+                    next_revision = current_revision + 1
+                    self._write_connection_state(
+                        connection,
+                        saved_at=saved_at,
+                        next_revision=next_revision,
+                    )
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    self.restore_state(
+                        authoritative_snapshot or pre_transaction_snapshot
+                    )
+                    raise
+                finally:
+                    connection.close()
+            outcome = self._committed_outcome(
+                saved_at=saved_at,
+                next_revision=next_revision,
+            )
+            return result, outcome
+
+    def health(self) -> dict[str, object]:
+        with self._lock, sqlite3.connect(self.database_path) as connection:
+            quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        database_healthy = quick_check is not None and quick_check[0] == "ok"
+        if not database_healthy:
+            status = "Unhealthy"
+        elif self._last_backup_error is not None:
+            status = "Degraded"
+        else:
+            status = "Healthy"
+        return {
+            "Backend": "SQLite",
+            "Status": status,
+            "SchemaVersion": self.SCHEMA_VERSION,
+            "Revision": self._revision,
+            "RecoveryStatus": self._recovery_status,
+            "DatabasePath": str(self.database_path.resolve()),
+            "BackupPath": str(self.backup_path.resolve()),
+            "LastSavedAt": self._last_saved_at,
+            "LastBackupError": self._last_backup_error,
+            "StateCounts": _state_counts(self),
+        }
+
+    def current_revision(self) -> int:
+        return self._revision
+
+    def _database_revision(self, connection: sqlite3.Connection) -> int:
+        row = connection.execute(
+            """
+            SELECT metadata_value FROM workbench_metadata
+            WHERE metadata_key = 'state_revision'
+            """
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _state_payloads(self) -> dict[str, object]:
+        return {
             "execution_events": self.execution_events,
             "replan_requests": [asdict(item) for item in self.replan_requests],
             "replan_schedule_snapshots": self.replan_schedule_snapshots,
@@ -197,62 +349,82 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             ),
             "audit_events": self.audit_events,
         }
-        saved_at = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            connection = sqlite3.connect(self.database_path)
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                current_revision = int(
-                    connection.execute(
-                        """
-                        SELECT metadata_value FROM workbench_metadata
-                        WHERE metadata_key = 'state_revision'
-                        """
-                    ).fetchone()[0]
-                )
-                if current_revision != self._revision:
-                    raise StateStoreRevisionConflict(
-                        expected_revision=self._revision,
-                        current_revision=current_revision,
-                    )
-                connection.executemany(
-                    """
-                    INSERT INTO workbench_state (state_key, payload)
-                    VALUES (?, ?)
-                    ON CONFLICT(state_key) DO UPDATE SET payload = excluded.payload
-                    """,
-                    [
-                        (
-                            state_key,
-                            json.dumps(
-                                _jsonable(payload),
-                                ensure_ascii=True,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            ),
-                        )
-                        for state_key, payload in payloads.items()
-                    ],
-                )
-                next_revision = current_revision + 1
-                connection.executemany(
-                    """
-                    INSERT INTO workbench_metadata (metadata_key, metadata_value)
-                    VALUES (?, ?)
-                    ON CONFLICT(metadata_key) DO UPDATE
-                    SET metadata_value = excluded.metadata_value
-                    """,
-                    (
-                        ("last_saved_at", saved_at),
-                        ("state_revision", str(next_revision)),
+
+    def _write_connection_state(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        saved_at: str,
+        next_revision: int,
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO workbench_state (state_key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET payload = excluded.payload
+            """,
+            [
+                (
+                    state_key,
+                    json.dumps(
+                        _jsonable(payload),
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
                     ),
                 )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
+                for state_key, payload in self._state_payloads().items()
+            ],
+        )
+        connection.executemany(
+            """
+            INSERT INTO workbench_metadata (metadata_key, metadata_value)
+            VALUES (?, ?)
+            ON CONFLICT(metadata_key) DO UPDATE
+            SET metadata_value = excluded.metadata_value
+            """,
+            (
+                ("last_saved_at", saved_at),
+                ("state_revision", str(next_revision)),
+            ),
+        )
+
+    def _read_connection_state(
+        self,
+        connection: sqlite3.Connection,
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        rows = dict(connection.execute("SELECT state_key, payload FROM workbench_state"))
+        metadata = dict(
+            connection.execute(
+                "SELECT metadata_key, metadata_value FROM workbench_metadata"
+            )
+        )
+        return (
+            {state_key: json.loads(payload) for state_key, payload in rows.items()},
+            metadata,
+        )
+
+    def _replace_loaded_state(
+        self,
+        payloads: dict[str, object],
+        metadata: dict[str, str],
+    ) -> None:
+        schema_version = int(metadata.get("schema_version", "0"))
+        if schema_version != self.SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported workbench schema version: {schema_version}."
+            )
+        self._clear()
+        self._last_saved_at = metadata.get("last_saved_at")
+        self._revision = int(metadata.get("state_revision", "0"))
+        self._apply_payloads(payloads)
+
+    def _committed_outcome(
+        self,
+        *,
+        saved_at: str,
+        next_revision: int,
+    ) -> StateStoreSaveOutcome:
         self._last_saved_at = saved_at
         self._revision = next_revision
         try:
@@ -274,32 +446,6 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             revision=next_revision,
             backup_succeeded=True,
         )
-
-    def health(self) -> dict[str, object]:
-        with self._lock, sqlite3.connect(self.database_path) as connection:
-            quick_check = connection.execute("PRAGMA quick_check").fetchone()
-        database_healthy = quick_check is not None and quick_check[0] == "ok"
-        if not database_healthy:
-            status = "Unhealthy"
-        elif self._last_backup_error is not None:
-            status = "Degraded"
-        else:
-            status = "Healthy"
-        return {
-            "Backend": "SQLite",
-            "Status": status,
-            "SchemaVersion": self.SCHEMA_VERSION,
-            "Revision": self._revision,
-            "RecoveryStatus": self._recovery_status,
-            "DatabasePath": str(self.database_path.resolve()),
-            "BackupPath": str(self.backup_path.resolve()),
-            "LastSavedAt": self._last_saved_at,
-            "LastBackupError": self._last_backup_error,
-            "StateCounts": _state_counts(self),
-        }
-
-    def current_revision(self) -> int:
-        return self._revision
 
     def _initialize(self) -> None:
         with sqlite3.connect(self.database_path) as connection:
@@ -337,24 +483,12 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
 
     def _load(self) -> None:
         with self._lock, sqlite3.connect(self.database_path) as connection:
-            rows = dict(connection.execute("SELECT state_key, payload FROM workbench_state"))
-            metadata = dict(
-                connection.execute(
-                    "SELECT metadata_key, metadata_value FROM workbench_metadata"
-                )
-            )
-        schema_version = int(metadata.get("schema_version", "0"))
-        if schema_version != self.SCHEMA_VERSION:
-            raise ValueError(
-                f"Unsupported workbench schema version: {schema_version}."
-            )
-        self._last_saved_at = metadata.get("last_saved_at")
-        self._revision = int(metadata.get("state_revision", "0"))
-        if not rows:
+            payloads, metadata = self._read_connection_state(connection)
+        self._replace_loaded_state(payloads, metadata)
+
+    def _apply_payloads(self, payloads: dict[str, object]) -> None:
+        if not payloads:
             return
-        payloads = {
-            state_key: json.loads(payload) for state_key, payload in rows.items()
-        }
         self.execution_events.extend(payloads.get("execution_events", []))
         self.replan_requests.extend(
             _replan_request_from_dict(item)
@@ -459,7 +593,6 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
 
     def reload(self) -> None:
         with self._lock:
-            self._clear()
             self._load()
 
     def _clear(self) -> None:
@@ -500,6 +633,53 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.planning_reservation_events.clear()
         self.processed_planning_event_keys.clear()
         self.audit_events.clear()
+
+
+_SQLITE_SNAPSHOT_METADATA_FIELDS = (
+    "_revision",
+    "_last_saved_at",
+    "_last_backup_error",
+    "_recovery_status",
+)
+
+
+def _snapshot_complete_state(store: WorkbenchStateStore) -> dict[str, object]:
+    state = {
+        item.name: deepcopy(getattr(store, item.name))
+        for item in fields(WorkbenchStateStore)
+        if not item.name.startswith("_")
+    }
+    metadata = {
+        name: deepcopy(getattr(store, name))
+        for name in _SQLITE_SNAPSHOT_METADATA_FIELDS
+        if hasattr(store, name)
+    }
+    return {"State": state, "Metadata": metadata}
+
+
+def _restore_complete_state(
+    store: WorkbenchStateStore,
+    snapshot: dict[str, object],
+) -> None:
+    state = snapshot.get("State")
+    metadata = snapshot.get("Metadata")
+    if not isinstance(state, dict) or not isinstance(metadata, dict):
+        raise TypeError("Workbench state snapshot is invalid.")
+    for name, saved in state.items():
+        current = getattr(store, name)
+        if isinstance(current, dict) and isinstance(saved, dict):
+            current.clear()
+            current.update(deepcopy(saved))
+        elif isinstance(current, list) and isinstance(saved, list):
+            current.clear()
+            current.extend(deepcopy(saved))
+        elif isinstance(current, set) and isinstance(saved, set):
+            current.clear()
+            current.update(deepcopy(saved))
+        else:
+            setattr(store, name, deepcopy(saved))
+    for name, saved in metadata.items():
+        setattr(store, name, deepcopy(saved))
 
 
 def _jsonable(value: object) -> object:

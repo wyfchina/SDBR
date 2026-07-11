@@ -380,6 +380,7 @@ def _validate_child_consistency(
             "ResourceID",
             "WindowStartAt",
             "WindowEndAt",
+            "LatestAllowedCompletionAt",
         ):
             _require_identity(capacity.get(field), field, "Capacity reservation")
         correlation = (str(capacity["OrderID"]), str(capacity["OperationID"]))
@@ -398,11 +399,20 @@ def _validate_child_consistency(
             window_end = _parse_aware_datetime(
                 capacity.get("WindowEndAt"), "WindowEndAt"
             )
+            latest_allowed_completion = _parse_aware_datetime(
+                capacity.get("LatestAllowedCompletionAt"),
+                "LatestAllowedCompletionAt",
+            )
         except ValueError as error:
             raise ReservationBatchReferenceError(str(error)) from error
         if window_end <= window_start:
             raise ReservationBatchReferenceError(
                 "Capacity reservation window end must be strictly after start."
+            )
+        if not (window_start < latest_allowed_completion <= window_end):
+            raise ReservationBatchReferenceError(
+                "Capacity reservation LatestAllowedCompletionAt must be inside the "
+                "reservation window."
             )
         _record_version(capacity, f"Capacity reservation {capacity_id}")
         allowed = (
@@ -641,7 +651,7 @@ def _normalize_frozen_graph(
         raise ReservationGraphDriftError(
             "Frozen reservation graph ReservationBatchIDs must be a list."
         )
-    _, demands = _records_by_id(
+    demand_ids, demands = _records_by_id(
         frozen_reservations.get("DemandCommitments"),
         id_field="DemandCommitmentID",
         record_name="Demand commitment",
@@ -651,12 +661,12 @@ def _normalize_frozen_graph(
         id_field="ReservationBatchID",
         record_name="Reservation batch",
     )
-    _, capacities = _records_by_id(
+    capacity_ids, capacities = _records_by_id(
         frozen_reservations.get("CapacityReservations"),
         id_field="CapacityReservationID",
         record_name="Capacity reservation",
     )
-    _, materials = _records_by_id(
+    material_ids, materials = _records_by_id(
         frozen_reservations.get("MaterialAllocations"),
         id_field="MaterialAllocationID",
         record_name="Material allocation",
@@ -676,6 +686,26 @@ def _normalize_frozen_graph(
         )
     except ReservationBatchReferenceError as error:
         raise ReservationGraphDriftError(str(error)) from error
+    captured_demand_ids = [
+        str(record["DemandCommitmentID"])
+        for record in captured["DemandCommitments"]  # type: ignore[union-attr]
+    ]
+    captured_capacity_ids = [
+        str(record["CapacityReservationID"])
+        for record in captured["CapacityReservations"]  # type: ignore[union-attr]
+    ]
+    captured_material_ids = [
+        str(record["MaterialAllocationID"])
+        for record in captured["MaterialAllocations"]  # type: ignore[union-attr]
+    ]
+    if (
+        demand_ids != captured_demand_ids
+        or capacity_ids != captured_capacity_ids
+        or material_ids != captured_material_ids
+    ):
+        raise ReservationGraphDriftError(
+            "Frozen reservation graph contains orphan or unselected child records."
+        )
     for field in (
         "GraphFormat",
         "GraphID",
@@ -1040,6 +1070,10 @@ def _exact_scheduled_occupancy_errors(
             window_end = _parse_aware_datetime(
                 capacity.get("WindowEndAt"), "WindowEndAt"
             )
+            latest_allowed_completion = _parse_aware_datetime(
+                capacity.get("LatestAllowedCompletionAt"),
+                "LatestAllowedCompletionAt",
+            )
             scheduled_start = _parse_aware_datetime(row.get("Start"), "Start")
             scheduled_end = _parse_aware_datetime(row.get("End"), "End")
         except (ReservationBatchReferenceError, ValueError) as error:
@@ -1049,6 +1083,10 @@ def _exact_scheduled_occupancy_errors(
             errors[capacity_id] = "Correlated schedule operation uses a different resource."
         elif window_end <= window_start:
             errors[capacity_id] = "Reserved capacity window has an invalid time range."
+        elif not (window_start < latest_allowed_completion <= window_end):
+            errors[capacity_id] = (
+                "Latest allowed completion is outside the reserved window."
+            )
         elif scheduled_minutes != reserved_minutes:
             errors[capacity_id] = "Correlated schedule duration does not equal reserved minutes."
         elif abs(
@@ -1060,6 +1098,10 @@ def _exact_scheduled_occupancy_errors(
             )
         elif scheduled_start < window_start or scheduled_end > window_end:
             errors[capacity_id] = "Correlated schedule operation is outside the reserved window."
+        elif scheduled_end > latest_allowed_completion:
+            errors[capacity_id] = (
+                "Correlated schedule operation ends after latest allowed completion."
+            )
         elif scheduled_end <= scheduled_start:
             errors[capacity_id] = "Correlated schedule operation has an invalid time range."
     return errors
@@ -1123,6 +1165,13 @@ def transition_planning_reservations_for_run(
         ]
     else:
         frozen = _normalize_frozen_graph(frozen_reservations)
+        if batch_ids is not None:
+            expected_batch_ids = list(batch_ids)
+            if expected_batch_ids != frozen["ReservationBatchIDs"]:
+                raise ReservationGraphDriftError(
+                    "Planning Run selected batch IDs do not match the frozen "
+                    "reservation graph."
+                )
         selected_ids, capacity_ids, material_ids = _compare_live_graph_to_frozen(
             run_id=run_id,
             frozen=frozen,

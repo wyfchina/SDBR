@@ -169,6 +169,17 @@ class TestCcrShadowCapacityParity:
         assert metrics["AggregateRemainingMinutes"] == 30
         assert metrics["Fits"] is False
 
+    def test_operation_must_fit_one_capacity_unit_before_deadline(self):
+        state = self._state(units=2)
+        metrics = _window_metrics(
+            state,
+            usable_start=state["WindowStart"],
+            deadline=datetime(2026, 7, 20, 12, tzinfo=UTC),
+            candidate_minutes=300,
+        )
+        assert metrics["UsableTemporalCapacityMinutes"] == 480
+        assert metrics["Fits"] is False
+
     def test_deadline_truncates_temporal_but_not_aggregate_load(self):
         start = datetime(2026, 7, 20, 8, tzinfo=UTC)
         state = self._state(
@@ -336,6 +347,61 @@ class TestCcrShadowCapacityParity:
         assert states[("CCR-B", start, end)]["ExistingReservationMinutes"] == 30
         assert states[("CCR-B", end, later_end)]["ScheduledFullMinutes"] == 60
         assert states[("CCR-B", end, later_end)]["ExistingReservationMinutes"] == 40
+
+    def test_fractional_reservation_minutes_are_preserved_in_window_metrics(self):
+        start, end, _, resources, buckets, _, reservations = self._window_evidence()
+        exact = dict(reservations[0], ReservedMinutes=479.5)
+        states = _build_window_states(
+            resources=resources,
+            capacity_buckets=buckets,
+            ccr_resource_ids={"CCR-B"},
+            gantt_rows=[],
+            active_capacity_reservations=[exact],
+        )
+
+        state = states[("CCR-B", start, end)]
+        metrics = _window_metrics(
+            state,
+            usable_start=start,
+            deadline=end,
+            candidate_minutes=1,
+        )
+
+        assert state["ExistingReservationMinutes"] == 479.5
+        assert metrics["ExistingReservationMinutes"] == 479.5
+        assert metrics["LoadAfterMinutes"] == 480.5
+        assert metrics["Fits"] is False
+
+    def test_build_window_states_ignores_known_non_processing_bar(self):
+        start, end, _, resources, buckets, _, _ = self._window_evidence()
+        states = _build_window_states(
+            resources=resources,
+            capacity_buckets=buckets,
+            ccr_resource_ids={"CCR-B"},
+            gantt_rows=[
+                {
+                    "ResourceID": "CCR-B",
+                    "Bars": [{"BarType": "Setup"}],
+                }
+            ],
+            active_capacity_reservations=[],
+        )
+
+        assert states[("CCR-B", start, end)]["ScheduledFullMinutes"] == 0
+
+    def test_build_window_states_rejects_missing_bar_type(self):
+        start, end, _, resources, buckets, bars, _ = self._window_evidence()
+        untyped = dict(bars[0])
+        untyped.pop("BarType")
+
+        with pytest.raises(ValueError, match="BarType"):
+            _build_window_states(
+                resources=resources,
+                capacity_buckets=buckets,
+                ccr_resource_ids={"CCR-B"},
+                gantt_rows=[{"ResourceID": "CCR-B", "Bars": [untyped]}],
+                active_capacity_reservations=[],
+            )
 
     def test_build_window_states_rejects_malformed_matching_row(self):
         start, end, _, resources, buckets, _, _ = self._window_evidence()

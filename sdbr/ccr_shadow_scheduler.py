@@ -191,15 +191,15 @@ def _window_metrics(
         if row["LatestAllowedCompletionAt"] <= usable_end
     )
     scheduled_full = int(state["ScheduledFullMinutes"])
-    existing = int(state["ExistingReservationMinutes"])
+    existing = state["ExistingReservationMinutes"]
     aggregate_before = scheduled_full + existing + candidate_full
     intervals = list(state["ProcessingIntervals"])
     scheduled_usable = _overlap_minutes(intervals, usable_start, usable_end)
     temporal_before = scheduled_usable + existing + candidate_before_deadline
     capacity_minutes = int(state["CapacityMinutes"])
+    single_unit_minutes = _floor_minutes(usable_end - usable_start)
     temporal_capacity = (
-        _floor_minutes(usable_end - usable_start)
-        * int(state["CapacityUnits"])
+        single_unit_minutes * int(state["CapacityUnits"])
     )
     aggregate_remaining = capacity_minutes - aggregate_before
     temporal_remaining = temporal_capacity - temporal_before
@@ -209,6 +209,7 @@ def _window_metrics(
         "Fits": candidate_minutes <= min(
             aggregate_remaining,
             temporal_remaining,
+            single_unit_minutes,
         ),
         "WindowStartAt": _utc_iso(window_start),
         "WindowEndAt": _utc_iso(window_end),
@@ -332,7 +333,10 @@ def _build_window_states(
         for bar in bars:
             if not isinstance(bar, Mapping):
                 raise ValueError("Relevant Gantt bars must be objects.")
-            if bar.get("BarType") not in {None, "Processing"}:
+            bar_type = bar.get("BarType")
+            if bar_type is None:
+                raise ValueError("Relevant Gantt bar BarType is required.")
+            if bar_type != "Processing":
                 continue
             start = _parse_aware(bar.get("Start"), "Gantt Start")
             end = _parse_aware(bar.get("End"), "Gantt End")
@@ -376,7 +380,7 @@ def _build_window_states(
         ):
             raise ValueError("Relevant capacity reservations are malformed or duplicated.")
         seen_reservations.add(reservation_id)
-        states[key]["ExistingReservationMinutes"] += int(minutes)
+        states[key]["ExistingReservationMinutes"] += minutes
     return states
 
 

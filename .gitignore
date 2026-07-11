@@ -12,6 +12,7 @@ data/**/*.db.bak
 data/**/*.bak
 
 .superpowers/
+.worktrees/
 
 .env
 .env.*

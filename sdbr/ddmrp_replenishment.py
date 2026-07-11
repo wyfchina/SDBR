@@ -66,7 +66,11 @@ class DdmrpAuthoritySignature:
 def canonical_fingerprint(value: object) -> str:
     try:
         encoded = json.dumps(
-            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
     except (TypeError, ValueError) as error:
         raise DdmrpReplenishmentConflict(

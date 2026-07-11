@@ -222,6 +222,35 @@ def test_be_ddmrp_007_relevant_ledger_identity_ignores_global_revision_and_unrel
     assert first.fingerprint != quantity_changed.fingerprint
 
 
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_be_ddmrp_007_canonical_fingerprint_rejects_non_finite_numbers(
+    non_finite: float,
+) -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict,
+        canonical_fingerprint,
+    )
+
+    with pytest.raises(DdmrpReplenishmentConflict, match="non-canonical JSON"):
+        canonical_fingerprint({"Quantity": non_finite})
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_be_ddmrp_007_relevant_ledger_identity_rejects_non_finite_numbers(
+    non_finite: float,
+) -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict,
+        build_relevant_planning_ledger_identity,
+    )
+
+    inputs = _ledger_inputs(quantity=5)
+    inputs["planning_demand_commitments"]["DEMAND-1"]["Quantity"] = non_finite
+
+    with pytest.raises(DdmrpReplenishmentConflict, match="non-canonical JSON"):
+        build_relevant_planning_ledger_identity(**inputs)
+
+
 def test_be_ddmrp_007_signature_uses_canonical_snapshot_datetime_not_raw_package_text() -> None:
     from sdbr.ddmrp_replenishment import (
         DdmrpReplenishmentConflict,

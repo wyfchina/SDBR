@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
-from threading import RLock
+from threading import Lock, RLock
 
 from sdbr.operational_state import (
     OperationalStateSnapshot,
@@ -23,6 +23,14 @@ class StateStoreRevisionConflict(RuntimeError):
         super().__init__("Workbench state was changed by another writer.")
         self.expected_revision = expected_revision
         self.current_revision = current_revision
+
+
+@dataclass(frozen=True, slots=True)
+class StateStoreSaveOutcome:
+    committed: bool
+    revision: int
+    backup_succeeded: bool | None
+    maintenance_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -79,9 +87,20 @@ class WorkbenchStateStore:
     processed_planning_event_keys: set[str] = field(default_factory=set)
     audit_events: list[dict[str, object]] = field(default_factory=list)
     revision: int = 0
+    _request_write_lock: Lock = field(
+        default_factory=Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
-    def save(self) -> None:
+    def save(self) -> StateStoreSaveOutcome:
         self.revision += 1
+        return StateStoreSaveOutcome(
+            committed=True,
+            revision=self.revision,
+            backup_succeeded=None,
+        )
 
     def health(self) -> dict[str, object]:
         return {
@@ -100,6 +119,10 @@ class WorkbenchStateStore:
     def current_revision(self) -> int:
         return self.revision
 
+    @property
+    def request_write_lock(self) -> Lock:
+        return self._request_write_lock
+
 
 class SQLiteWorkbenchStateStore(WorkbenchStateStore):
     SCHEMA_VERSION = 1
@@ -113,6 +136,7 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._last_saved_at: str | None = None
+        self._last_backup_error: str | None = None
         self._recovery_status = "Normal"
         self._revision = 0
         try:
@@ -127,7 +151,7 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             self._load()
             self._recovery_status = "RecoveredFromBackup"
 
-    def save(self) -> None:
+    def save(self) -> StateStoreSaveOutcome:
         payloads = {
             "execution_events": self.execution_events,
             "replan_requests": [asdict(item) for item in self.replan_requests],
@@ -231,24 +255,46 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
                 connection.close()
         self._last_saved_at = saved_at
         self._revision = next_revision
-        self._create_backup()
+        try:
+            self._create_backup()
+        except Exception as error:
+            self._last_backup_error = f"{type(error).__name__}: {error}"
+            self._recovery_status = "BackupFailed"
+            return StateStoreSaveOutcome(
+                committed=True,
+                revision=next_revision,
+                backup_succeeded=False,
+                maintenance_error=self._last_backup_error,
+            )
+        self._last_backup_error = None
+        if self._recovery_status == "BackupFailed":
+            self._recovery_status = "Normal"
+        return StateStoreSaveOutcome(
+            committed=True,
+            revision=next_revision,
+            backup_succeeded=True,
+        )
 
     def health(self) -> dict[str, object]:
         with self._lock, sqlite3.connect(self.database_path) as connection:
             quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        database_healthy = quick_check is not None and quick_check[0] == "ok"
+        if not database_healthy:
+            status = "Unhealthy"
+        elif self._last_backup_error is not None:
+            status = "Degraded"
+        else:
+            status = "Healthy"
         return {
             "Backend": "SQLite",
-            "Status": (
-                "Healthy"
-                if quick_check is not None and quick_check[0] == "ok"
-                else "Unhealthy"
-            ),
+            "Status": status,
             "SchemaVersion": self.SCHEMA_VERSION,
             "Revision": self._revision,
             "RecoveryStatus": self._recovery_status,
             "DatabasePath": str(self.database_path.resolve()),
             "BackupPath": str(self.backup_path.resolve()),
             "LastSavedAt": self._last_saved_at,
+            "LastBackupError": self._last_backup_error,
             "StateCounts": _state_counts(self),
         }
 

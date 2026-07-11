@@ -84,6 +84,18 @@ def _business_content_from_record(
         return None
 
 
+def demand_commitment_content_fingerprint(record: Mapping[str, object]) -> str:
+    content = _business_content_from_record(record)
+    if content is None:
+        raise ValueError(
+            "Demand commitment business content is incomplete or invalid."
+        )
+    fingerprint = sha256(
+        json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"sha256:{fingerprint}"
+
+
 def create_demand_commitment(
     *,
     demand_source_type: str,
@@ -136,17 +148,15 @@ def create_demand_commitment(
         "RequiredAt": _canonical_utc_datetime(required_at),
         "DemandClass": demand_class,
     }
-    fingerprint = sha256(
-        json.dumps(
-            business_content, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    ).hexdigest()
     return {
         "DemandCommitmentID": f"DC-{sha256(business_key.encode('utf-8')).hexdigest()[:20]}",
         "BusinessKey": business_key,
         "LogicalDemandKey": logical_demand_key,
-        "ContentFingerprint": f"sha256:{fingerprint}",
+        "ContentFingerprint": demand_commitment_content_fingerprint(
+            business_content
+        ),
         "Status": "PendingConfirmation",
+        "RecordVersion": 1,
         **business_content,
         "TraceID": trace_id,
     }

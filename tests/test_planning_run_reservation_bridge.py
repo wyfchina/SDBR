@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from sdbr.planning_commitments import create_demand_commitment
 from sdbr.planning_run_reservation_bridge import (
     ReservationBatchReferenceError,
     ReservationGraphDriftError,
@@ -12,6 +13,54 @@ from sdbr.planning_run_reservation_bridge import (
     freeze_planning_reservations,
     transition_planning_reservations_for_run,
 )
+
+
+def _demands() -> dict[str, dict[str, object]]:
+    first = create_demand_commitment(
+        demand_source_type="MTOCustomerOrder",
+        source_system="MockERP",
+        source_object_type="CustomerOrder",
+        source_object_id="SO-1",
+        source_object_version="1",
+        demand_line_id="1",
+        item_or_product_id="FG-1",
+        location_id="MAIN",
+        quantity=1,
+        uom="EA",
+        required_at=datetime(2026, 7, 20, 8, tzinfo=timezone.utc),
+        demand_class="MTO",
+        trace_id="TRACE-DC-1",
+    )
+    second = create_demand_commitment(
+        demand_source_type="MTAReplenishment",
+        source_system="SDBR",
+        source_object_type="ReplenishmentRecommendation",
+        source_object_id="REC-2",
+        source_object_version="1",
+        demand_line_id="1",
+        item_or_product_id="FG-2",
+        location_id="MAIN",
+        quantity=1,
+        uom="EA",
+        required_at=datetime(2026, 7, 20, 10, tzinfo=timezone.utc),
+        demand_class="MTA",
+        trace_id="TRACE-DC-2",
+    )
+    first.update(
+        {
+            "DemandCommitmentID": "DC-1",
+            "Status": "Active",
+            "RecordVersion": 1,
+        }
+    )
+    second.update(
+        {
+            "DemandCommitmentID": "DC-2",
+            "Status": "Active",
+            "RecordVersion": 1,
+        }
+    )
+    return {"DC-1": first, "DC-2": second}
 
 
 def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, object]]:
@@ -24,6 +73,7 @@ def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, ob
             "CapacityReservationIDs": ["CCR-1"],
             "MaterialAllocationIDs": ["MA-1"],
             "Details": {"source": "planner-confirmation"},
+            "RecordVersion": 1,
         },
         "PRB-2": {
             "ReservationBatchID": "PRB-2",
@@ -32,6 +82,7 @@ def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, ob
             "Status": "LinkedToFormalOrder",
             "CapacityReservationIDs": ["CCR-2"],
             "MaterialAllocationIDs": ["MA-2"],
+            "RecordVersion": 1,
         },
     }
 
@@ -52,6 +103,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
             "ReservedMinutes": 120,
             "Status": status,
             "Details": {"resource": "CCR-A"},
+            "RecordVersion": 1,
         },
         "CCR-2": {
             "CapacityReservationID": "CCR-2",
@@ -66,6 +118,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
             "WindowEndAt": "2026-07-20T11:00:00+00:00",
             "ReservedMinutes": 60,
             "Status": "LinkedToFormalOrder",
+            "RecordVersion": 1,
         },
         "CCR-OTHER": {
             "CapacityReservationID": "CCR-OTHER",
@@ -86,6 +139,7 @@ def _allocations(
             "DemandClass": "MTO",
             "Status": status,
             "Details": {"item": "RM-1"},
+            "RecordVersion": 1,
         },
         "MA-2": {
             "MaterialAllocationID": "MA-2",
@@ -93,6 +147,7 @@ def _allocations(
             "DemandCommitmentID": "DC-2",
             "DemandClass": "MTA",
             "Status": "LinkedToFormalOrder",
+            "RecordVersion": 1,
         },
         "MA-OTHER": {
             "MaterialAllocationID": "MA-OTHER",
@@ -149,6 +204,7 @@ def _run_graph_operation(
     if operation == "freeze":
         return freeze_planning_reservations(
             batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
             batches=batches,
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -158,6 +214,7 @@ def _run_graph_operation(
         run_status="Completed",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -168,6 +225,7 @@ def _run_graph_operation(
 def test_freeze_copies_only_explicit_eligible_batches_in_caller_and_ledger_order():
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-2", "PRB-1"],
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=_capacities(),
         material_allocations=_allocations(),
@@ -196,6 +254,7 @@ def test_empty_selection_ignores_malformed_unrelated_child_batch_references():
 
     frozen = freeze_planning_reservations(
         batch_ids=[],
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -205,7 +264,9 @@ def test_empty_selection_ignores_malformed_unrelated_child_batch_references():
     assert frozen["Batches"] == []
     assert frozen["CapacityReservations"] == []
     assert frozen["MaterialAllocations"] == []
-    assert frozen["GraphVersion"] == 1
+    assert frozen["GraphFormat"] == "SDBRPlanningReservationGraphV2"
+    assert frozen["GraphVersion"] == 2
+    assert frozen["DemandCommitments"] == []
     assert str(frozen["GraphFingerprint"]).startswith("sha256:")
 
 
@@ -217,6 +278,7 @@ def test_selected_batch_ignores_malformed_unrelated_child_batch_references():
 
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -245,6 +307,7 @@ def test_freeze_rejects_duplicate_missing_or_ineligible_batch_references(
     with pytest.raises(ReservationBatchReferenceError, match=message):
         freeze_planning_reservations(
             batch_ids=batch_ids,
+            demand_commitments=_demands(),
             batches=batches,
             capacity_reservations=_capacities(),
             material_allocations=_allocations(),
@@ -258,6 +321,7 @@ def test_freeze_deep_copies_selected_batches_and_declared_children_without_alias
 
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -288,6 +352,7 @@ def test_completed_run_converts_capacity_but_keeps_material_until_authority_hand
         run_status="Completed",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=_capacities(),
         material_allocations=_allocations(),
@@ -319,6 +384,7 @@ def test_failed_or_dead_letter_run_holds_batch_capacity_and_still_active_materia
         run_status=run_status,
         batch_ids=["PRB-1", "PRB-2"],
         occurred_at=_occurred_at(),
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=_capacities(),
         material_allocations=_allocations(),
@@ -343,6 +409,7 @@ def test_queued_recovery_from_held_batch_returns_unchanged_deep_copies():
         run_status="Queued",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -357,10 +424,11 @@ def test_queued_recovery_from_held_batch_returns_unchanged_deep_copies():
     assert batches["PRB-1"]["Details"] == {"source": "planner-confirmation"}
 
 
-def test_completed_recovery_restores_only_material_held_by_planning_error():
-    batches = _batches(status="HeldForPlanningError")
-    capacities = _capacities(status="HeldForPlanningError")
-    allocations = _allocations(status="HeldForPlanningError")
+def test_frozen_recovery_preserves_monotonic_material_authority_handoff():
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
     batches["PRB-1"]["MaterialAllocationIDs"] = [
         "MA-1",
         "MA-LINKED",
@@ -375,29 +443,78 @@ def test_completed_recovery_restores_only_material_held_by_planning_error():
                 "DemandCommitmentID": "DC-1",
                 "DemandClass": "MTO",
                 "Status": "LinkedToFormalOrder",
+                "RecordVersion": 1,
             },
             "MA-EXTERNAL": {
                 "MaterialAllocationID": "MA-EXTERNAL",
                 "ReservationBatchID": "PRB-1",
                 "DemandCommitmentID": "DC-1",
                 "DemandClass": "MTO",
-                "Status": "Externalized",
+                "Status": "ActivePlanReservation",
+                "MaterialSnapshotID": "OPS-1",
+                "RecordVersion": 1,
             },
             "MA-OTHER-AUTHORITY": {
                 "MaterialAllocationID": "MA-OTHER-AUTHORITY",
                 "ReservationBatchID": "PRB-1",
                 "DemandCommitmentID": "DC-1",
                 "DemandClass": "MTO",
-                "Status": "AuthorityTransferred",
+                "Status": "ActivePlanReservation",
+                "MaterialSnapshotID": "OPS-1",
+                "RecordVersion": 1,
             },
         }
     )
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    failed = transition_planning_reservations_for_run(
+        run_id="RUN-RECOVERY",
+        run_status="Failed",
+        occurred_at=_occurred_at(),
+        frozen_reservations=frozen,
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    batches = failed["Batches"]
+    capacities = failed["CapacityReservations"]
+    allocations = failed["MaterialAllocations"]
+    allocations["MA-EXTERNAL"].update(
+        {
+            "Status": "Externalized",
+            "RecordVersion": int(allocations["MA-EXTERNAL"]["RecordVersion"]) + 1,
+            "ExternalAllocationRef": "ERP-ALLOC-1",
+            "MaterialSnapshotID": "OPS-AUTHORITY-2",
+            "EventType": "AuthorityAllocationExternalized",
+        }
+    )
+    allocations["MA-OTHER-AUTHORITY"].update(
+        {
+            "Status": "AuthorityTransferred",
+            "RecordVersion": int(
+                allocations["MA-OTHER-AUTHORITY"]["RecordVersion"]
+            )
+            + 1,
+            "ExternalAllocationRef": "WMS-ALLOC-2",
+            "MaterialSnapshotID": "OPS-AUTHORITY-2",
+            "EventType": "AuthorityAllocationTransferred",
+        }
+    )
+    external_before = deepcopy(allocations["MA-EXTERNAL"])
+    transferred_before = deepcopy(allocations["MA-OTHER-AUTHORITY"])
 
     result = transition_planning_reservations_for_run(
         run_id="RUN-RECOVERY",
         run_status="Completed",
-        batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
+        frozen_reservations=frozen,
+        demand_commitments=demands,
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -413,11 +530,8 @@ def test_completed_recovery_restores_only_material_held_by_planning_error():
     assert result["MaterialAllocations"]["MA-1"]["EventType"] == "PlanningRunCompleted"
     assert result["MaterialAllocations"]["MA-1"]["PlanningRunID"] == "RUN-RECOVERY"
     assert result["MaterialAllocations"]["MA-LINKED"]["Status"] == "LinkedToFormalOrder"
-    assert result["MaterialAllocations"]["MA-EXTERNAL"]["Status"] == "Externalized"
-    assert (
-        result["MaterialAllocations"]["MA-OTHER-AUTHORITY"]["Status"]
-        == "AuthorityTransferred"
-    )
+    assert result["MaterialAllocations"]["MA-EXTERNAL"] == external_before
+    assert result["MaterialAllocations"]["MA-OTHER-AUTHORITY"] == transferred_before
 
 
 @pytest.mark.parametrize(
@@ -438,6 +552,7 @@ def test_rejects_unhashable_child_batch_identity_as_reference_error(
     with pytest.raises(ReservationBatchReferenceError, match="identity"):
         freeze_planning_reservations(
             batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -562,6 +677,7 @@ def test_rejects_declared_children_with_missing_identity_fields(
     with pytest.raises(ReservationBatchReferenceError, match="identity"):
         freeze_planning_reservations(
             batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -604,6 +720,7 @@ def test_transition_rejects_naive_timestamp_or_unsupported_run_status(
             run_status=run_status,
             batch_ids=["PRB-1"],
             occurred_at=occurred_at,
+            demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=_capacities(),
             material_allocations=_allocations(),
@@ -621,6 +738,7 @@ def test_transition_does_not_mutate_inputs_or_alias_transitioned_records():
         run_status="Completed",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -636,14 +754,21 @@ def test_transition_does_not_mutate_inputs_or_alias_transitioned_records():
 def test_freeze_records_versioned_graph_identity_and_fingerprint():
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=_batches(),
         capacity_reservations=_capacities(),
         material_allocations=_allocations(),
     )
 
-    assert frozen["GraphVersion"] == 1
+    assert frozen["GraphFormat"] == "SDBRPlanningReservationGraphV2"
+    assert frozen["GraphVersion"] == 2
     assert str(frozen["GraphID"]).startswith("PRG-")
     assert str(frozen["GraphFingerprint"]).startswith("sha256:")
+    assert frozen["DemandCommitments"][0]["DemandCommitmentID"] == "DC-1"
+    assert frozen["DemandCommitments"][0]["RecordVersion"] == 1
+    assert str(frozen["DemandCommitments"][0]["ContentFingerprint"]).startswith(
+        "sha256:"
+    )
     assert frozen["Batches"][0]["RecordVersion"] == 1
     assert frozen["CapacityReservations"][0]["RecordVersion"] == 1
     assert frozen["MaterialAllocations"][0]["RecordVersion"] == 1
@@ -671,6 +796,7 @@ def test_freeze_rejects_child_demand_or_class_inconsistent_with_batch(
     with pytest.raises(ReservationBatchReferenceError, match=field):
         freeze_planning_reservations(
             batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -685,6 +811,42 @@ def test_freeze_requires_stable_capacity_line_and_schedule_correlation(field: st
     with pytest.raises(ReservationBatchReferenceError, match=field):
         freeze_planning_reservations(
             batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
+            batches=_batches(),
+            capacity_reservations=capacities,
+            material_allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("collection", ["capacity", "material"])
+@pytest.mark.parametrize("status", [[], {"bad": "status"}])
+def test_freeze_maps_non_string_child_status_to_reference_error(
+    collection: str,
+    status: object,
+):
+    capacities = _capacities()
+    allocations = _allocations()
+    target = capacities["CCR-1"] if collection == "capacity" else allocations["MA-1"]
+    target["Status"] = status
+
+    with pytest.raises(ReservationBatchReferenceError, match="Status must be a string"):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
+            batches=_batches(),
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+
+def test_freeze_rejects_non_increasing_reserved_capacity_window():
+    capacities = _capacities()
+    capacities["CCR-1"]["WindowEndAt"] = capacities["CCR-1"]["WindowStartAt"]
+
+    with pytest.raises(ReservationBatchReferenceError, match="strictly after"):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=capacities,
             material_allocations=_allocations(),
@@ -698,6 +860,7 @@ def test_completed_run_rejects_empty_scheduled_occupancy_evidence(schedule):
     allocations = _allocations()
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -710,6 +873,7 @@ def test_completed_run_rejects_empty_scheduled_occupancy_evidence(schedule):
             occurred_at=_occurred_at(),
             frozen_reservations=frozen,
             schedule=schedule,
+            demand_commitments=_demands(),
             batches=batches,
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -718,6 +882,87 @@ def test_completed_run_rejects_empty_scheduled_occupancy_evidence(schedule):
     assert error.value.capacity_reservation_ids == ("CCR-1",)
     assert batches["PRB-1"]["Status"] == "ActivePlanReservation"
     assert capacities["CCR-1"]["Status"] == "ActivePlanReservation"
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        {"GanttRows": None},
+        {"GanttRows": [{"ResourceID": "CCR-A", "Bars": None}]},
+        {"GanttRows": [{"ResourceID": "CCR-A", "Bars": ["not-an-object"]}]},
+        {
+            "GanttRows": [{
+                "ResourceID": "CCR-A",
+                "Bars": [{
+                    "OrderID": "WO-1",
+                    "OperationID": "WO-1:CCR",
+                    "Start": "2026-07-20T08:00:00+00:00",
+                    "End": "2026-07-20T10:00:00+00:00",
+                    "DurationMinutes": "120",
+                }],
+            }]
+        },
+    ],
+)
+def test_completed_run_maps_all_malformed_schedule_shapes_to_evidence_error(schedule):
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    with pytest.raises(ScheduledOccupancyEvidenceError) as error:
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=schedule,
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert error.value.capacity_reservation_ids == ("CCR-1",)
+    assert "malformed" in error.value.reasons["CCR-1"].lower()
+
+
+def test_completed_run_rejects_declared_duration_inconsistent_with_timestamps():
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    schedule = _exact_schedule()
+    schedule["GanttRows"][0]["Bars"][0]["End"] = "2026-07-20T08:01:00+00:00"
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    with pytest.raises(ScheduledOccupancyEvidenceError) as error:
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=schedule,
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert "timestamp duration" in error.value.reasons["CCR-1"].lower()
 
 
 def test_completed_run_rejects_partial_scheduled_occupancy_evidence():
@@ -734,6 +979,7 @@ def test_completed_run_rejects_partial_scheduled_occupancy_evidence():
     }
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -746,6 +992,7 @@ def test_completed_run_rejects_partial_scheduled_occupancy_evidence():
             occurred_at=_occurred_at(),
             frozen_reservations=frozen,
             schedule=_exact_schedule(),
+            demand_commitments=_demands(),
             batches=batches,
             capacity_reservations=capacities,
             material_allocations=allocations,
@@ -760,6 +1007,7 @@ def test_completed_run_converts_only_after_exact_frozen_occupancy_replacement():
     allocations = _allocations()
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -771,6 +1019,7 @@ def test_completed_run_converts_only_after_exact_frozen_occupancy_replacement():
         occurred_at=_occurred_at(),
         frozen_reservations=frozen,
         schedule=_exact_schedule(),
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -792,6 +1041,7 @@ def test_transition_compare_and_set_rejects_live_graph_drift(drift: str):
     allocations = _allocations()
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-1"],
+        demand_commitments=_demands(),
         batches=batches,
         capacity_reservations=capacities,
         material_allocations=allocations,
@@ -821,9 +1071,112 @@ def test_transition_compare_and_set_rejects_live_graph_drift(drift: str):
             occurred_at=_occurred_at(),
             frozen_reservations=frozen,
             schedule=_exact_schedule(),
+            demand_commitments=_demands(),
             batches=batches,
             capacity_reservations=capacities,
             material_allocations=allocations,
         )
 
     assert (batches, capacities, allocations) == before
+
+
+@pytest.mark.parametrize("drift", ["status", "content", "version", "fingerprint", "missing"])
+def test_transition_compare_and_set_rejects_demand_commitment_drift(drift: str):
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    if drift == "status":
+        demands["DC-1"]["Status"] = "Cancelled"
+    elif drift == "content":
+        demands["DC-1"]["Quantity"] = 2.0
+    elif drift == "version":
+        demands["DC-1"]["RecordVersion"] = 2
+    elif drift == "fingerprint":
+        demands["DC-1"]["ContentFingerprint"] = "sha256:changed"
+    else:
+        demands.pop("DC-1")
+    before = deepcopy((demands, batches, capacities, allocations))
+
+    with pytest.raises(ReservationGraphDriftError):
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=_exact_schedule(),
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert (demands, batches, capacities, allocations) == before
+
+
+@pytest.mark.parametrize("field", ["GraphID", "GraphVersion", "GraphFingerprint"])
+def test_current_frozen_graph_requires_all_integrity_metadata(field: str):
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    frozen.pop(field)
+
+    with pytest.raises(ReservationGraphDriftError, match=field):
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=_exact_schedule(),
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+
+def test_explicit_legacy_frozen_graph_fails_closed_with_migration_requirement():
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    frozen["GraphFormat"] = "LegacyUnversionedPlanningReservationGraph"
+
+    with pytest.raises(ReservationBatchReferenceError) as error:
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=_exact_schedule(),
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert error.value.status == "PlanningReservationGraphMigrationRequired"
+    assert batches["PRB-1"]["Status"] == "ActivePlanReservation"
+    assert capacities["CCR-1"]["Status"] == "ActivePlanReservation"

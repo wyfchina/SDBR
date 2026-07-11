@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from hashlib import sha256
 import json
 from math import isfinite
@@ -18,16 +18,12 @@ ACTIVE_CAPACITY_RESERVATION_STATUSES = {
 ACTIVE_MATERIAL_ALLOCATION_STATUSES = {
     "ActivePlanReservation", "LinkedToFormalOrder", "HeldForPlanningError"
 }
-TERMINAL_RESERVATION_BATCH_STATUSES = {
-    "ConvertedToScheduledOccupancy",
-    "Released",
-    "Cancelled",
-    "Rejected",
-}
-
-
 class ReservationConflict(ValueError):
     pass
+
+
+class ReservationLegacyMigrationRequired(ReservationConflict):
+    status = "PlanningReservationLegacyMigrationRequired"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +250,7 @@ def prepare_reservation_confirmation(
             "Status": "Active",
             "ConfirmedBy": confirmed_by,
             "ConfirmedAt": confirmed_at_value,
+            "RecordVersion": int(demand_snapshot.get("RecordVersion", 1)),
         }
     )
     batch = {
@@ -381,10 +378,6 @@ def _assert_write_set_fingerprint_and_result(
 def _assert_idempotent_replay_matches(
     *,
     write_set: PlanningReservationWriteSet,
-    commitments: Mapping[str, dict[str, object]],
-    batches: Mapping[str, dict[str, object]],
-    capacity_reservations: Mapping[str, dict[str, object]],
-    material_allocations: Mapping[str, dict[str, object]],
     events: MutableSequence[dict[str, object]],
     current_fingerprint: str,
     expected_result: dict[str, object],
@@ -401,17 +394,12 @@ def _assert_idempotent_replay_matches(
     persisted_event = matching_events[0]
     if (
         "PayloadFingerprint" not in persisted_event
-        and "Result" not in persisted_event
-        and _legacy_replay_matches_stored_result(
-            write_set=write_set,
-            persisted_event=persisted_event,
-            commitments=commitments,
-            batches=batches,
-            capacity_reservations=capacity_reservations,
-            material_allocations=material_allocations,
-        )
+        or "Result" not in persisted_event
     ):
-        return
+        raise ReservationLegacyMigrationRequired(
+            "Legacy planning reservation replay requires explicit migration before "
+            "it can be evaluated."
+        )
     if (
         persisted_event.get("PayloadFingerprint") != current_fingerprint
         or persisted_event.get("Result") != expected_result
@@ -421,88 +409,7 @@ def _assert_idempotent_replay_matches(
         )
 
 
-def _legacy_normalized_record(
-    record: Mapping[str, object],
-    *,
-    demand: bool = False,
-) -> dict[str, object]:
-    normalized = deepcopy(dict(record))
-    if demand:
-        normalized.pop("ContentFingerprint", None)
-        normalized.pop("TraceID", None)
-    else:
-        normalized.setdefault("RecordVersion", 1)
-    for field in ("RequiredAt", "ConfirmedAt"):
-        value = normalized.get(field)
-        if not isinstance(value, str):
-            continue
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if parsed.tzinfo is not None and parsed.utcoffset() is not None:
-            normalized[field] = parsed.astimezone(timezone.utc).isoformat()
-    return normalized
-
-
-def _legacy_replay_matches_stored_result(
-    *,
-    write_set: PlanningReservationWriteSet,
-    persisted_event: Mapping[str, object],
-    commitments: Mapping[str, dict[str, object]],
-    batches: Mapping[str, dict[str, object]],
-    capacity_reservations: Mapping[str, dict[str, object]],
-    material_allocations: Mapping[str, dict[str, object]],
-) -> bool:
-    demand_id = str(write_set.demand_commitment["DemandCommitmentID"])
-    batch_id = str(write_set.batch["ReservationBatchID"])
-    stored_demand = commitments.get(demand_id)
-    stored_batch = batches.get(batch_id)
-    if stored_demand is None or stored_batch is None:
-        return False
-    if _legacy_normalized_record(
-        stored_demand, demand=True
-    ) != _legacy_normalized_record(write_set.demand_commitment, demand=True):
-        return False
-    if _legacy_normalized_record(stored_batch) != _legacy_normalized_record(
-        write_set.batch
-    ):
-        return False
-    for candidate in write_set.capacity_reservations:
-        record_id = str(candidate["CapacityReservationID"])
-        stored = capacity_reservations.get(record_id)
-        if stored is None or _legacy_normalized_record(
-            stored
-        ) != _legacy_normalized_record(candidate):
-            return False
-    for candidate in write_set.material_allocations:
-        record_id = str(candidate["MaterialAllocationID"])
-        stored = material_allocations.get(record_id)
-        if stored is None or _legacy_normalized_record(
-            stored
-        ) != _legacy_normalized_record(candidate):
-            return False
-    candidate_events = [
-        event
-        for event in write_set.events
-        if event.get("IdempotencyKey") == write_set.idempotency_key
-    ]
-    if len(candidate_events) != 1:
-        return False
-    persisted_core = {
-        key: value
-        for key, value in persisted_event.items()
-        if key not in {"PayloadFingerprint", "Result"}
-    }
-    candidate_core = {
-        key: value
-        for key, value in candidate_events[0].items()
-        if key not in {"PayloadFingerprint", "Result"}
-    }
-    return persisted_core == candidate_core
-
-
-def _assert_one_non_terminal_batch_per_demand(
+def _assert_one_batch_per_demand(
     *,
     batches: Mapping[str, dict[str, object]],
     candidate_batch_id: str,
@@ -513,10 +420,11 @@ def _assert_one_non_terminal_batch_per_demand(
             continue
         if existing.get("DemandCommitmentID") != demand_commitment_id:
             continue
-        if existing.get("Status") not in TERMINAL_RESERVATION_BATCH_STATUSES:
-            raise ReservationConflict(
-                "Demand commitment already has a non-terminal reservation batch."
-            )
+        raise ReservationConflict(
+            "Demand commitment already has a reservation batch; a non-terminal "
+            "reservation batch or converted reservation batch permits only exact "
+            "idempotent replay."
+        )
 
 
 def apply_reservation_write_set(
@@ -542,17 +450,13 @@ def apply_reservation_write_set(
     if write_set.idempotency_key in processed_event_keys:
         _assert_idempotent_replay_matches(
             write_set=write_set,
-            commitments=commitments,
-            batches=batches,
-            capacity_reservations=capacity_reservations,
-            material_allocations=material_allocations,
             events=events,
             current_fingerprint=current_fingerprint,
             expected_result=expected_result,
         )
         return
 
-    _assert_one_non_terminal_batch_per_demand(
+    _assert_one_batch_per_demand(
         batches=batches,
         candidate_batch_id=batch_id,
         demand_commitment_id=demand_id,

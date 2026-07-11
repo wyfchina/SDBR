@@ -1,5 +1,6 @@
 """Acceptance evidence for BE-SDBR-007, BE-SDBR-008, and BE-SDBR-009."""
 
+from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
 
@@ -120,21 +121,68 @@ def test_duplicate_confirmation_does_not_create_second_batch():
     assert len(collections[4]) == 1
 
 
-def test_exact_replay_accepts_historic_result_without_fingerprint_metadata():
+@pytest.mark.parametrize(
+    "lifecycle_status",
+    ["ActivePlanReservation", "HeldForPlanningError"],
+)
+def test_true_pre_fix_replay_fails_closed_with_structured_migration_requirement(
+    lifecycle_status: str,
+):
     write_set = _prepare(capacity_requests=[_capacity_request()])
-    collections = ({}, {}, {}, {}, [], set())
-    _apply(write_set, collections)
-    collections[4][0].pop("PayloadFingerprint")
-    collections[4][0].pop("Result")
-    collections[1][str(write_set.batch["ReservationBatchID"])].pop("RecordVersion")
-    for record in collections[2].values():
-        record.pop("RecordVersion")
+    demand_id = str(write_set.demand_commitment["DemandCommitmentID"])
+    old_batch_id = "PRB-f1f16bdff93d72c8c0a9"
+    old_capacity_id = "CCR-f36148473b60a289b70b"
+    old_event = {
+        "EventID": "PRE-e893d23228887c0cad8d",
+        "EventType": "PlanningReservationActivated",
+        "DemandCommitmentID": demand_id,
+        "ReservationBatchID": old_batch_id,
+        "OccurredAt": "2026-07-10T08:00:00+00:00",
+        "ActorID": "planner-1",
+        "IdempotencyKey": write_set.idempotency_key,
+        "TraceID": "TRACE-REC-1",
+    }
+    collections = (
+        {demand_id: dict(write_set.demand_commitment)},
+        {
+            old_batch_id: {
+                "ReservationBatchID": old_batch_id,
+                "DemandCommitmentID": demand_id,
+                "DemandClass": "MTA",
+                "Status": lifecycle_status,
+                "ConfirmationID": "CONFIRM-1",
+                "ConfirmedBy": "planner-1",
+                "ConfirmedAt": "2026-07-10T08:00:00+00:00",
+                "CapacityReservationIDs": [old_capacity_id],
+                "MaterialAllocationIDs": [],
+            }
+        },
+        {
+            old_capacity_id: {
+                "CapacityReservationID": old_capacity_id,
+                "ReservationBatchID": old_batch_id,
+                "DemandCommitmentID": demand_id,
+                "DemandClass": "MTA",
+                "Status": lifecycle_status,
+                "ResourceID": "CCR-1",
+                "WindowStartAt": "2026-07-20T08:00:00+00:00",
+                "WindowEndAt": "2026-07-20T16:00:00+00:00",
+                "ReservedMinutes": 120,
+                "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
+            }
+        },
+        {},
+        [old_event],
+        {write_set.idempotency_key},
+    )
+    before = deepcopy(collections)
 
-    _apply(write_set, collections)
+    with pytest.raises(ReservationConflict) as error:
+        _apply(write_set, collections)
 
-    assert len(collections[1]) == 1
-    assert len(collections[2]) == 1
-    assert len(collections[4]) == 1
+    assert error.value.status == "PlanningReservationLegacyMigrationRequired"
+    assert "migration" in str(error.value).lower()
+    assert collections == before
 
 
 def test_idempotency_key_reuse_with_changed_payload_is_rejected_without_mutation():
@@ -175,6 +223,40 @@ def test_demand_cannot_have_two_non_terminal_reservation_batches():
         _apply(competing, collections)
 
     assert collections == before
+
+
+def test_converted_demand_allows_only_exact_idempotent_replay_not_new_confirmation():
+    first = _prepare(
+        confirmation_id="CONFIRM-1",
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 10,
+        }],
+    )
+    competing = _prepare(
+        confirmation_id="CONFIRM-2",
+        material_requests=[{
+            "RequirementLineID": "REQ-2",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 10,
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(first, collections)
+    first_batch_id = str(first.batch["ReservationBatchID"])
+    collections[1][first_batch_id]["Status"] = "ConvertedToScheduledOccupancy"
+
+    _apply(first, collections)
+    before_competing = deepcopy(collections)
+
+    with pytest.raises(ReservationConflict, match="already has a reservation batch"):
+        _apply(competing, collections)
+
+    assert collections == before_competing
+    assert len(collections[3]) == 1
 
 
 def test_stable_child_ids_and_payload_fingerprint_do_not_depend_on_request_order():

@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -114,8 +115,11 @@ from sdbr.planning_run_view import (
     build_planning_run_workbench,
 )
 from sdbr.planning_run_reservation_bridge import (
+    GRAPH_FORMAT,
+    LEGACY_GRAPH_FORMAT,
     ReservationBatchReferenceError,
     ReservationGraphDriftError,
+    ReservationGraphMigrationRequiredError,
     ScheduledOccupancyEvidenceError,
     freeze_planning_reservations,
     transition_planning_reservations_for_run,
@@ -944,6 +948,7 @@ def _planning_run_public_record(
     public_record = dict(planning_run)
     public_record.pop("LeaseToken", None)
     public_record.pop("LeaseTokenHash", None)
+    public_record.pop("ExecutionTokenHash", None)
     return public_record
 
 
@@ -1205,49 +1210,65 @@ def create_app(
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
-        expected_revision = _client_revision_from_if_match(
-            request.headers.get("if-match")
-        )
-        if (
-            expected_revision is not None
-            and expected_revision != active_store.current_revision()
-        ):
-            return _revision_conflict_response(
-                endpoint=request.url.path,
-                expected_revision=expected_revision,
-                current_revision=active_store.current_revision(),
-                message="Workbench state changed; reload the latest state before retrying.",
+        await run_in_threadpool(active_store.request_write_lock.acquire)
+        try:
+            expected_revision = _client_revision_from_if_match(
+                request.headers.get("if-match")
             )
-        with reservation_graph_lock:
-            persistence_snapshot = _snapshot_reservation_persistence_state(
-                active_store
-            )
-        response = await call_next(request)
-        if response.status_code < 400 or getattr(
-            request.state, "persist_workbench_write", False
-        ):
-            try:
-                active_store.save()
-            except StateStoreRevisionConflict as error:
-                with reservation_graph_lock:
-                    active_store.reload()
+            if (
+                expected_revision is not None
+                and expected_revision != active_store.current_revision()
+            ):
                 return _revision_conflict_response(
                     endpoint=request.url.path,
-                    expected_revision=error.expected_revision,
-                    current_revision=error.current_revision,
-                    message="Workbench state changed; reload completed and the request can be retried.",
+                    expected_revision=expected_revision,
+                    current_revision=active_store.current_revision(),
+                    message="Workbench state changed; reload the latest state before retrying.",
                 )
+            with reservation_graph_lock:
+                persistence_snapshot = _snapshot_reservation_persistence_state(
+                    active_store
+                )
+            try:
+                response = await call_next(request)
             except Exception:
                 with reservation_graph_lock:
                     _restore_reservation_persistence_state(
                         active_store, persistence_snapshot
                     )
                 raise
-        response.headers["X-Workbench-Revision"] = str(
-            active_store.current_revision()
-        )
-        response.headers["X-SDBR-Environment"] = active_environment.environment_id
-        return response
+            if response.status_code < 400 or getattr(
+                request.state, "persist_workbench_write", False
+            ):
+                try:
+                    active_store.save()
+                except StateStoreRevisionConflict as error:
+                    with reservation_graph_lock:
+                        active_store.reload()
+                    return _revision_conflict_response(
+                        endpoint=request.url.path,
+                        expected_revision=error.expected_revision,
+                        current_revision=error.current_revision,
+                        message="Workbench state changed; reload completed and the request can be retried.",
+                    )
+                except Exception:
+                    with reservation_graph_lock:
+                        _restore_reservation_persistence_state(
+                            active_store, persistence_snapshot
+                        )
+                    raise
+            else:
+                with reservation_graph_lock:
+                    _restore_reservation_persistence_state(
+                        active_store, persistence_snapshot
+                    )
+            response.headers["X-Workbench-Revision"] = str(
+                active_store.current_revision()
+            )
+            response.headers["X-SDBR-Environment"] = active_environment.environment_id
+            return response
+        finally:
+            active_store.request_write_lock.release()
 
     def resolve_release_operational_state(
         payload: ReleaseCandidatePayload,
@@ -3318,6 +3339,7 @@ def create_app(
             try:
                 frozen_planning_reservations = freeze_planning_reservations(
                     batch_ids=payload.PlanningReservationBatchIDs,
+                    demand_commitments=planning_demand_commitments,
                     batches=planning_reservation_batches,
                     capacity_reservations=ccr_capacity_reservations,
                     material_allocations=material_planning_allocations,
@@ -3589,6 +3611,32 @@ def create_app(
                     },
                 )
 
+        execution_version = int(planning_run.get("ExecutionVersion", 0)) + 1
+        execution_token_hash = _lease_token_hash(token_urlsafe(24))
+        claimed_execution_run = dict(planning_run)
+        claimed_execution_run.update(
+            {
+                "Status": "Running",
+                "ExecutionVersion": execution_version,
+                "ExecutionTokenHash": execution_token_hash,
+                "ExecutionClaimedAt": payload.StartedAt.isoformat(),
+                "ExecutionClaimedBy": payload.ExecutedBy,
+            }
+        )
+        claimed_status_history = list(planning_run["StatusHistory"])
+        if direct_execution:
+            claimed_status_history.append(
+                {
+                    "Status": "Running",
+                    "ChangedAt": payload.StartedAt.isoformat(),
+                    "ChangedBy": payload.ExecutedBy,
+                    "Reason": "DirectExecution",
+                }
+            )
+        claimed_execution_run["StatusHistory"] = claimed_status_history
+        planning_runs[run_id] = claimed_execution_run
+        planning_run = claimed_execution_run
+
         master_data_version = master_data_versions[
             str(planning_run["MasterDataVersionID"])
         ]
@@ -3597,15 +3645,6 @@ def create_app(
         ]
         execution_request = _planning_run_payload_from_record(planning_run)
         status_history = list(planning_run["StatusHistory"])
-        if direct_execution:
-            status_history.append(
-                {
-                    "Status": "Running",
-                    "ChangedAt": payload.StartedAt.isoformat(),
-                    "ChangedBy": payload.ExecutedBy,
-                    "Reason": "DirectExecution",
-                }
-            )
         try:
             completed_run = _execute_planning_run(
                 payload=execution_request,
@@ -3648,6 +3687,32 @@ def create_app(
                     "Schedule": None,
                 }
             )
+        live_execution_run = planning_runs.get(run_id)
+        if (
+            live_execution_run is None
+            or live_execution_run.get("Status") != "Running"
+            or live_execution_run.get("ExecutionVersion") != execution_version
+            or not compare_digest(
+                str(live_execution_run.get("ExecutionTokenHash") or ""),
+                execution_token_hash,
+            )
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "RunID": run_id,
+                        "Status": "PlanningRunExecutionOwnershipLost",
+                        "ExecutionVersion": execution_version,
+                        "Message": (
+                            "Planning run execution ownership changed before "
+                            "finalization."
+                        ),
+                    },
+                },
+            )
         completed_at = payload.CompletedAt or datetime.now(timezone.utc)
         completed_run.update(
             {
@@ -3670,14 +3735,40 @@ def create_app(
         frozen_planning_reservations = completed_run.get(
             "FrozenPlanningReservations"
         )
-        frozen_batch_ids = (
-            frozen_planning_reservations.get("ReservationBatchIDs", [])
-            if isinstance(frozen_planning_reservations, dict)
+        selected_run_batch_ids = completed_run.get(
+            "PlanningReservationBatchIDs", []
+        )
+        selected_run_batch_ids = (
+            selected_run_batch_ids
+            if isinstance(selected_run_batch_ids, list)
             else []
+        )
+        frozen_batch_ids_value = (
+            frozen_planning_reservations.get("ReservationBatchIDs")
+            if isinstance(frozen_planning_reservations, dict)
+            else None
+        )
+        frozen_batch_ids = (
+            list(selected_run_batch_ids)
+            if selected_run_batch_ids
+            else (
+                list(frozen_batch_ids_value)
+                if isinstance(frozen_batch_ids_value, list)
+                else []
+            )
+        )
+        reservation_transition_required = bool(selected_run_batch_ids) or bool(
+            isinstance(frozen_planning_reservations, dict)
+            and frozen_planning_reservations.get("Batches")
+        )
+        frozen_transition_graph = (
+            frozen_planning_reservations
+            if isinstance(frozen_planning_reservations, dict)
+            else {}
         )
         reservation_audit_details: dict[str, object] = {}
         reservation_error: dict[str, object] | None = None
-        if frozen_batch_ids and completed_run["Status"] in {
+        if reservation_transition_required and completed_run["Status"] in {
             "Completed",
             "Failed",
             "DeadLetter",
@@ -3689,12 +3780,13 @@ def create_app(
                         run_id=run_id,
                         run_status=str(completed_run["Status"]),
                         occurred_at=completed_at,
-                        frozen_reservations=frozen_planning_reservations,
+                        frozen_reservations=frozen_transition_graph,
                         schedule=(
                             completed_run.get("Schedule")
                             if isinstance(completed_run.get("Schedule"), dict)
                             else None
                         ),
+                        demand_commitments=planning_demand_commitments,
                         batches=planning_reservation_batches,
                         capacity_reservations=ccr_capacity_reservations,
                         material_allocations=material_planning_allocations,
@@ -3722,7 +3814,8 @@ def create_app(
                             run_id=run_id,
                             run_status="Failed",
                             occurred_at=completed_at,
-                            frozen_reservations=frozen_planning_reservations,
+                            frozen_reservations=frozen_transition_graph,
+                            demand_commitments=planning_demand_commitments,
                             batches=planning_reservation_batches,
                             capacity_reservations=ccr_capacity_reservations,
                             material_allocations=material_planning_allocations,
@@ -3737,6 +3830,32 @@ def create_app(
                         completed_run["PlanningError"] = deepcopy(
                             reservation_error
                         )
+                except ReservationGraphMigrationRequiredError as error:
+                    persisted_legacy_graph = deepcopy(
+                        dict(frozen_transition_graph)
+                    )
+                    persisted_legacy_graph.setdefault(
+                        "GraphFormat", LEGACY_GRAPH_FORMAT
+                    )
+                    completed_run["FrozenPlanningReservations"] = (
+                        persisted_legacy_graph
+                    )
+                    reservation_error = {
+                        "Status": error.status,
+                        "ReservationBatchIDs": list(frozen_batch_ids),
+                        "GraphFormat": persisted_legacy_graph.get("GraphFormat"),
+                        "RequiredGraphFormat": GRAPH_FORMAT,
+                        "Message": str(error),
+                    }
+                    completed_run.update(
+                        {
+                            "Status": "Failed",
+                            "SolverStatus": "Error",
+                            "SolverMessage": str(error),
+                            "PublicationStatus": None,
+                            "PlanningError": deepcopy(reservation_error),
+                        }
+                    )
                 except (
                     ReservationGraphDriftError,
                     ReservationBatchReferenceError,
@@ -3798,6 +3917,8 @@ def create_app(
             }
         )
         completed_run["StatusHistory"] = status_history
+        completed_run.pop("ExecutionTokenHash", None)
+        completed_run["CompletedExecutionVersion"] = execution_version
         planning_runs[run_id] = completed_run
         _append_planning_run_audit_event(
             audit_events=audit_events,
@@ -9155,12 +9276,14 @@ def _pending_planning_run(
         "PlanningReservationBatchIDs": list(payload.PlanningReservationBatchIDs),
         "FrozenPlanningReservations": deepcopy(
             frozen_planning_reservations
-            or {
-                "ReservationBatchIDs": [],
-                "Batches": [],
-                "CapacityReservations": [],
-                "MaterialAllocations": [],
-            }
+            if frozen_planning_reservations is not None
+            else freeze_planning_reservations(
+                batch_ids=[],
+                demand_commitments={},
+                batches={},
+                capacity_reservations={},
+                material_allocations={},
+            )
         ),
         "FrozenBaseCalendars": [
             dict(item) for item in (frozen_base_calendars or [])

@@ -205,6 +205,67 @@ def test_sqlite_state_store_is_committed_after_successful_api_write(tmp_path):
     assert restored.status_code == 200
 
 
+def test_sqlite_save_exposes_committed_boundary_when_backup_maintenance_fails(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "backup-boundary.db"
+    store = SQLiteWorkbenchStateStore(database_path)
+    store.planning_runs["RUN-BACKUP-BOUNDARY"] = {
+        "RunID": "RUN-BACKUP-BOUNDARY",
+        "Status": "Pending",
+    }
+
+    def fail_backup() -> None:
+        raise OSError("backup target unavailable")
+
+    monkeypatch.setattr(store, "_create_backup", fail_backup)
+
+    outcome = store.save()
+
+    assert outcome.committed is True
+    assert outcome.revision == 1
+    assert outcome.backup_succeeded is False
+    assert "backup target unavailable" in str(outcome.maintenance_error)
+    assert store.current_revision() == 1
+    assert store.health()["Status"] == "Degraded"
+    assert store.health()["RecoveryStatus"] == "BackupFailed"
+    restored = SQLiteWorkbenchStateStore(database_path)
+    assert restored.planning_runs["RUN-BACKUP-BOUNDARY"]["Status"] == "Pending"
+    assert restored.current_revision() == 1
+
+
+def test_api_reports_success_and_keeps_committed_state_when_sqlite_backup_fails(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "backup-api-boundary.db"
+    store = SQLiteWorkbenchStateStore(database_path)
+
+    def fail_backup() -> None:
+        raise OSError("backup target unavailable")
+
+    monkeypatch.setattr(store, "_create_backup", fail_backup)
+    client = TestClient(
+        create_app(state_store=store),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-BACKUP-FAILURE",
+            "CapturedAt": "2026-06-20T06:00:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["X-Workbench-Revision"] == "1"
+    assert "OPS-BACKUP-FAILURE" in store.operational_state_snapshots
+    restored = SQLiteWorkbenchStateStore(database_path)
+    assert "OPS-BACKUP-FAILURE" in restored.operational_state_snapshots
+
+
 def test_sqlite_state_store_reports_health_and_recovers_corrupt_database(tmp_path):
     database_path = tmp_path / "workbench.db"
     store = SQLiteWorkbenchStateStore(database_path)

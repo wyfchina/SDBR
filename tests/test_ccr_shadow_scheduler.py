@@ -6,6 +6,7 @@ from sdbr.ccr_shadow_scheduler import (
     _build_window_states,
     _commit_candidate,
     _extract_route_operations,
+    _requested_candidate,
     _reservation_request,
     _validate_shadow_request,
     _window_metrics,
@@ -46,6 +47,21 @@ class TestCcrShadowInputContract:
         }
         values.update(overrides)
         with pytest.raises(ValueError, match=message):
+            _validate_shadow_request(**values)
+
+    @pytest.mark.parametrize("field", ["requested_due_at", "evaluated_at"])
+    def test_non_datetime_temporal_inputs_raise_value_error(self, field):
+        values = {
+            "order_id": "SO-1:10",
+            "quantity": 1.0,
+            "requested_due_at": datetime(2026, 7, 20, 18, tzinfo=UTC),
+            "evaluated_at": datetime(2026, 7, 11, 8, tzinfo=UTC),
+            "downstream_protection_minutes": 60,
+            "protection_threshold_percent": 80.0,
+        }
+        values[field] = "2026-07-20T18:00:00+00:00"
+
+        with pytest.raises(ValueError, match="datetime"):
             _validate_shadow_request(**values)
 
     def test_route_order_repeated_ccr_and_formal_duration(self):
@@ -358,3 +374,151 @@ class TestCcrShadowCapacityParity:
                 gantt_rows=gantt_rows,
                 active_capacity_reservations=reservations,
             )
+
+
+class TestCcrShadowPromiseSelection:
+    """BE-SDBR-010: select deterministic requested and safe promises."""
+
+    @staticmethod
+    def _state(resource_id, start, end, capacity, reserved=0):
+        return {
+            "ResourceID": resource_id,
+            "WindowStart": start,
+            "WindowEnd": end,
+            "CapacityMinutes": capacity,
+            "CapacityUnits": 1,
+            "ProcessingIntervals": [],
+            "ScheduledFullMinutes": 0,
+            "ExistingReservationMinutes": reserved,
+            "CandidateAssignments": [],
+        }
+
+    def test_requested_candidate_walks_route_backward_and_returns_on_time(self):
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        requested_due_at = end + timedelta(hours=1)
+        operations = [
+            {
+                "RouteSequence": 10,
+                "OperationID": "SO-1:10:CUT",
+                "SourceOperationID": "CUT",
+                "ResourceID": "CCR-A",
+                "DurationMinutes": 120,
+            },
+            {
+                "RouteSequence": 20,
+                "OperationID": "SO-1:10:PACK",
+                "SourceOperationID": "PACK",
+                "ResourceID": "CCR-B",
+                "DurationMinutes": 60,
+            },
+        ]
+
+        result = _requested_candidate(
+            order_id="SO-1:10",
+            requested_due_at=requested_due_at,
+            capacity_assessment_cutoff_at=start,
+            ccr_operations=operations,
+            deadlines={
+                "CUT": end - timedelta(hours=2),
+                "PACK": end,
+            },
+            source_states={
+                ("CCR-A", start, end): self._state(
+                    "CCR-A", start, end, 480
+                ),
+                ("CCR-B", start, end): self._state(
+                    "CCR-B", start, end, 480
+                ),
+            },
+            protection_threshold_percent=80.0,
+        )
+
+        assert result["Feasible"] is True
+        assert result["PromiseAt"] == requested_due_at.isoformat()
+        assert [
+            row["LatestAllowedCompletionAt"]
+            for row in result["ReservationRequests"]
+        ] == [
+            (end - timedelta(hours=2)).isoformat(),
+            end.isoformat(),
+        ]
+
+    def test_low_load_only_after_deadline_never_makes_request_on_time(self):
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        deadline = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        later_end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        operation = {
+            "RouteSequence": 10,
+            "OperationID": "SO-1:10:CUT",
+            "SourceOperationID": "CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 60,
+        }
+
+        result = _requested_candidate(
+            order_id="SO-1:10",
+            requested_due_at=later_end,
+            capacity_assessment_cutoff_at=start,
+            ccr_operations=[operation],
+            deadlines={"CUT": deadline},
+            source_states={
+                ("CCR-1", start, deadline): self._state(
+                    "CCR-1", start, deadline, 60, reserved=60
+                ),
+                ("CCR-1", deadline, later_end): self._state(
+                    "CCR-1", deadline, later_end, 240
+                ),
+            },
+            protection_threshold_percent=80.0,
+        )
+
+        assert result["Feasible"] is False
+        assert result["ReservationRequests"] == []
+        assert result["ConsideredWindowKeys"] == [
+            ("CCR-1", start.isoformat(), deadline.isoformat())
+        ]
+
+    def test_initial_requested_pass_cannot_use_elapsed_shift_minutes(self):
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        cutoff = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+
+        def state(window_start, window_end, capacity):
+            return {
+                "ResourceID": "CCR-1",
+                "WindowStart": window_start,
+                "WindowEnd": window_end,
+                "CapacityMinutes": capacity,
+                "CapacityUnits": 1,
+                "ProcessingIntervals": [],
+                "ScheduledFullMinutes": 0,
+                "ExistingReservationMinutes": 0,
+                "CandidateAssignments": [],
+            }
+
+        operation = {
+            "RouteSequence": 10,
+            "OperationID": "SO-1:10:CUT",
+            "SourceOperationID": "CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 300,
+        }
+        result = _requested_candidate(
+            order_id="SO-1:10",
+            requested_due_at=end,
+            capacity_assessment_cutoff_at=cutoff,
+            ccr_operations=[operation],
+            deadlines={"CUT": end},
+            source_states={
+                ("CCR-1", start, cutoff): state(start, cutoff, 240),
+                ("CCR-1", start, end): state(start, end, 480),
+            },
+            protection_threshold_percent=80.0,
+        )
+
+        assert result["Feasible"] is False
+        assert result["ReservationRequests"] == []
+        assert result["ConsideredWindowKeys"] == [
+            ("CCR-1", start.isoformat(), end.isoformat())
+        ]

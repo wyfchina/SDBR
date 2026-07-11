@@ -20,7 +20,11 @@ SHADOW_ALGORITHM = {
 
 
 def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
         raise ValueError("Shadow schedule datetimes must be timezone-aware.")
     return value.astimezone(timezone.utc)
 
@@ -374,3 +378,122 @@ def _build_window_states(
         seen_reservations.add(reservation_id)
         states[key]["ExistingReservationMinutes"] += int(minutes)
     return states
+
+
+def _route_deadlines(
+    *,
+    all_route_operations: list[dict[str, object]],
+    requested_due_at: datetime,
+    downstream_protection_minutes: int,
+) -> dict[str, datetime]:
+    cursor = requested_due_at - timedelta(
+        minutes=downstream_protection_minutes
+    )
+    deadlines: dict[str, datetime] = {}
+    for operation in reversed(all_route_operations):
+        source_id = str(operation["SourceOperationID"])
+        deadlines[source_id] = cursor
+        cursor -= timedelta(minutes=int(operation["DurationMinutes"]))
+    return deadlines
+
+
+def _requested_candidate(
+    *,
+    order_id: str,
+    requested_due_at: datetime,
+    capacity_assessment_cutoff_at: datetime,
+    ccr_operations: list[dict[str, object]],
+    deadlines: Mapping[str, datetime],
+    source_states: Mapping[
+        tuple[str, datetime, datetime], dict[str, object]
+    ],
+    protection_threshold_percent: float,
+) -> dict[str, object]:
+    states = deepcopy(dict(source_states))
+    assessments: list[dict[str, object]] = []
+    requests: list[dict[str, object]] = []
+    considered: set[tuple[str, str, str]] = set()
+    cutoff = _utc(capacity_assessment_cutoff_at)
+    for operation in reversed(ccr_operations):
+        resource_id = str(operation["ResourceID"])
+        deadline = deadlines[str(operation["SourceOperationID"])]
+        fitting: list[tuple[dict[str, object], dict[str, object]]] = []
+        for key, state in states.items():
+            if (
+                key[0] != resource_id
+                or key[2] <= cutoff
+                or key[1] >= deadline
+            ):
+                continue
+            considered.add((key[0], _utc_iso(key[1]), _utc_iso(key[2])))
+            metrics = _window_metrics(
+                state,
+                usable_start=max(key[1], cutoff),
+                deadline=deadline,
+                candidate_minutes=int(operation["DurationMinutes"]),
+            )
+            if metrics["Fits"]:
+                fitting.append((state, metrics))
+        selected = max(
+            fitting,
+            key=lambda item: (
+                item[0]["WindowStart"], item[0]["WindowEnd"]
+            ),
+            default=None,
+        )
+        if selected is None:
+            return {
+                "Feasible": False,
+                "PromiseAt": _utc_iso(requested_due_at),
+                "WindowAssessments": [],
+                "ReservationRequests": [],
+                "ConsideredWindowKeys": sorted(considered),
+            }
+        state, metrics = selected
+        latest = _parse_aware(
+            metrics["LatestAllowedCompletionAt"],
+            "LatestAllowedCompletionAt",
+        )
+        _commit_candidate(
+            state,
+            minutes=int(operation["DurationMinutes"]),
+            latest_allowed_completion_at=latest,
+        )
+        assessments.append(
+            {
+                **metrics,
+                "RouteSequence": operation["RouteSequence"],
+                "OperationID": operation["OperationID"],
+                "ResourceID": resource_id,
+                "LoadStatus": classify_ccr_load(
+                    load_percent=float(metrics["LoadAfterPercent"]),
+                    protective_capacity_target_percent=(
+                        protection_threshold_percent
+                    ),
+                ),
+                "ThresholdExceeded": (
+                    float(metrics["LoadAfterPercent"])
+                    > protection_threshold_percent
+                ),
+            }
+        )
+        requests.append(
+            _reservation_request(
+                order_id=order_id,
+                operation=operation,
+                state=state,
+                operation_deadline=deadline,
+            )
+        )
+    return {
+        "Feasible": True,
+        "PromiseAt": _utc_iso(requested_due_at),
+        "WindowAssessments": sorted(
+            assessments, key=lambda row: int(row["RouteSequence"])
+        ),
+        "ReservationRequests": sorted(
+            requests,
+            key=lambda row: str(row["OperationID"]),
+        ),
+        "ConsideredWindowKeys": sorted(considered),
+    }

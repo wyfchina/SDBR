@@ -1891,6 +1891,57 @@ def _validate_persisted_evaluation_result_graph(
         recommendation_rows[recommendation_id]
         for recommendation_id in recommendation_ids
     ]
+    signature = evaluation["AuthoritySignature"]
+    expected_run_provenance = {
+        "EvaluationAt": signature["runtime_snapshot_at"],
+        "RuntimePlanningInputPackageID": signature["runtime_package_id"],
+        "RuntimePlanningInputPackageVersion": signature["runtime_package_version"],
+        "RuntimeSnapshotID": signature["runtime_snapshot_id"],
+        "OperatingModelConfigurationID": signature[
+            "operating_model_configuration_id"
+        ],
+        "OperatingModelFingerprint": signature["operating_model_fingerprint"],
+        "DDMRPConfigurationID": signature["ddmrp_configuration_id"],
+        "RelevantPlanningLedgerIdentity": signature[
+            "local_planning_ledger_identity"
+        ],
+        "RelevantPlanningLedgerFingerprint": signature[
+            "local_planning_ledger_fingerprint"
+        ],
+    }
+    if any(
+        evaluation[field] != expected
+        for field, expected in expected_run_provenance.items()
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation run provenance differs."
+        )
+
+    expected_gates = sorted(
+        (
+            {
+                "Code": issue["Code"],
+                "Message": issue["Message"],
+                "BlocksOperationalAction": issue["BlocksOperationalAction"],
+            }
+            for issue in evaluation["Issues"]
+        ),
+        key=lambda gate: gate["Code"],
+    )
+    for row in rows_by_id.values():
+        if any((
+            row["EvaluationID"] != evaluation_id,
+            row["EvaluationAt"] != evaluation["EvaluationAt"],
+            row["AuthoritySignatureFingerprint"]
+            != evaluation["AuthoritySignatureFingerprint"],
+            row["OperationalActionAllowed"]
+            != evaluation["OperationalActionAllowed"],
+            row["GateCodes"] != expected_gates,
+        )):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP evaluation row back-reference or provenance differs."
+            )
+
     referenced_logical_ids = sorted({
         str(recommendation["LogicalReplenishmentID"])
         for recommendation in result_recommendations
@@ -1900,14 +1951,23 @@ def _validate_persisted_evaluation_result_graph(
             "DDMRP evaluation recommendation chain membership differs."
         )
     for logical_id in created_ids:
-        if chain_rows[logical_id]["OpenedByEvaluationID"] != evaluation_id:
+        chain = chain_rows[logical_id]
+        if any((
+            chain["OpenedByEvaluationID"] != evaluation_id,
+            chain["OpenedAt"] != evaluation["EvaluationAt"],
+            chain["TraceID"] != logical_id,
+        )):
             raise DdmrpReplenishmentConflict(
-                "DDMRP created chain does not belong to evaluation."
+                "DDMRP created chain back-reference or provenance differs."
             )
     for logical_id in reused_ids:
-        if chain_rows[logical_id]["OpenedByEvaluationID"] == evaluation_id:
+        chain = chain_rows[logical_id]
+        if (
+            chain["OpenedByEvaluationID"] == evaluation_id
+            or chain["TraceID"] != logical_id
+        ):
             raise DdmrpReplenishmentConflict(
-                "DDMRP reused chain was opened by current evaluation."
+                "DDMRP reused chain partition or trace differs."
             )
 
     for recommendation in result_recommendations:
@@ -1929,6 +1989,32 @@ def _validate_persisted_evaluation_result_graph(
             raise DdmrpReplenishmentConflict(
                 "DDMRP recommendation item/location graph differs."
             )
+        if any((
+            recommendation["EvaluationID"] != evaluation_id,
+            recommendation["EvaluationRowID"] != row["EvaluationRowID"],
+            recommendation["PlanningStatus"] != row["PlanningStatus"],
+            recommendation["ExecutionStatus"] != row["ExecutionStatus"],
+            recommendation["SuggestedReplenishmentQty"]
+            != row["SuggestedReplenishmentQty"],
+            recommendation["StandardTargetReceiptAt"]
+            != row["StandardTargetReceiptAt"],
+            recommendation["GateCodes"] != row["GateCodes"],
+            recommendation["CreatedAt"] != evaluation["RecordedAt"],
+            recommendation["CreatedBy"] != evaluation["RecordedBy"],
+            recommendation["AuthoritySignature"]
+            != evaluation["AuthoritySignature"],
+            recommendation["AuthoritySignatureFingerprint"]
+            != evaluation["AuthoritySignatureFingerprint"],
+            recommendation["RelevantPlanningLedgerIdentity"]
+            != evaluation["RelevantPlanningLedgerIdentity"],
+            recommendation["RelevantPlanningLedgerFingerprint"]
+            != evaluation["RelevantPlanningLedgerFingerprint"],
+            recommendation["TraceID"]
+            != recommendation["LogicalReplenishmentID"],
+        )):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation back-reference or provenance differs."
+            )
     for row in rows_by_id.values():
         recommendation_id = row["RecommendationID"]
         if recommendation_id is not None and recommendation_id not in recommendation_ids:
@@ -1940,10 +2026,42 @@ def _validate_persisted_evaluation_result_graph(
         event for event in events if str(event["EventID"]) in result_event_ids
     ]
     request_id = result["EvaluationRequestID"]
-    if any(event["CausationID"] != request_id for event in selected_events):
-        raise DdmrpReplenishmentConflict(
-            "DDMRP evaluation event causation differs."
-        )
+    for event in selected_events:
+        logical_id = str(event["LogicalReplenishmentID"])
+        if any((
+            event["EvaluationID"] != evaluation_id,
+            logical_id not in logical_ids,
+            event["CausationID"] != request_id,
+            event["CorrelationID"] != evaluation_id,
+            event["IdempotencyKey"] != event["EventID"],
+            event["TraceID"] != logical_id,
+            event["OccurredAt"] != evaluation["RecordedAt"],
+            event["ActorID"] != evaluation["RecordedBy"],
+        )):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP evaluation event back-reference or provenance differs."
+            )
+        if (
+            event["EventType"] == "ReplenishmentChainOpened"
+            and event["AggregateID"] not in created_ids
+        ):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP chain creation event membership differs."
+            )
+        if (
+            event["EventType"] == "RecommendationVersionCreated"
+            and event["RecommendationID"] not in recommendation_ids
+        ):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation creation event membership differs."
+            )
+        if (
+            event["EventType"] == "RecommendationSuperseded"
+            and event["RelatedRecommendationID"] not in recommendation_ids
+        ):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation successor event membership differs."
+            )
     for issue in evaluation["Issues"]:
         if issue["EvaluationID"] != evaluation_id:
             raise DdmrpReplenishmentConflict(

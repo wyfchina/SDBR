@@ -762,6 +762,94 @@ def test_be_ddmrp_007_event_or_child_drift_fails_closed() -> None:
 
 
 @pytest.mark.parametrize(
+    ("target", "field", "value"),
+    (
+        ("event", "CorrelationID", "DDE-unrelated"),
+        ("event", "CausationID", "REQ-unrelated"),
+        ("event", "IdempotencyKey", "DRE-unrelated"),
+        ("event", "TraceID", "DRL-unrelated"),
+        ("event", "OccurredAt", "2026-07-12T01:00:00+00:00"),
+        ("event", "ActorID", "planner-unrelated"),
+        ("run", "RuntimePlanningInputPackageVersion", "unrelated-version"),
+        ("run", "RelevantPlanningLedgerIdentity", "DPL-unrelated"),
+        ("row", "EvaluationAt", "2026-07-12T01:00:00+00:00"),
+        ("row", "AuthoritySignatureFingerprint", "sha256:unrelated"),
+        ("recommendation", "CreatedAt", "2026-07-12T01:00:00+00:00"),
+        ("recommendation", "CreatedBy", "planner-unrelated"),
+        ("recommendation", "RelevantPlanningLedgerIdentity", "DPL-unrelated"),
+        ("recommendation", "RelevantPlanningLedgerFingerprint", "sha256:unrelated"),
+        ("recommendation", "TraceID", "DRL-unrelated"),
+        ("chain", "OpenedAt", "2026-07-12T01:00:00+00:00"),
+        ("chain", "TraceID", "DRL-unrelated"),
+        ("recommendation-parent", "EvaluationRowID", None),
+    ),
+)
+def test_be_ddmrp_007_replay_rejects_re_fingerprinted_back_reference_corruption(
+    target: str,
+    field: str,
+    value: object,
+) -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, apply_staged_ddmrp_evaluation,
+        canonical_fingerprint, lookup_ddmrp_evaluation_request_result,
+        stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=write_set, **ledgers), **ledgers
+    )
+
+    result = ledgers["request_results"][write_set.evaluation_request_id]
+    if target == "event":
+        record = next(
+            event for event in ledgers["events"]
+            if event["EventID"] in result["EventIDs"]
+        )
+    elif target == "run":
+        record = ledgers["evaluation_runs"][result["EvaluationID"]]
+    elif target == "row":
+        record = ledgers["evaluation_rows"][result["EvaluationRowIDs"][0]]
+    elif target == "chain":
+        record = ledgers["chains"][result["CreatedLogicalReplenishmentIDs"][0]]
+    else:
+        record = ledgers["recommendations"][result["RecommendationIDs"][0]]
+        if target == "recommendation-parent":
+            value = next(
+                row_id for row_id in result["EvaluationRowIDs"]
+                if row_id != record["EvaluationRowID"]
+            )
+    record[field] = value
+
+    fingerprint_fields = {
+        "run": "EvaluationFingerprint",
+        "row": "EvaluationRowFingerprint",
+        "chain": "ChainFingerprint",
+        "recommendation": "RecommendationFingerprint",
+        "recommendation-parent": "RecommendationFingerprint",
+    }
+    fingerprint_field = fingerprint_fields.get(target)
+    if fingerprint_field is not None:
+        record[fingerprint_field] = canonical_fingerprint({
+            key: item for key, item in record.items() if key != fingerprint_field
+        })
+    _recompute_persisted_evaluation_fingerprints(ledgers, write_set)
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        lookup_ddmrp_evaluation_request_result(
+            evaluation_request_id=write_set.evaluation_request_id,
+            request_fingerprint=write_set.request_fingerprint,
+            request_results=ledgers["request_results"],
+            evaluation_runs=ledgers["evaluation_runs"],
+            evaluation_rows=ledgers["evaluation_rows"],
+            chains=ledgers["chains"],
+            recommendations=ledgers["recommendations"],
+            events=tuple(ledgers["events"]),
+        )
+
+
+@pytest.mark.parametrize(
     "changes",
     (
         {"ItemID": "ITEM-SCOPED"},

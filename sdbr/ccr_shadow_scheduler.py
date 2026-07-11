@@ -267,3 +267,110 @@ def _reservation_request(
         "ReservedMinutes": int(operation["DurationMinutes"]),
         "LatestAllowedCompletionAt": _utc_iso(latest),
     }
+
+
+def _parse_aware(value: object, field: str) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(f"{field} must be an aware ISO datetime.") from error
+    else:
+        raise ValueError(f"{field} must be an aware ISO datetime.")
+    return _utc(parsed)
+
+
+def _build_window_states(
+    *,
+    resources: list[Resource],
+    capacity_buckets: list[CapacityBucket],
+    ccr_resource_ids: set[str],
+    gantt_rows: list[dict[str, object]],
+    active_capacity_reservations: list[dict[str, object]],
+) -> dict[tuple[str, datetime, datetime], dict[str, object]]:
+    resources_by_id = _unique_resources(resources)
+    states: dict[tuple[str, datetime, datetime], dict[str, object]] = {}
+    for bucket in capacity_buckets:
+        if bucket.resource_id not in ccr_resource_ids:
+            continue
+        start = _utc(bucket.bucket_start)
+        end = _utc(bucket.bucket_end)
+        key = (bucket.resource_id, start, end)
+        resource = resources_by_id.get(bucket.resource_id)
+        if (
+            resource is None
+            or end <= start
+            or bucket.capacity_minutes <= 0
+            or key in states
+        ):
+            raise ValueError("CCR capacity buckets are malformed or duplicated.")
+        states[key] = {
+            "ResourceID": bucket.resource_id,
+            "WindowStart": start,
+            "WindowEnd": end,
+            "CapacityMinutes": bucket.capacity_minutes,
+            "CapacityUnits": resource.capacity_units,
+            "ProcessingIntervals": [],
+            "ScheduledFullMinutes": 0,
+            "ExistingReservationMinutes": 0,
+            "CandidateAssignments": [],
+        }
+    seen_bars: set[tuple[object, ...]] = set()
+    for resource_row in gantt_rows:
+        resource_id = str(resource_row.get("ResourceID") or "")
+        if resource_id not in ccr_resource_ids:
+            continue
+        bars = resource_row.get("Bars")
+        if not isinstance(bars, list):
+            raise ValueError("Relevant Gantt row Bars must be a list.")
+        for bar in bars:
+            if not isinstance(bar, Mapping):
+                raise ValueError("Relevant Gantt bars must be objects.")
+            if bar.get("BarType") not in {None, "Processing"}:
+                continue
+            start = _parse_aware(bar.get("Start"), "Gantt Start")
+            end = _parse_aware(bar.get("End"), "Gantt End")
+            identity = (
+                resource_id,
+                bar.get("OrderID"),
+                bar.get("OperationID"),
+                start,
+                end,
+            )
+            if end <= start or identity in seen_bars:
+                raise ValueError("Relevant processing bars are malformed or duplicated.")
+            seen_bars.add(identity)
+            for key, state in states.items():
+                if key[0] != resource_id or end <= key[1] or start >= key[2]:
+                    continue
+                state["ProcessingIntervals"].append((start, end))
+                state["ScheduledFullMinutes"] += _overlap_minutes(
+                    [(start, end)], key[1], key[2]
+                )
+    seen_reservations: set[str] = set()
+    for row in active_capacity_reservations:
+        if row.get("Status") not in ACTIVE_PLANNING_STATUSES:
+            continue
+        resource_id = str(row.get("ResourceID") or "")
+        start = _parse_aware(row.get("WindowStartAt"), "WindowStartAt")
+        end = _parse_aware(row.get("WindowEndAt"), "WindowEndAt")
+        key = (resource_id, start, end)
+        if key not in states:
+            continue
+        reservation_id = str(row.get("CapacityReservationID") or "").strip()
+        latest = _parse_aware(
+            row.get("LatestAllowedCompletionAt"),
+            "LatestAllowedCompletionAt",
+        )
+        minutes = _positive_real(row.get("ReservedMinutes"), "reserved minutes")
+        if (
+            not reservation_id
+            or reservation_id in seen_reservations
+            or not start < latest <= end
+        ):
+            raise ValueError("Relevant capacity reservations are malformed or duplicated.")
+        seen_reservations.add(reservation_id)
+        states[key]["ExistingReservationMinutes"] += int(minutes)
+    return states

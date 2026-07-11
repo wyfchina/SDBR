@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from sdbr.ccr_shadow_scheduler import (
+    _build_window_states,
     _commit_candidate,
     _extract_route_operations,
     _reservation_request,
@@ -12,7 +13,7 @@ from sdbr.ccr_shadow_scheduler import (
 from sdbr.planner_workbench import Operation, Resource, Routing
 from sdbr.planning_commitments import create_demand_commitment
 from sdbr.planning_reservations import prepare_reservation_confirmation
-from sdbr.scheduling_solver import SetupTransition
+from sdbr.scheduling_solver import CapacityBucket, SetupTransition
 
 
 UTC = timezone.utc
@@ -236,3 +237,124 @@ class TestCcrShadowCapacityParity:
         )
         assert request["LatestAllowedCompletionAt"] == request["WindowEndAt"]
         assert len(write_set.capacity_reservations) == 1
+
+    @staticmethod
+    def _window_evidence():
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        later_end = datetime(2026, 7, 20, 20, tzinfo=UTC)
+        resources = [
+            Resource("CCR-A", "CCR A", True, {}),
+            Resource("CCR-B", "CCR B", True, {}, capacity_units=2),
+        ]
+        buckets = [
+            CapacityBucket("CCR-A", start, end, 480),
+            CapacityBucket("CCR-B", start, end, 480),
+            CapacityBucket("CCR-B", end, later_end, 240),
+        ]
+        bars = [
+            {
+                "OrderID": "SO-OLD",
+                "OperationID": "CUT-1",
+                "BarType": "Processing",
+                "Start": (start + timedelta(hours=1)).isoformat(),
+                "End": (start + timedelta(hours=2)).isoformat(),
+            },
+            {
+                "OrderID": "SO-LATER",
+                "OperationID": "CUT-2",
+                "BarType": "Processing",
+                "Start": (end + timedelta(hours=1)).isoformat(),
+                "End": (end + timedelta(hours=2)).isoformat(),
+            },
+        ]
+        reservations = [
+            {
+                "CapacityReservationID": "RES-EXACT",
+                "Status": "ActivePlanReservation",
+                "ResourceID": "CCR-B",
+                "WindowStartAt": start.isoformat(),
+                "WindowEndAt": end.isoformat(),
+                "LatestAllowedCompletionAt": end.isoformat(),
+                "ReservedMinutes": 30,
+            },
+            {
+                "CapacityReservationID": "RES-LATER",
+                "Status": "LinkedToFormalOrder",
+                "ResourceID": "CCR-B",
+                "WindowStartAt": end.isoformat(),
+                "WindowEndAt": later_end.isoformat(),
+                "LatestAllowedCompletionAt": later_end.isoformat(),
+                "ReservedMinutes": 40,
+            },
+            {
+                "CapacityReservationID": "RES-INACTIVE",
+                "Status": "Released",
+                "ResourceID": "CCR-B",
+                "ReservedMinutes": 999,
+            },
+        ]
+        return start, end, later_end, resources, buckets, bars, reservations
+
+    def test_build_window_states_scopes_evidence_to_exact_active_window(self):
+        start, end, later_end, resources, buckets, bars, reservations = (
+            self._window_evidence()
+        )
+        states = _build_window_states(
+            resources=resources,
+            capacity_buckets=buckets,
+            ccr_resource_ids={"CCR-A", "CCR-B"},
+            gantt_rows=[
+                {"ResourceID": "CCR-B", "Bars": bars},
+                {"ResourceID": "UNRELATED", "Bars": "malformed"},
+            ],
+            active_capacity_reservations=reservations,
+        )
+
+        assert states[("CCR-A", start, end)]["ScheduledFullMinutes"] == 0
+        assert states[("CCR-B", start, end)]["ScheduledFullMinutes"] == 60
+        assert states[("CCR-B", start, end)]["ExistingReservationMinutes"] == 30
+        assert states[("CCR-B", end, later_end)]["ScheduledFullMinutes"] == 60
+        assert states[("CCR-B", end, later_end)]["ExistingReservationMinutes"] == 40
+
+    def test_build_window_states_rejects_malformed_matching_row(self):
+        start, end, _, resources, buckets, _, _ = self._window_evidence()
+        malformed = {
+            "CapacityReservationID": "RES-BAD",
+            "Status": "ActivePlanReservation",
+            "ResourceID": "CCR-B",
+            "WindowStartAt": start.isoformat(),
+            "WindowEndAt": end.isoformat(),
+            "LatestAllowedCompletionAt": start.isoformat(),
+            "ReservedMinutes": 10,
+        }
+        with pytest.raises(ValueError, match="malformed or duplicated"):
+            _build_window_states(
+                resources=resources,
+                capacity_buckets=buckets,
+                ccr_resource_ids={"CCR-A", "CCR-B"},
+                gantt_rows=[],
+                active_capacity_reservations=[malformed],
+            )
+
+    @pytest.mark.parametrize("duplicate_kind", ["bucket", "bar", "reservation"])
+    def test_build_window_states_rejects_duplicate_evidence(self, duplicate_kind):
+        _, _, _, resources, buckets, bars, reservations = self._window_evidence()
+        gantt_rows = [{"ResourceID": "CCR-B", "Bars": bars}]
+        if duplicate_kind == "bucket":
+            buckets.append(buckets[1])
+        elif duplicate_kind == "bar":
+            bars.append(dict(bars[0]))
+        else:
+            duplicate = dict(reservations[1])
+            duplicate["CapacityReservationID"] = "RES-EXACT"
+            reservations.append(duplicate)
+
+        with pytest.raises(ValueError, match="malformed or duplicated"):
+            _build_window_states(
+                resources=resources,
+                capacity_buckets=buckets,
+                ccr_resource_ids={"CCR-A", "CCR-B"},
+                gantt_rows=gantt_rows,
+                active_capacity_reservations=reservations,
+            )

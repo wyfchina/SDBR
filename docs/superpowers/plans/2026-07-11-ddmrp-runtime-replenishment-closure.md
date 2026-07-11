@@ -2751,6 +2751,72 @@ def atomic_replayable_update(
 
 The replay callable may perform only A5 persisted-result lookup/graph validation. On duplicate there is no save, revision increment, clock call, freshness call, or mutation. On an unprocessed action revision is checked before `mutation`, and any `BaseException`, including save failure, restores the complete state.
 
+`SQLiteWorkbenchStateStore` must override that method just as it already overrides `atomic_update`; inheriting the in-memory implementation is forbidden. The override is exact:
+
+```python
+def atomic_replayable_update(
+    self,
+    *,
+    replay_lookup: Callable[[], MutationResult | None],
+    mutation: Callable[[], MutationResult],
+    expected_revision: int | None = None,
+) -> tuple[MutationResult, StateStoreSaveOutcome | None, bool]:
+    with self._request_write_lock:
+        pre_transaction_snapshot = self.snapshot_state()
+        authoritative_snapshot: dict[str, object] | None = None
+        current_revision = self._revision
+        with self._lock:
+            connection = sqlite3.connect(self.database_path)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                payloads, metadata = self._read_connection_state(connection)
+                self._replace_loaded_state(payloads, metadata)
+                authoritative_snapshot = self.snapshot_state()
+                current_revision = self._revision
+
+                replayed = replay_lookup()
+                if replayed is not None:
+                    connection.commit()
+                    return replayed, None, True
+
+                if (
+                    expected_revision is not None
+                    and expected_revision != current_revision
+                ):
+                    raise StateStoreRevisionConflict(
+                        expected_revision=expected_revision,
+                        current_revision=current_revision,
+                    )
+
+                result = mutation()
+                saved_at = datetime.now(timezone.utc).isoformat()
+                next_revision = current_revision + 1
+                self._write_connection_state(
+                    connection,
+                    saved_at=saved_at,
+                    next_revision=next_revision,
+                )
+                connection.commit()
+            except BaseException as error:
+                if isinstance(error, StateStoreManagedRequestRejected):
+                    error.capture_current_revision(current_revision)
+                connection.rollback()
+                self.restore_state(
+                    authoritative_snapshot or pre_transaction_snapshot
+                )
+                raise
+            finally:
+                connection.close()
+
+        outcome = self._committed_outcome(
+            saved_at=saved_at,
+            next_revision=next_revision,
+        )
+        return result, outcome, False
+```
+
+Thus the SQLite request lock and `BEGIN IMMEDIATE` cover authoritative payload/metadata reload, persisted replay lookup, `If-Match`, mutation, and the write. Exact replay commits the read transaction without calling `_write_connection_state` or `_committed_outcome`; changed request reuse raised by `replay_lookup` is based on the reloaded persisted result and occurs before stale revision comparison. Every exceptional path rolls back SQLite and restores the authoritative in-memory snapshot (or the pre-transaction snapshot if authoritative load itself failed).
+
 Add these exact RED/GREEN tests:
 
 ```text
@@ -2787,7 +2853,7 @@ class DdmrpRecommendationConfirmPayload(BaseModel):
 
 No action type, actor, confirmation time, target, BOM, capacity, or material override is accepted. Authentication supplies actor through `_effective_actor_id(request, "local-planner")` for request fingerprinting. Only an unprocessed action later reads advice from the accepted recommendation and captures time through `server_utc_now()`.
 
-Mark only this confirmation route as store-managed in `persist_successful_writes`, so generic middleware does not reject `If-Match` or save before route-level replay. The route must call A6P `atomic_replayable_update(...)`. Compute authenticated actor and this request fingerprint without reading current authority or capturing time:
+Mark only `POST /planner/workbench/ddmrp/recommendations/{recommendation_id}/confirm` as store-managed in `persist_successful_writes`, using an exact method plus full-path-shape predicate rather than a DDMRP prefix exemption. All neighboring DDMRP writes remain under generic middleware admission, `If-Match`, save, and rollback. The confirmation route must call `active_store.atomic_replayable_update(...)`; every success, duplicate, controlled 409, and revision-conflict return sets `request.state.store_managed_revision` from the returned outcome or store-boundary exception before middleware emits `X-Workbench-Revision`. Compute authenticated actor and this request fingerprint without reading current authority or capturing time:
 
 ```python
 request_fingerprint = canonical_fingerprint(
@@ -2811,6 +2877,23 @@ return lookup_ddmrp_confirmation_request_result(
 ```
 
 If an immutable result exists, changed request reuse returns 409; exact graph validation returns `Duplicate` before `If-Match`, current recommendation/authority lookup, `server_utc_now()`, write-set build, or freshness comparison. The duplicate branch performs no save and returns the current revision header. Only when lookup returns `None` may `atomic_replayable_update` validate `If-Match` and invoke `mutation`.
+
+The route invocation is exactly:
+
+```python
+result, outcome, replayed = active_store.atomic_replayable_update(
+    replay_lookup=replay_lookup,
+    mutation=mutation,
+    expected_revision=_client_revision_from_if_match(
+        request.headers.get("if-match")
+    ),
+)
+request.state.store_managed_revision = (
+    active_store.current_revision() if replayed else outcome.revision
+)
+```
+
+`outcome` is non-null when `replayed` is false. Catch `_StoreManagedRequestRejected` and `StateStoreRevisionConflict` outside this call, set `request.state.store_managed_revision = error.current_revision`, and return the existing structured 409 mapping. Middleware never performs a second save for this exact route and never exempts another method or path.
 
 The unprocessed `mutation` order is exact: (1) load the current immutable recommendation and require `AdviceType in {"Buy", "Make"}` plus `PendingReview`; (2) load current accepted runtime/config/advice/BOM/material/capacity and V2 local-ledger authority; (3) capture one server UTC time; (4) build current signature, feasibility, decision, exact confirmation result, and composite write set; (5) call `assert_ddmrp_confirmation_fresh`; (6) stage/apply all thirteen collections; (7) let `atomic_replayable_update` save. Any authority drift conflicts before mutation, and complete rollback covers staging/apply/save failure.
 
@@ -2853,6 +2936,8 @@ test_be_ddmrp_008_confirmation_api_viewer_worker_denied_planner_admin_allowed
 test_be_ddmrp_008_confirmation_api_public_demo_denied_without_mutation
 test_be_ddmrp_009_confirmation_api_make_returns_exact_child_ids
 test_be_ddmrp_009_confirmation_api_save_failure_restores_thirteen_ledgers
+test_be_ddmrp_008_confirmation_api_sqlite_two_store_stale_duplicate_precedes_if_match_without_revision_increase
+test_be_ddmrp_008_confirmation_api_sqlite_two_store_changed_reuse_returns_409_from_authoritative_result
 ```
 
 Use this exact selection before implementation, then repeat it with basetemp `pytest-ddmrp-confirmation-api-green` after implementation:
@@ -2868,12 +2953,16 @@ $tests = @(
   'tests/test_api.py::test_be_ddmrp_008_confirmation_api_viewer_worker_denied_planner_admin_allowed',
   'tests/test_api.py::test_be_ddmrp_008_confirmation_api_public_demo_denied_without_mutation',
   'tests/test_api.py::test_be_ddmrp_009_confirmation_api_make_returns_exact_child_ids',
-  'tests/test_api.py::test_be_ddmrp_009_confirmation_api_save_failure_restores_thirteen_ledgers'
+  'tests/test_api.py::test_be_ddmrp_009_confirmation_api_save_failure_restores_thirteen_ledgers',
+  'tests/test_api.py::test_be_ddmrp_008_confirmation_api_sqlite_two_store_stale_duplicate_precedes_if_match_without_revision_increase',
+  'tests/test_api.py::test_be_ddmrp_008_confirmation_api_sqlite_two_store_changed_reuse_returns_409_from_authoritative_result'
 )
 pytest @tests -q --basetemp .tmp/pytest-ddmrp-confirmation-api-red -p no:cacheprovider
 ```
 
-Expected RED: 10 selected, 0 passed, 10 failed. Expected GREEN: 10 selected, 10 passed. The first test sends the original `If-Match` again after the successful response is discarded and requires 200 `Duplicate`, identical decision/planning IDs, unchanged thirteen-ledger counts, and no revision increment. The second uses raising spies for authority, clock, build, and freshness. Changed reuse varies reason/actor/recommendation and requires 409 before those same spies. Record exact selected/pass counts and run the activation state-store/domain regression separately.
+Expected RED: 12 selected, 0 passed, 12 failed. Expected GREEN: 12 selected, 12 passed. The first test sends the original `If-Match` again after the successful response is discarded and requires 200 `Duplicate`, identical decision/planning IDs, unchanged thirteen-ledger counts, and no revision increment. The second uses raising spies for authority, clock, build, and freshness. Changed reuse varies reason/actor/recommendation and requires 409 before those same spies.
+
+The two SQLite tests each create `first_store` and `stale_store` from the same database before the first client confirms. The stale client then sends the original pre-commit `If-Match`: the exact-request case must return 200 `Duplicate` from the authoritative persisted result, preserve the committed revision and all thirteen persisted counts, and prove its mutation callback was not entered; the changed-`Reason` case must return structured 409 `ACTION_REQUEST_ID_REUSED` from that authoritative result before stale `If-Match`, with no write or revision increase. Both tests reconstruct a third store afterward to assert the database revision and graph are unchanged. Record exact selected/pass counts and run the activation state-store/domain regression separately. The existing exact-response test also asserts only the confirmation POST matches the store-managed middleware predicate and that an adjacent DDMRP write still uses generic persistence.
 
 Commit:
 

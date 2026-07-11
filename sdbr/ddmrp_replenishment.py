@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
-from typing import Iterable, Mapping
+from typing import Iterable, Literal, Mapping, MutableMapping, MutableSequence
 
 from sdbr.ddsop_contracts import canonical_operating_model_fingerprint
 
@@ -272,6 +272,18 @@ class DdmrpEvaluationWriteSet:
     recommendation_versions: tuple[dict[str, object], ...]
     events: tuple[dict[str, object], ...]
     request_result: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class DdmrpEvaluationStagedState:
+    evaluation_runs: dict[str, dict[str, object]]
+    evaluation_rows: dict[str, dict[str, object]]
+    chains: dict[str, dict[str, object]]
+    recommendations: dict[str, dict[str, object]]
+    events: tuple[dict[str, object], ...]
+    request_results: dict[str, dict[str, object]]
+    result_status: Literal["Created", "Duplicate"]
+    response_data: dict[str, object]
 
 
 RELEVANT_DEMAND_FIELDS = (
@@ -1089,6 +1101,217 @@ def prepare_ddmrp_evaluation(
     )
 
 
+def lookup_ddmrp_evaluation_request_result(
+    *,
+    evaluation_request_id: str,
+    request_fingerprint: str,
+    request_results: Mapping[str, Mapping[str, object]],
+    evaluation_runs: Mapping[str, Mapping[str, object]],
+    evaluation_rows: Mapping[str, Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+    recommendations: Mapping[str, Mapping[str, object]],
+    events: tuple[Mapping[str, object], ...],
+) -> dict[str, object] | None:
+    persisted = request_results.get(evaluation_request_id)
+    if persisted is None:
+        return None
+    if persisted.get("EvaluationRequestID") != evaluation_request_id:
+        raise DdmrpReplenishmentConflict(
+            "EVALUATION_REQUEST_RESULT_KEY_MISMATCH"
+        )
+    _require_exact_fields(
+        persisted,
+        REQUEST_RESULT_FIELDS,
+        context="DDMRP evaluation request result",
+    )
+    fingerprint_source = {
+        key: deepcopy(persisted[key])
+        for key in REQUEST_RESULT_FIELDS
+        if key != "RequestResultFingerprint"
+    }
+    if persisted["RequestResultFingerprint"] != canonical_fingerprint(
+        fingerprint_source
+    ):
+        raise DdmrpReplenishmentConflict("EVALUATION_REQUEST_RESULT_DRIFT")
+    if persisted["RequestFingerprint"] != request_fingerprint:
+        raise DdmrpReplenishmentConflict("EVALUATION_REQUEST_ID_REUSED")
+    _validate_persisted_evaluation_result_graph(
+        result=persisted,
+        evaluation_runs=evaluation_runs,
+        evaluation_rows=evaluation_rows,
+        chains=chains,
+        recommendations=recommendations,
+        events=events,
+    )
+    response = deepcopy(dict(persisted["ResponseData"]))
+    response["Status"] = "Duplicate"
+    return response
+
+
+def stage_ddmrp_evaluation(
+    *,
+    write_set: DdmrpEvaluationWriteSet,
+    evaluation_runs: Mapping[str, Mapping[str, object]],
+    evaluation_rows: Mapping[str, Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+    recommendations: Mapping[str, Mapping[str, object]],
+    events: Iterable[Mapping[str, object]],
+    request_results: Mapping[str, Mapping[str, object]],
+) -> DdmrpEvaluationStagedState:
+    _assert_unique_write_set_ids(write_set)
+    _assert_write_set_fingerprints(write_set)
+
+    staged_runs = deepcopy(dict(evaluation_runs))
+    staged_rows = deepcopy(dict(evaluation_rows))
+    staged_chains = deepcopy(dict(chains))
+    staged_recommendations = deepcopy(dict(recommendations))
+    staged_events = tuple(deepcopy(tuple(events)))
+    staged_results = deepcopy(dict(request_results))
+
+    replayed = lookup_ddmrp_evaluation_request_result(
+        evaluation_request_id=write_set.evaluation_request_id,
+        request_fingerprint=write_set.request_fingerprint,
+        request_results=staged_results,
+        evaluation_runs=staged_runs,
+        evaluation_rows=staged_rows,
+        chains=staged_chains,
+        recommendations=staged_recommendations,
+        events=staged_events,
+    )
+    if replayed is not None:
+        return DdmrpEvaluationStagedState(
+            evaluation_runs=staged_runs,
+            evaluation_rows=staged_rows,
+            chains=staged_chains,
+            recommendations=staged_recommendations,
+            events=staged_events,
+            request_results=staged_results,
+            result_status="Duplicate",
+            response_data=deepcopy(replayed),
+        )
+
+    target_ids = {
+        "evaluation": str(write_set.evaluation_run["EvaluationID"]),
+        "rows": {str(row["EvaluationRowID"]) for row in write_set.evaluation_rows},
+        "chains": {str(row["LogicalReplenishmentID"]) for row in write_set.chain_records},
+        "recommendations": {
+            str(row["RecommendationID"])
+            for row in write_set.recommendation_versions
+        },
+        "events": {str(row["EventID"]) for row in write_set.events},
+    }
+    existing_event_ids = {str(event.get("EventID")) for event in staged_events}
+    if (
+        target_ids["evaluation"] in staged_runs
+        or target_ids["rows"] & set(staged_rows)
+        or target_ids["chains"] & set(staged_chains)
+        or target_ids["recommendations"] & set(staged_recommendations)
+        or target_ids["events"] & existing_event_ids
+    ):
+        raise DdmrpReplenishmentConflict("ORPHAN_DDMRP_EVALUATION_CHILD")
+
+    reused_ids = set(write_set.request_result["ReusedLogicalReplenishmentIDs"])
+    created_ids = set(write_set.request_result["CreatedLogicalReplenishmentIDs"])
+    if reused_ids & target_ids["chains"] or created_ids != target_ids["chains"]:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP write set created/reused chain membership differs."
+        )
+    if not reused_ids <= set(staged_chains):
+        raise DdmrpReplenishmentConflict("DDMRP reused chain is missing.")
+
+    prospective_events = (*staged_events, *deepcopy(write_set.events))
+    _, existing_chain_statuses = _validate_existing_chains(
+        staged_chains, staged_events, {}
+    )
+    for logical_id in reused_ids:
+        if existing_chain_statuses[logical_id] not in CHAIN_ACTIVE_STATUSES:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP reused chain must be non-terminal."
+            )
+        if not any(
+            recommendation["LogicalReplenishmentID"] == logical_id
+            for recommendation in write_set.recommendation_versions
+        ):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP reused chain has no new recommendation."
+            )
+
+    staged_runs[target_ids["evaluation"]] = deepcopy(write_set.evaluation_run)
+    for row in write_set.evaluation_rows:
+        staged_rows[str(row["EvaluationRowID"])] = deepcopy(row)
+    for row in write_set.chain_records:
+        staged_chains[str(row["LogicalReplenishmentID"])] = deepcopy(row)
+    for row in write_set.recommendation_versions:
+        staged_recommendations[str(row["RecommendationID"])] = deepcopy(row)
+    staged_events = tuple(deepcopy(prospective_events))
+
+    _validate_existing_chains(staged_chains, staged_events, {})
+    _validate_existing_recommendations(
+        staged_recommendations, staged_events, staged_chains
+    )
+    _validate_event_references(
+        staged_events, staged_chains, staged_recommendations, {},
+        require_active_graph_references=False,
+    )
+    _validate_persisted_evaluation_result_graph(
+        result=write_set.request_result,
+        evaluation_runs=staged_runs,
+        evaluation_rows=staged_rows,
+        chains=staged_chains,
+        recommendations=staged_recommendations,
+        events=staged_events,
+    )
+    staged_results[write_set.evaluation_request_id] = deepcopy(
+        write_set.request_result
+    )
+    return DdmrpEvaluationStagedState(
+        evaluation_runs=staged_runs,
+        evaluation_rows=staged_rows,
+        chains=staged_chains,
+        recommendations=staged_recommendations,
+        events=staged_events,
+        request_results=staged_results,
+        result_status="Created",
+        response_data=deepcopy(dict(write_set.request_result["ResponseData"])),
+    )
+
+
+def apply_staged_ddmrp_evaluation(
+    *,
+    staged: DdmrpEvaluationStagedState,
+    evaluation_runs: MutableMapping[str, dict[str, object]],
+    evaluation_rows: MutableMapping[str, dict[str, object]],
+    chains: MutableMapping[str, dict[str, object]],
+    recommendations: MutableMapping[str, dict[str, object]],
+    events: MutableSequence[dict[str, object]],
+    request_results: MutableMapping[str, dict[str, object]],
+) -> tuple[Literal["Created", "Duplicate"], dict[str, object]]:
+    snapshots = (
+        deepcopy(dict(evaluation_runs)),
+        deepcopy(dict(evaluation_rows)),
+        deepcopy(dict(chains)),
+        deepcopy(dict(recommendations)),
+        deepcopy(list(events)),
+        deepcopy(dict(request_results)),
+    )
+    try:
+        _replace_mapping(evaluation_runs, staged.evaluation_runs)
+        _replace_mapping(evaluation_rows, staged.evaluation_rows)
+        _replace_mapping(chains, staged.chains)
+        _replace_mapping(recommendations, staged.recommendations)
+        _replace_sequence(events, staged.events)
+        _replace_mapping(request_results, staged.request_results)
+    except BaseException:
+        _replace_mapping(evaluation_runs, snapshots[0])
+        _replace_mapping(evaluation_rows, snapshots[1])
+        _replace_mapping(chains, snapshots[2])
+        _replace_mapping(recommendations, snapshots[3])
+        _replace_sequence(events, snapshots[4])
+        _replace_mapping(request_results, snapshots[5])
+        raise
+    return deepcopy((staged.result_status, staged.response_data))
+
+
 def _freeze_gates(gates: tuple[DdmrpGate, ...]) -> list[dict[str, object]]:
     by_code: dict[str, dict[str, object]] = {}
     for gate in gates:
@@ -1153,6 +1376,14 @@ def _validate_issue(issue: Mapping[str, object]) -> None:
     _require_exact_fields(issue, ISSUE_RECORD_FIELDS, context="DDMRP issue")
     if issue["Severity"] not in ISSUE_SEVERITIES:
         raise DdmrpReplenishmentConflict("Unsupported DDMRP issue severity.")
+    expected_id = canonical_stable_id("DRI", {
+        "EvaluationID": issue["EvaluationID"],
+        "Code": issue["Code"],
+        "ItemID": issue["ItemID"],
+        "LocationID": issue["LocationID"],
+    })
+    if issue["IssueID"] != expected_id:
+        raise DdmrpReplenishmentConflict("DDMRP issue canonical ID mismatch.")
     expected = canonical_fingerprint({
         key: value for key, value in issue.items() if key != "IssueFingerprint"
     })
@@ -1332,6 +1563,8 @@ def _validate_event_references(
     chains: Mapping[str, Mapping[str, object]],
     recommendations: Mapping[str, Mapping[str, object]],
     active_graphs: Mapping[str, Mapping[str, object]],
+    *,
+    require_active_graph_references: bool = True,
 ) -> None:
     seen_versions: set[tuple[object, object, object]] = set()
     for event in events:
@@ -1400,7 +1633,10 @@ def _validate_event_references(
             "RecommendationAdjustmentRequired", "ReplenishmentChainAdjustmentRequired"
         } and payload["AdjustmentRecommendationID"] not in recommendations:
             raise DdmrpReplenishmentConflict("Adjustment recommendation is missing.")
-        if event_type == "ReplenishmentChainActivated":
+        if (
+            event_type == "ReplenishmentChainActivated"
+            and require_active_graph_references
+        ):
             graph_id = payload["ActiveGraphID"]
             if graph_id not in active_graphs:
                 raise DdmrpReplenishmentConflict("Activated replenishment graph is missing.")
@@ -1470,6 +1706,490 @@ def _aggregate_events(
     )
 
 
+def _assert_unique_write_set_ids(write_set: DdmrpEvaluationWriteSet) -> None:
+    for records, field in (
+        (write_set.evaluation_rows, "EvaluationRowID"),
+        (write_set.chain_records, "LogicalReplenishmentID"),
+        (write_set.recommendation_versions, "RecommendationID"),
+        (write_set.events, "EventID"),
+    ):
+        identifiers = [str(record.get(field)) for record in records]
+        if len(identifiers) != len(set(identifiers)):
+            raise DdmrpReplenishmentConflict(
+                f"DDMRP write set contains duplicate {field} values."
+            )
+
+
+def _assert_write_set_fingerprints(write_set: DdmrpEvaluationWriteSet) -> None:
+    _validate_evaluation_run_contract(write_set.evaluation_run)
+    for row in write_set.evaluation_rows:
+        _validate_evaluation_row_contract(row)
+    for chain in write_set.chain_records:
+        _validate_chain_record_contract(chain)
+    for recommendation in write_set.recommendation_versions:
+        _validate_recommendation_record_contract(recommendation)
+    for event in write_set.events:
+        _validate_event_contract(event)
+    _validate_request_result(write_set.request_result)
+
+    evaluation_id = write_set.evaluation_run["EvaluationID"]
+    if (
+        write_set.evaluation_request_id
+        != write_set.request_result["EvaluationRequestID"]
+        or write_set.request_fingerprint
+        != write_set.request_result["RequestFingerprint"]
+        or evaluation_id != write_set.request_result["EvaluationID"]
+    ):
+        raise DdmrpReplenishmentConflict("DDMRP write set root identity differs.")
+    payload = _evaluation_payload(
+        evaluation_run=write_set.evaluation_run,
+        evaluation_rows=write_set.evaluation_rows,
+        chain_records=write_set.chain_records,
+        recommendations=write_set.recommendation_versions,
+        events=write_set.events,
+    )
+    payload_fingerprint = canonical_fingerprint(payload)
+    if (
+        write_set.payload_fingerprint != payload_fingerprint
+        or write_set.request_result["EvaluationPayloadFingerprint"]
+        != payload_fingerprint
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation payload fingerprint differs."
+        )
+
+
+def _validate_persisted_evaluation_result_graph(
+    *,
+    result: Mapping[str, object],
+    evaluation_runs: Mapping[str, Mapping[str, object]],
+    evaluation_rows: Mapping[str, Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+    recommendations: Mapping[str, Mapping[str, object]],
+    events: tuple[Mapping[str, object], ...],
+) -> None:
+    _validate_request_result(result)
+    expected_request_fingerprint = canonical_fingerprint({
+        "EvaluationRequestID": result["EvaluationRequestID"],
+        "RuntimePlanningInputPackageID": result["RuntimePlanningInputPackageID"],
+    })
+    if result["RequestFingerprint"] != expected_request_fingerprint:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation request fingerprint differs."
+        )
+    evaluation_id = str(result["EvaluationID"])
+    evaluation = evaluation_runs.get(evaluation_id)
+    if evaluation is None:
+        raise DdmrpReplenishmentConflict("DDMRP evaluation result is missing.")
+
+    for key, run in evaluation_runs.items():
+        if not isinstance(run, Mapping) or key != run.get("EvaluationID"):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP evaluation mapping identity mismatch."
+            )
+        _validate_evaluation_run_contract(run)
+    for key, row in evaluation_rows.items():
+        if not isinstance(row, Mapping) or key != row.get("EvaluationRowID"):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP evaluation row mapping identity mismatch."
+            )
+        _validate_evaluation_row_contract(row)
+    for recommendation in recommendations.values():
+        if not isinstance(recommendation, Mapping):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation must be a mapping."
+            )
+        _validate_recommendation_record_contract(recommendation)
+
+    chain_rows, _ = _validate_existing_chains(chains, events, {})
+    recommendation_rows, _ = _validate_existing_recommendations(
+        recommendations, events, chain_rows
+    )
+    _validate_event_references(
+        events, chain_rows, recommendation_rows, {},
+        require_active_graph_references=False,
+    )
+    event_ids: set[str] = set()
+    for event in events:
+        event_id = str(event["EventID"])
+        if event_id in event_ids:
+            raise DdmrpReplenishmentConflict("Duplicate DDMRP event ID.")
+        event_ids.add(event_id)
+
+    row_ids = _sorted_unique_ids(result["EvaluationRowIDs"], "EvaluationRowIDs")
+    logical_ids = _sorted_unique_ids(
+        result["LogicalReplenishmentIDs"], "LogicalReplenishmentIDs"
+    )
+    created_ids = _sorted_unique_ids(
+        result["CreatedLogicalReplenishmentIDs"],
+        "CreatedLogicalReplenishmentIDs",
+    )
+    reused_ids = _sorted_unique_ids(
+        result["ReusedLogicalReplenishmentIDs"],
+        "ReusedLogicalReplenishmentIDs",
+    )
+    recommendation_ids = _sorted_unique_ids(
+        result["RecommendationIDs"], "RecommendationIDs"
+    )
+    result_event_ids = _sorted_unique_ids(result["EventIDs"], "EventIDs")
+
+    actual_row_ids = sorted(
+        key for key, row in evaluation_rows.items()
+        if row["EvaluationID"] == evaluation_id
+    )
+    actual_created_ids = sorted(
+        key for key, chain in chain_rows.items()
+        if chain["OpenedByEvaluationID"] == evaluation_id
+    )
+    actual_recommendation_ids = sorted(
+        key for key, recommendation in recommendation_rows.items()
+        if recommendation["EvaluationID"] == evaluation_id
+    )
+    actual_event_ids = sorted(
+        str(event["EventID"])
+        for event in events
+        if event["EvaluationID"] == evaluation_id
+    )
+    if (
+        row_ids != actual_row_ids
+        or created_ids != actual_created_ids
+        or recommendation_ids != actual_recommendation_ids
+        or result_event_ids != actual_event_ids
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation request result child membership differs."
+        )
+    if set(created_ids) & set(reused_ids) or logical_ids != sorted(
+        (*created_ids, *reused_ids)
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation request result chain partition differs."
+        )
+    if any(logical_id not in chain_rows for logical_id in logical_ids):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation request result chain is missing."
+        )
+
+    rows_by_id = {row_id: evaluation_rows[row_id] for row_id in row_ids}
+    result_recommendations = [
+        recommendation_rows[recommendation_id]
+        for recommendation_id in recommendation_ids
+    ]
+    referenced_logical_ids = sorted({
+        str(recommendation["LogicalReplenishmentID"])
+        for recommendation in result_recommendations
+    })
+    if referenced_logical_ids != logical_ids:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation recommendation chain membership differs."
+        )
+    for logical_id in created_ids:
+        if chain_rows[logical_id]["OpenedByEvaluationID"] != evaluation_id:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP created chain does not belong to evaluation."
+            )
+    for logical_id in reused_ids:
+        if chain_rows[logical_id]["OpenedByEvaluationID"] == evaluation_id:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP reused chain was opened by current evaluation."
+            )
+
+    for recommendation in result_recommendations:
+        row_id = str(recommendation["EvaluationRowID"])
+        row = rows_by_id.get(row_id)
+        if row is None or row["RecommendationID"] != recommendation["RecommendationID"]:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation evaluation row reference differs."
+            )
+        if (
+            row["ItemID"] != recommendation["ItemID"]
+            or row["LocationID"] != recommendation["LocationID"]
+            or row["Uom"] != recommendation["Uom"]
+            or chain_rows[str(recommendation["LogicalReplenishmentID"])]["ItemID"]
+            != recommendation["ItemID"]
+            or chain_rows[str(recommendation["LogicalReplenishmentID"])]["LocationID"]
+            != recommendation["LocationID"]
+        ):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP recommendation item/location graph differs."
+            )
+    for row in rows_by_id.values():
+        recommendation_id = row["RecommendationID"]
+        if recommendation_id is not None and recommendation_id not in recommendation_ids:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP evaluation row recommendation is orphaned."
+            )
+
+    selected_events = [
+        event for event in events if str(event["EventID"]) in result_event_ids
+    ]
+    request_id = result["EvaluationRequestID"]
+    if any(event["CausationID"] != request_id for event in selected_events):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation event causation differs."
+        )
+    for issue in evaluation["Issues"]:
+        if issue["EvaluationID"] != evaluation_id:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP issue evaluation reference differs."
+            )
+    expected_summary = {
+        "RedCount": sum(row["PlanningStatus"] == "Red" for row in rows_by_id.values()),
+        "YellowCount": sum(
+            row["PlanningStatus"] == "Yellow" for row in rows_by_id.values()
+        ),
+        "GreenCount": sum(
+            row["PlanningStatus"] == "Green" for row in rows_by_id.values()
+        ),
+        "AboveGreenCount": sum(
+            row["PlanningStatus"] == "AboveGreen" for row in rows_by_id.values()
+        ),
+        "BlockedRecommendationCount": sum(
+            recommendation["InitialStatus"] == "Blocked"
+            for recommendation in result_recommendations
+        ),
+        "AdjustmentRequiredCount": sum(
+            recommendation["InitialStatus"] == "AdjustmentRequired"
+            for recommendation in result_recommendations
+        ),
+        "IssueCount": len(evaluation["Issues"]),
+    }
+    if dict(evaluation["Summary"]) != expected_summary:
+        raise DdmrpReplenishmentConflict("DDMRP evaluation summary differs.")
+
+    payload = _evaluation_payload(
+        evaluation_run=evaluation,
+        evaluation_rows=tuple(rows_by_id.values()),
+        chain_records=tuple(chain_rows[logical_id] for logical_id in created_ids),
+        recommendations=tuple(result_recommendations),
+        events=tuple(selected_events),
+    )
+    if result["EvaluationPayloadFingerprint"] != canonical_fingerprint(payload):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP persisted evaluation payload fingerprint differs."
+        )
+
+    response = result["ResponseData"]
+    expected_response = {
+        "Status": "Created",
+        "EvaluationID": evaluation_id,
+        "RecommendationIDs": recommendation_ids,
+        "OperationalActionAllowed": False,
+    }
+    if dict(response) != expected_response:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP persisted evaluation response differs."
+        )
+    if (
+        evaluation["EvaluationRequestID"] != request_id
+        or evaluation["RuntimePlanningInputPackageID"]
+        != result["RuntimePlanningInputPackageID"]
+        or evaluation["RecordedAt"] != result["RecordedAt"]
+        or evaluation["RecordedBy"] != result["RecordedBy"]
+        or evaluation["OperationalActionAllowed"] is not False
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP persisted evaluation result root differs."
+        )
+
+
+def _validate_evaluation_run_contract(run: Mapping[str, object]) -> None:
+    _require_exact_fields(run, EVALUATION_RUN_FIELDS, context="DDMRP evaluation")
+    summary = run["Summary"]
+    if not isinstance(summary, Mapping):
+        raise DdmrpReplenishmentConflict("DDMRP evaluation summary must be a mapping.")
+    _require_exact_fields(summary, EVALUATION_SUMMARY_FIELDS, context="DDMRP summary")
+    issues = run["Issues"]
+    if not isinstance(issues, list):
+        raise DdmrpReplenishmentConflict("DDMRP evaluation issues must be a list.")
+    for issue in issues:
+        if not isinstance(issue, Mapping):
+            raise DdmrpReplenishmentConflict("DDMRP issue must be a mapping.")
+        _validate_issue(issue)
+    _validate_authority_signature_contract(
+        run["AuthoritySignature"], run["AuthoritySignatureFingerprint"]
+    )
+    expected_id = canonical_stable_id("DDE", {
+        "AuthoritySignatureFingerprint": run["AuthoritySignatureFingerprint"],
+        "EvaluationAt": run["EvaluationAt"],
+    })
+    if run["EvaluationID"] != expected_id:
+        raise DdmrpReplenishmentConflict("DDMRP evaluation canonical ID mismatch.")
+    if run["EvaluationFingerprint"] != canonical_fingerprint({
+        key: value for key, value in run.items() if key != "EvaluationFingerprint"
+    }):
+        raise DdmrpReplenishmentConflict("DDMRP evaluation fingerprint mismatch.")
+
+
+def _validate_evaluation_row_contract(row: Mapping[str, object]) -> None:
+    _require_exact_fields(row, EVALUATION_ROW_FIELDS, context="DDMRP evaluation row")
+    for values, fields, context in (
+        (row["DemandComponents"], DEMAND_COMPONENT_FIELDS, "demand component"),
+        (row["SupplyComponents"], SUPPLY_COMPONENT_FIELDS, "supply component"),
+        (row["GateCodes"], GATE_FIELDS, "gate"),
+    ):
+        if not isinstance(values, list):
+            raise DdmrpReplenishmentConflict(f"DDMRP {context}s must be a list.")
+        for value in values:
+            if not isinstance(value, Mapping):
+                raise DdmrpReplenishmentConflict(f"DDMRP {context} must be a mapping.")
+            _require_exact_fields(value, fields, context=f"DDMRP {context}")
+            canonical_fingerprint(dict(value))
+    expected_row_key = _canonical_json({
+        "ItemID": row["ItemID"], "LocationID": row["LocationID"]
+    })
+    expected_id = canonical_stable_id("DER", {
+        "EvaluationID": row["EvaluationID"], "RowKey": expected_row_key
+    })
+    if row["RowKey"] != expected_row_key or row["EvaluationRowID"] != expected_id:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation row canonical identity mismatch."
+        )
+    if row["EvaluationRowFingerprint"] != canonical_fingerprint({
+        key: value for key, value in row.items()
+        if key != "EvaluationRowFingerprint"
+    }):
+        raise DdmrpReplenishmentConflict("DDMRP evaluation row fingerprint mismatch.")
+
+
+def _validate_chain_record_contract(chain: Mapping[str, object]) -> None:
+    _require_exact_fields(chain, REPLENISHMENT_CHAIN_FIELDS, context="DDMRP chain")
+    identity = {
+        "ItemID": chain["ItemID"],
+        "LocationID": chain["LocationID"],
+        "CycleNumber": chain["CycleNumber"],
+    }
+    if (
+        chain["LogicalReplenishmentID"] != canonical_stable_id("DRL", identity)
+        or chain["IdentityFingerprint"] != canonical_fingerprint(identity)
+        or chain["ChainFingerprint"] != canonical_fingerprint({
+            key: value for key, value in chain.items() if key != "ChainFingerprint"
+        })
+    ):
+        raise DdmrpReplenishmentConflict("DDMRP chain immutable identity differs.")
+
+
+def _validate_recommendation_record_contract(
+    recommendation: Mapping[str, object],
+) -> None:
+    _require_exact_fields(
+        recommendation, RECOMMENDATION_FIELDS, context="DDMRP recommendation"
+    )
+    version = recommendation["RecommendationVersion"]
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        raise DdmrpReplenishmentConflict(
+            "Recommendation version must be positive integer."
+        )
+    identity = {
+        "LogicalReplenishmentID": recommendation["LogicalReplenishmentID"],
+        "RecommendationVersion": version,
+    }
+    _validate_authority_signature_contract(
+        recommendation["AuthoritySignature"],
+        recommendation["AuthoritySignatureFingerprint"],
+    )
+    gates = recommendation["GateCodes"]
+    if not isinstance(gates, list):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP recommendation gates must be a list."
+        )
+    for gate in gates:
+        if not isinstance(gate, Mapping):
+            raise DdmrpReplenishmentConflict("DDMRP gate must be a mapping.")
+        _require_exact_fields(gate, GATE_FIELDS, context="DDMRP gate")
+        canonical_fingerprint(dict(gate))
+    if (
+        recommendation["RecommendationID"] != canonical_stable_id("DDR", identity)
+        or recommendation["RecommendationFingerprint"] != canonical_fingerprint({
+            key: value for key, value in recommendation.items()
+            if key != "RecommendationFingerprint"
+        })
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP recommendation immutable identity differs."
+        )
+
+
+def _validate_authority_signature_contract(
+    signature: object,
+    expected_fingerprint: object,
+) -> None:
+    if not isinstance(signature, Mapping):
+        raise DdmrpReplenishmentConflict("DDMRP authority signature must be a mapping.")
+    signature_fields = tuple(DdmrpAuthoritySignature.__dataclass_fields__)
+    _require_exact_fields(
+        signature, signature_fields, context="DDMRP authority signature"
+    )
+    signature_source = {
+        key: value for key, value in signature.items()
+        if key != "signature_fingerprint"
+    }
+    if (
+        signature["signature_fingerprint"] != canonical_fingerprint(signature_source)
+        or expected_fingerprint != signature["signature_fingerprint"]
+    ):
+        raise DdmrpReplenishmentConflict("DDMRP authority signature drift.")
+
+
+def _evaluation_payload(
+    *,
+    evaluation_run: Mapping[str, object],
+    evaluation_rows: Iterable[Mapping[str, object]],
+    chain_records: Iterable[Mapping[str, object]],
+    recommendations: Iterable[Mapping[str, object]],
+    events: Iterable[Mapping[str, object]],
+) -> dict[str, object]:
+    return {
+        "EvaluationRun": deepcopy(dict(evaluation_run)),
+        "EvaluationRows": sorted(
+            (deepcopy(dict(row)) for row in evaluation_rows),
+            key=lambda row: (row["ItemID"], row["LocationID"]),
+        ),
+        "ChainRecords": sorted(
+            (deepcopy(dict(row)) for row in chain_records),
+            key=lambda row: row["LogicalReplenishmentID"],
+        ),
+        "RecommendationVersions": sorted(
+            (deepcopy(dict(row)) for row in recommendations),
+            key=lambda row: row["RecommendationID"],
+        ),
+        "Events": sorted(
+            (deepcopy(dict(row)) for row in events),
+            key=lambda row: (
+                row["AggregateType"], row["AggregateID"], row["AggregateVersion"]
+            ),
+        ),
+    }
+
+
+def _sorted_unique_ids(value: object, label: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(identifier, str) or not identifier for identifier in value
+    ):
+        raise DdmrpReplenishmentConflict(f"DDMRP {label} must be an ID list.")
+    if value != sorted(set(value)):
+        raise DdmrpReplenishmentConflict(
+            f"DDMRP {label} must be sorted and unique."
+        )
+    return list(value)
+
+
+def _replace_mapping(
+    target: MutableMapping[str, dict[str, object]],
+    source: Mapping[str, Mapping[str, object]],
+) -> None:
+    target.clear()
+    target.update(deepcopy(dict(source)))
+
+
+def _replace_sequence(
+    target: MutableSequence[dict[str, object]],
+    source: Iterable[Mapping[str, object]],
+) -> None:
+    target.clear()
+    target.extend(deepcopy(tuple(source)))
+
+
 def _validate_request_result(result: Mapping[str, object]) -> None:
     _require_exact_fields(result, REQUEST_RESULT_FIELDS, context="DDMRP request result")
     response = result["ResponseData"]
@@ -1478,6 +2198,12 @@ def _validate_request_result(result: Mapping[str, object]) -> None:
     _require_exact_fields(response, RESPONSE_DATA_FIELDS, context="DDMRP response data")
     if result["ResponseFingerprint"] != canonical_fingerprint(dict(response)):
         raise DdmrpReplenishmentConflict("DDMRP response fingerprint mismatch.")
+    for field in (
+        "EvaluationRowIDs", "LogicalReplenishmentIDs",
+        "CreatedLogicalReplenishmentIDs", "ReusedLogicalReplenishmentIDs",
+        "RecommendationIDs", "EventIDs",
+    ):
+        _sorted_unique_ids(result[field], field)
     created = result["CreatedLogicalReplenishmentIDs"]
     reused = result["ReusedLogicalReplenishmentIDs"]
     if set(created) & set(reused) or result["LogicalReplenishmentIDs"] != sorted(

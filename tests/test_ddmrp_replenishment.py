@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict
-from datetime import datetime, timezone
+from dataclasses import asdict, replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -572,19 +572,354 @@ def test_be_ddmrp_007_supply_components_use_only_authoritative_contract_fields()
         _prepare_evaluation(lines=[invalid])
 
 
+def test_be_ddmrp_007_exact_evaluation_replay_validates_result_graph_and_is_duplicate() -> None:
+    from sdbr.ddmrp_replenishment import (
+        apply_staged_ddmrp_evaluation, lookup_ddmrp_evaluation_request_result,
+        stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    staged = stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+    status, response = apply_staged_ddmrp_evaluation(staged=staged, **ledgers)
+    before = deepcopy(ledgers)
+
+    replay = lookup_ddmrp_evaluation_request_result(
+        evaluation_request_id=write_set.evaluation_request_id,
+        request_fingerprint=write_set.request_fingerprint,
+        request_results=ledgers["request_results"],
+        evaluation_runs=ledgers["evaluation_runs"],
+        evaluation_rows=ledgers["evaluation_rows"],
+        chains=ledgers["chains"],
+        recommendations=ledgers["recommendations"],
+        events=tuple(ledgers["events"]),
+    )
+    duplicate = stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+
+    assert status == "Created" and response["Status"] == "Created"
+    assert replay == {**response, "Status": "Duplicate"}
+    assert duplicate.result_status == "Duplicate"
+    assert duplicate.response_data == replay
+    assert ledgers == before
+
+
+def test_be_ddmrp_007_request_id_reuse_with_changed_request_fingerprint_conflicts() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, apply_staged_ddmrp_evaluation,
+        lookup_ddmrp_evaluation_request_result, stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    staged = stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+    apply_staged_ddmrp_evaluation(staged=staged, **ledgers)
+
+    with pytest.raises(DdmrpReplenishmentConflict, match="EVALUATION_REQUEST_ID_REUSED"):
+        lookup_ddmrp_evaluation_request_result(
+            evaluation_request_id=write_set.evaluation_request_id,
+            request_fingerprint="sha256:changed-request",
+            request_results=ledgers["request_results"],
+            evaluation_runs=ledgers["evaluation_runs"],
+            evaluation_rows=ledgers["evaluation_rows"],
+            chains=ledgers["chains"],
+            recommendations=ledgers["recommendations"],
+            events=tuple(ledgers["events"]),
+        )
+
+
+def test_be_ddmrp_007_event_or_child_drift_fails_closed() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, apply_staged_ddmrp_evaluation,
+        canonical_fingerprint, lookup_ddmrp_evaluation_request_result,
+        stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=write_set, **ledgers), **ledgers
+    )
+    pristine = deepcopy(ledgers)
+
+    def drift_recommendation_signature(state) -> None:
+        recommendation = next(iter(state["recommendations"].values()))
+        recommendation["AuthoritySignature"]["runtime_snapshot_id"] = "drifted"
+        recommendation["RecommendationFingerprint"] = canonical_fingerprint({
+            key: value for key, value in recommendation.items()
+            if key != "RecommendationFingerprint"
+        })
+        _recompute_persisted_evaluation_fingerprints(state, write_set)
+
+    def drift_issue_identity(state) -> None:
+        evaluation = next(iter(state["evaluation_runs"].values()))
+        issue = evaluation["Issues"][0]
+        issue["IssueID"] = "DRI-drifted"
+        issue["IssueFingerprint"] = canonical_fingerprint({
+            key: value for key, value in issue.items() if key != "IssueFingerprint"
+        })
+        evaluation["EvaluationFingerprint"] = canonical_fingerprint({
+            key: value for key, value in evaluation.items()
+            if key != "EvaluationFingerprint"
+        })
+        _recompute_persisted_evaluation_fingerprints(state, write_set)
+
+    mutations = (
+        lambda state: state["events"][0]["EventPayload"].update({"CycleNumber": 99}),
+        lambda state: state["evaluation_rows"][
+            write_set.evaluation_rows[0]["EvaluationRowID"]
+        ].update({"SuggestedReplenishmentQty": 999}),
+        drift_recommendation_signature,
+        drift_issue_identity,
+    )
+    for mutate in mutations:
+        drifted = deepcopy(pristine)
+        mutate(drifted)
+        with pytest.raises(DdmrpReplenishmentConflict):
+            lookup_ddmrp_evaluation_request_result(
+                evaluation_request_id=write_set.evaluation_request_id,
+                request_fingerprint=write_set.request_fingerprint,
+                request_results=drifted["request_results"],
+                evaluation_runs=drifted["evaluation_runs"],
+                evaluation_rows=drifted["evaluation_rows"],
+                chains=drifted["chains"],
+                recommendations=drifted["recommendations"],
+                events=tuple(drifted["events"]),
+            )
+
+
+def test_be_ddmrp_007_failure_after_staging_leaves_every_live_ledger_unchanged() -> None:
+    from sdbr.ddmrp_replenishment import (
+        apply_staged_ddmrp_evaluation, stage_ddmrp_evaluation,
+    )
+
+    class FailOnceList(list):
+        failed = False
+
+        def extend(self, values) -> None:
+            super().extend(values)
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("injected replacement failure")
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    staged = stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+    ledgers["events"] = FailOnceList(ledgers["events"])
+    before = deepcopy(ledgers)
+
+    with pytest.raises(RuntimeError, match="injected replacement failure"):
+        apply_staged_ddmrp_evaluation(staged=staged, **ledgers)
+
+    assert ledgers == before
+
+
+def test_be_ddmrp_007_duplicate_open_chain_preflight_leaves_no_partial_records() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, canonical_fingerprint, canonical_stable_id,
+        stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    ledgers = _empty_evaluation_ledgers()
+    first_chain = deepcopy(write_set.chain_records[0])
+    duplicate_chain = deepcopy(first_chain)
+    duplicate_chain["CycleNumber"] = 2
+    identity = {"ItemID": "ITEM-RED", "LocationID": "LOC", "CycleNumber": 2}
+    duplicate_chain["LogicalReplenishmentID"] = canonical_stable_id("DRL", identity)
+    duplicate_chain["IdentityFingerprint"] = canonical_fingerprint(identity)
+    duplicate_chain["TraceID"] = duplicate_chain["LogicalReplenishmentID"]
+    duplicate_chain["ChainFingerprint"] = canonical_fingerprint({
+        key: value for key, value in duplicate_chain.items() if key != "ChainFingerprint"
+    })
+    duplicate_event = _event(
+        "ReplenishmentChainOpened", "ReplenishmentChain",
+        duplicate_chain["LogicalReplenishmentID"], 1, None, "Open", {
+            "CycleNumber": 2, "ItemID": "ITEM-RED", "LocationID": "LOC",
+            "OpenedByEvaluationID": duplicate_chain["OpenedByEvaluationID"],
+        }, duplicate_chain["OpenedByEvaluationID"],
+        duplicate_chain["LogicalReplenishmentID"], None,
+    )
+    ledgers["chains"] = {
+        first_chain["LogicalReplenishmentID"]: first_chain,
+        duplicate_chain["LogicalReplenishmentID"]: duplicate_chain,
+    }
+    ledgers["events"] = [write_set.events[0], duplicate_event]
+    before = deepcopy(ledgers)
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+
+    assert ledgers == before
+
+
+def test_be_ddmrp_007_duplicate_ids_inside_write_set_fail_before_any_insert() -> None:
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict, stage_ddmrp_evaluation
+
+    write_set = _prepare_evaluation()
+    duplicate = replace(
+        write_set, evaluation_rows=(*write_set.evaluation_rows, write_set.evaluation_rows[0])
+    )
+    ledgers = _empty_evaluation_ledgers()
+    before = deepcopy(ledgers)
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        stage_ddmrp_evaluation(write_set=duplicate, **ledgers)
+
+    assert ledgers == before
+
+
+def test_be_ddmrp_007_orphan_children_without_request_result_are_never_adopted() -> None:
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict, stage_ddmrp_evaluation
+
+    write_set = _prepare_evaluation()
+    orphan_cases = (
+        ("evaluation_runs", write_set.evaluation_run["EvaluationID"], write_set.evaluation_run),
+        ("evaluation_rows", write_set.evaluation_rows[0]["EvaluationRowID"], write_set.evaluation_rows[0]),
+        ("chains", write_set.chain_records[0]["LogicalReplenishmentID"], write_set.chain_records[0]),
+        ("recommendations", write_set.recommendation_versions[0]["RecommendationID"], write_set.recommendation_versions[0]),
+        ("events", None, write_set.events[0]),
+    )
+    for ledger_name, key, record in orphan_cases:
+        ledgers = _empty_evaluation_ledgers()
+        if ledger_name == "events":
+            ledgers[ledger_name].append(deepcopy(record))
+        else:
+            ledgers[ledger_name][key] = deepcopy(record)
+        before = deepcopy(ledgers)
+        with pytest.raises(DdmrpReplenishmentConflict, match="ORPHAN_DDMRP_EVALUATION_CHILD"):
+            stage_ddmrp_evaluation(write_set=write_set, **ledgers)
+        assert ledgers == before
+
+
+def test_be_ddmrp_007_request_result_with_missing_or_extra_child_fails_closed() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, apply_staged_ddmrp_evaluation,
+        canonical_fingerprint, lookup_ddmrp_evaluation_request_result,
+        stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=write_set, **ledgers), **ledgers
+    )
+    result_id = write_set.evaluation_request_id
+    for field, values in (
+        ("EvaluationRowIDs", []),
+        ("EventIDs", sorted((*write_set.request_result["EventIDs"], "DRE-extra"))),
+    ):
+        drifted = deepcopy(ledgers)
+        result = drifted["request_results"][result_id]
+        result[field] = values
+        result["RequestResultFingerprint"] = canonical_fingerprint({
+            key: value for key, value in result.items() if key != "RequestResultFingerprint"
+        })
+        with pytest.raises(DdmrpReplenishmentConflict):
+            lookup_ddmrp_evaluation_request_result(
+                evaluation_request_id=result_id,
+                request_fingerprint=write_set.request_fingerprint,
+                request_results=drifted["request_results"],
+                evaluation_runs=drifted["evaluation_runs"],
+                evaluation_rows=drifted["evaluation_rows"],
+                chains=drifted["chains"],
+                recommendations=drifted["recommendations"],
+                events=tuple(drifted["events"]),
+            )
+
+
+def test_be_ddmrp_007_reused_chain_membership_partitions_created_and_reused_ids() -> None:
+    from sdbr.ddmrp_replenishment import (
+        apply_staged_ddmrp_evaluation, stage_ddmrp_evaluation,
+    )
+
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    ledgers = _empty_evaluation_ledgers()
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=first, **ledgers), **ledgers
+    )
+    second = _prepare_evaluation(
+        request_id="REQ-2", lines=[_runtime_line("ITEM-RED", "LOC", "Red", 90)],
+        evaluated_at=EVALUATED_AT + timedelta(minutes=1),
+        existing={
+            "chains": ledgers["chains"],
+            "recommendations": ledgers["recommendations"],
+            "events": tuple(ledgers["events"]),
+            "active_graphs": {},
+        },
+    )
+    staged = stage_ddmrp_evaluation(write_set=second, **ledgers)
+
+    logical_id = first.chain_records[0]["LogicalReplenishmentID"]
+    assert second.chain_records == ()
+    assert second.request_result["CreatedLogicalReplenishmentIDs"] == []
+    assert second.request_result["ReusedLogicalReplenishmentIDs"] == [logical_id]
+    assert second.request_result["LogicalReplenishmentIDs"] == [logical_id]
+    assert staged.chains == ledgers["chains"]
+    assert staged.result_status == "Created"
+
+
+def _empty_evaluation_ledgers() -> dict[str, object]:
+    return {
+        "evaluation_runs": {},
+        "evaluation_rows": {},
+        "chains": {},
+        "recommendations": {},
+        "events": [],
+        "request_results": {},
+    }
+
+
+def _recompute_persisted_evaluation_fingerprints(state, write_set) -> None:
+    from sdbr.ddmrp_replenishment import canonical_fingerprint
+
+    result = state["request_results"][write_set.evaluation_request_id]
+    event_ids = set(result["EventIDs"])
+    payload = {
+        "EvaluationRun": state["evaluation_runs"][result["EvaluationID"]],
+        "EvaluationRows": sorted(
+            (state["evaluation_rows"][row_id] for row_id in result["EvaluationRowIDs"]),
+            key=lambda row: (row["ItemID"], row["LocationID"]),
+        ),
+        "ChainRecords": sorted(
+            (state["chains"][logical_id]
+             for logical_id in result["CreatedLogicalReplenishmentIDs"]),
+            key=lambda row: row["LogicalReplenishmentID"],
+        ),
+        "RecommendationVersions": sorted(
+            (state["recommendations"][recommendation_id]
+             for recommendation_id in result["RecommendationIDs"]),
+            key=lambda row: row["RecommendationID"],
+        ),
+        "Events": sorted(
+            (event for event in state["events"] if event["EventID"] in event_ids),
+            key=lambda row: (
+                row["AggregateType"], row["AggregateID"], row["AggregateVersion"]
+            ),
+        ),
+    }
+    result["EvaluationPayloadFingerprint"] = canonical_fingerprint(payload)
+    result["RequestResultFingerprint"] = canonical_fingerprint({
+        key: value for key, value in result.items()
+        if key != "RequestResultFingerprint"
+    })
+
+
 def _prepare_evaluation(
     *,
     request_id: str = "REQ-1",
     lines: list[dict[str, object]] | None = None,
     existing: dict[str, object] | None = None,
+    evaluated_at: datetime = EVALUATED_AT,
 ):
     from sdbr.ddmrp_replenishment import prepare_ddmrp_evaluation
 
-    signature, gates, runtime_result = _evaluation_inputs(lines=lines)
+    signature, gates, runtime_result = _evaluation_inputs(
+        lines=lines, evaluated_at=evaluated_at
+    )
     existing = existing or {}
     return prepare_ddmrp_evaluation(
         evaluation_request_id=request_id,
-        recorded_at=EVALUATED_AT,
+        recorded_at=evaluated_at,
         actor_id="planner-1",
         runtime_result=runtime_result,
         authority_signature=signature,
@@ -596,7 +931,11 @@ def _prepare_evaluation(
     )
 
 
-def _evaluation_inputs(*, lines: list[dict[str, object]] | None = None):
+def _evaluation_inputs(
+    *,
+    lines: list[dict[str, object]] | None = None,
+    evaluated_at: datetime = EVALUATED_AT,
+):
     from sdbr.ddmrp_replenishment import build_read_only_authority_signature
 
     package = _package_record(production_accepted=False)
@@ -604,7 +943,7 @@ def _evaluation_inputs(*, lines: list[dict[str, object]] | None = None):
         package_record=package,
         operating_model_configuration=_operating_model_configuration(package),
         relevant_planning_ledger=_ledger_identity(),
-        evaluated_at=EVALUATED_AT,
+        evaluated_at=evaluated_at,
     )
     rows = lines or [
         _runtime_line("ITEM-ABOVE", "LOC", "AboveGreen", 0),
@@ -615,7 +954,7 @@ def _evaluation_inputs(*, lines: list[dict[str, object]] | None = None):
     return signature, gates, {
         "EvaluationMode": "DDMRPNetFlowV1",
         "Boundary": "read-only",
-        "EvaluatedAt": EVALUATED_AT.isoformat(),
+        "EvaluatedAt": evaluated_at.isoformat(),
         "Summary": {},
         "Lines": rows,
         "Issues": [],

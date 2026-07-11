@@ -2,16 +2,60 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from hashlib import sha256
+import json
+from math import isfinite
+from numbers import Real
 from typing import Iterable, Mapping
 
+from sdbr.schedule_output import scheduled_work_order_rows_from_schedule
 
+
+GRAPH_VERSION = 1
 ELIGIBLE_FREEZE_STATUSES = {"ActivePlanReservation", "LinkedToFormalOrder"}
-ELIGIBLE_TRANSITION_STATUSES = ELIGIBLE_FREEZE_STATUSES | {"HeldForPlanningError"}
+ELIGIBLE_TRANSITION_STATUSES = ELIGIBLE_FREEZE_STATUSES | {
+    "HeldForPlanningError"
+}
+MATERIAL_TRANSITION_STATUSES = ELIGIBLE_TRANSITION_STATUSES | {
+    "Externalized",
+    "AuthorityTransferred",
+    "Released",
+    "Cancelled",
+}
 SUPPORTED_RUN_STATUSES = {"Queued", "Completed", "Failed", "DeadLetter"}
+TRANSITION_METADATA_FIELDS = {
+    "Status",
+    "RecordVersion",
+    "PlanningRunID",
+    "LastTransitionAt",
+    "EventType",
+}
 
 
 class ReservationBatchReferenceError(ValueError):
     """Raised when a planning run refers to an invalid reservation batch graph."""
+
+
+class ReservationGraphDriftError(ReservationBatchReferenceError):
+    """Raised when the live graph no longer matches the frozen compare-and-set."""
+
+
+class ScheduledOccupancyEvidenceError(ValueError):
+    """Raised when completed schedule rows do not replace every frozen capacity row."""
+
+    def __init__(
+        self,
+        capacity_reservation_ids: Iterable[str],
+        *,
+        reasons: Mapping[str, str] | None = None,
+    ) -> None:
+        self.capacity_reservation_ids = tuple(capacity_reservation_ids)
+        self.reasons = dict(reasons or {})
+        super().__init__(
+            "Completed planning run lacks exact scheduled occupancy evidence for "
+            + ", ".join(self.capacity_reservation_ids)
+            + "."
+        )
 
 
 def _require_identity(value: object, field_name: str, record_name: str) -> str:
@@ -20,6 +64,23 @@ def _require_identity(value: object, field_name: str, record_name: str) -> str:
             f"{record_name} identity field {field_name} is required."
         )
     return value
+
+
+def _record_version(record: Mapping[str, object], record_name: str) -> int:
+    value = record.get("RecordVersion", 1)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ReservationBatchReferenceError(
+            f"{record_name} RecordVersion must be a positive integer."
+        )
+    return value
+
+
+def _normalized_record(
+    record: Mapping[str, object], record_name: str
+) -> dict[str, object]:
+    normalized = deepcopy(dict(record))
+    normalized["RecordVersion"] = _record_version(record, record_name)
+    return normalized
 
 
 def _selected_batch_ids(
@@ -55,12 +116,15 @@ def _selected_batch_ids(
                 f"Reservation batch identity is invalid: {batch_id}."
             )
         canonical_batch_id = _require_identity(
-            batch.get("ReservationBatchID"), "ReservationBatchID", "Reservation batch"
+            batch.get("ReservationBatchID"),
+            "ReservationBatchID",
+            "Reservation batch",
         )
         if canonical_batch_id != batch_id:
             raise ReservationBatchReferenceError(
                 f"Reservation batch canonical ID does not match mapping key: {batch_id}."
             )
+        _record_version(batch, f"Reservation batch {batch_id}")
         if batch.get("Status") not in eligible_statuses:
             raise ReservationBatchReferenceError(
                 f"Requested reservation batch ID is not eligible: {batch_id}."
@@ -90,8 +154,8 @@ def _declared_child_ids(
         )
         if canonical_child_id in seen_ids:
             raise ReservationBatchReferenceError(
-                f"Reservation batch {batch_id} has duplicate canonical {record_name} ID: "
-                f"{canonical_child_id}."
+                f"Reservation batch {batch_id} has duplicate canonical "
+                f"{record_name} ID: {canonical_child_id}."
             )
         seen_ids.add(canonical_child_id)
         declared_ids.append(canonical_child_id)
@@ -121,7 +185,8 @@ def _resolve_declared_child_ids(
         for child_id in declared_ids:
             if child_id in seen_declared_ids:
                 raise ReservationBatchReferenceError(
-                    f"Selected batches have duplicate canonical {record_name} ID: {child_id}."
+                    f"Selected batches have duplicate canonical {record_name} ID: "
+                    f"{child_id}."
                 )
             seen_declared_ids.add(child_id)
             declared_children.append((batch_id, child_id))
@@ -147,8 +212,8 @@ def _resolve_declared_child_ids(
         canonical_ids.add(canonical_child_id)
         if mapping_key != canonical_child_id:
             raise ReservationBatchReferenceError(
-                f"{record_name} canonical ID must match its mapping key and batch ledger ID: "
-                f"{canonical_child_id}."
+                f"{record_name} canonical ID must match its mapping key and batch "
+                f"ledger ID: {canonical_child_id}."
             )
         if canonical_child_id not in declared_ids_by_batch[child_batch_id]:
             raise ReservationBatchReferenceError(
@@ -175,8 +240,8 @@ def _resolve_declared_child_ids(
         )
         if canonical_child_id != child_id:
             raise ReservationBatchReferenceError(
-                f"{record_name} canonical ID must match its mapping key and batch ledger ID: "
-                f"{child_id}."
+                f"{record_name} canonical ID must match its mapping key and batch "
+                f"ledger ID: {child_id}."
             )
         if child_batch_id != batch_id:
             raise ReservationBatchReferenceError(
@@ -185,6 +250,89 @@ def _resolve_declared_child_ids(
             )
         resolved_ids.append(child_id)
     return resolved_ids
+
+
+def _validate_child_consistency(
+    *,
+    selected_batch_ids: list[str],
+    capacity_ids: list[str],
+    material_ids: list[str],
+    batches: Mapping[str, Mapping[str, object]],
+    capacity_reservations: Mapping[str, Mapping[str, object]],
+    material_allocations: Mapping[str, Mapping[str, object]],
+    require_freeze_eligibility: bool,
+) -> None:
+    batch_by_id = {batch_id: batches[batch_id] for batch_id in selected_batch_ids}
+    correlations: set[tuple[str, str]] = set()
+    for capacity_id in capacity_ids:
+        capacity = capacity_reservations[capacity_id]
+        batch_id = str(capacity["ReservationBatchID"])
+        batch = batch_by_id[batch_id]
+        for field in ("DemandCommitmentID", "DemandClass"):
+            child_value = _require_identity(
+                capacity.get(field), field, "Capacity reservation"
+            )
+            batch_value = _require_identity(
+                batch.get(field), field, "Reservation batch"
+            )
+            if child_value != batch_value:
+                raise ReservationBatchReferenceError(
+                    f"Capacity reservation {capacity_id} {field} does not match batch."
+                )
+        for field in (
+            "ReservationLineID",
+            "OrderID",
+            "OperationID",
+            "ResourceID",
+            "WindowStartAt",
+            "WindowEndAt",
+        ):
+            _require_identity(capacity.get(field), field, "Capacity reservation")
+        correlation = (str(capacity["OrderID"]), str(capacity["OperationID"]))
+        if correlation in correlations:
+            raise ReservationBatchReferenceError(
+                "Selected capacity reservations have duplicate order/operation correlation."
+            )
+        correlations.add(correlation)
+        _positive_finite_number(
+            capacity.get("ReservedMinutes"), "Capacity reservation ReservedMinutes"
+        )
+        _record_version(capacity, f"Capacity reservation {capacity_id}")
+        allowed = (
+            ELIGIBLE_FREEZE_STATUSES
+            if require_freeze_eligibility
+            else ELIGIBLE_TRANSITION_STATUSES
+        )
+        if capacity.get("Status") not in allowed:
+            raise ReservationBatchReferenceError(
+                f"Capacity reservation {capacity_id} status is not eligible."
+            )
+
+    for material_id in material_ids:
+        material = material_allocations[material_id]
+        batch_id = str(material["ReservationBatchID"])
+        batch = batch_by_id[batch_id]
+        for field in ("DemandCommitmentID", "DemandClass"):
+            child_value = _require_identity(
+                material.get(field), field, "Material allocation"
+            )
+            batch_value = _require_identity(
+                batch.get(field), field, "Reservation batch"
+            )
+            if child_value != batch_value:
+                raise ReservationBatchReferenceError(
+                    f"Material allocation {material_id} {field} does not match batch."
+                )
+        _record_version(material, f"Material allocation {material_id}")
+        allowed = (
+            ELIGIBLE_FREEZE_STATUSES
+            if require_freeze_eligibility
+            else MATERIAL_TRANSITION_STATUSES
+        )
+        if material.get("Status") not in allowed:
+            raise ReservationBatchReferenceError(
+                f"Material allocation {material_id} status is not eligible."
+            )
 
 
 def _resolve_batch_graph(
@@ -216,7 +364,85 @@ def _resolve_batch_graph(
         child_id_field="MaterialAllocationID",
         record_name="Material allocation",
     )
+    _validate_child_consistency(
+        selected_batch_ids=selected_ids,
+        capacity_ids=capacity_ids,
+        material_ids=material_ids,
+        batches=batches,
+        capacity_reservations=capacity_reservations,
+        material_allocations=material_allocations,
+        require_freeze_eligibility=require_freeze_eligibility,
+    )
     return selected_ids, capacity_ids, material_ids
+
+
+def _canonical_hash(value: object) -> str:
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ReservationBatchReferenceError(
+            "Reservation graph must contain canonical JSON-compatible content."
+        ) from error
+    return sha256(encoded).hexdigest()
+
+
+def _graph_metadata(core: Mapping[str, object]) -> dict[str, object]:
+    batches = core["Batches"]
+    identity = {
+        "ReservationBatchIDs": core["ReservationBatchIDs"],
+        "DemandCommitmentIDs": [
+            batch["DemandCommitmentID"] for batch in batches  # type: ignore[index]
+        ],
+    }
+    return {
+        "GraphID": f"PRG-{_canonical_hash(identity)[:20]}",
+        "GraphVersion": GRAPH_VERSION,
+        "GraphFingerprint": f"sha256:{_canonical_hash(core)}",
+    }
+
+
+def _capture_graph(
+    *,
+    batch_ids: Iterable[str],
+    batches: Mapping[str, Mapping[str, object]],
+    capacity_reservations: Mapping[str, Mapping[str, object]],
+    material_allocations: Mapping[str, Mapping[str, object]],
+    require_freeze_eligibility: bool,
+) -> dict[str, object]:
+    selected_ids, capacity_ids, material_ids = _resolve_batch_graph(
+        batch_ids=batch_ids,
+        batches=batches,
+        capacity_reservations=capacity_reservations,
+        material_allocations=material_allocations,
+        require_freeze_eligibility=require_freeze_eligibility,
+    )
+    core: dict[str, object] = {
+        "ReservationBatchIDs": deepcopy(selected_ids),
+        "Batches": [
+            _normalized_record(batches[batch_id], f"Reservation batch {batch_id}")
+            for batch_id in selected_ids
+        ],
+        "CapacityReservations": [
+            _normalized_record(
+                capacity_reservations[capacity_id],
+                f"Capacity reservation {capacity_id}",
+            )
+            for capacity_id in capacity_ids
+        ],
+        "MaterialAllocations": [
+            _normalized_record(
+                material_allocations[material_id],
+                f"Material allocation {material_id}",
+            )
+            for material_id in material_ids
+        ],
+    }
+    return {**_graph_metadata(core), **core}
 
 
 def freeze_planning_reservations(
@@ -226,24 +452,196 @@ def freeze_planning_reservations(
     capacity_reservations: Mapping[str, Mapping[str, object]],
     material_allocations: Mapping[str, Mapping[str, object]],
 ) -> dict[str, object]:
-    """Return an isolated snapshot of complete, explicit eligible reservation batches."""
-    selected_ids, capacity_ids, material_ids = _resolve_batch_graph(
+    """Return an isolated, versioned snapshot of complete eligible batches."""
+    return _capture_graph(
         batch_ids=batch_ids,
         batches=batches,
         capacity_reservations=capacity_reservations,
         material_allocations=material_allocations,
         require_freeze_eligibility=True,
     )
+
+
+def _records_by_id(
+    rows: object,
+    *,
+    id_field: str,
+    record_name: str,
+) -> tuple[list[str], dict[str, dict[str, object]]]:
+    if not isinstance(rows, list):
+        raise ReservationGraphDriftError(
+            f"Frozen {record_name} collection must be a list."
+        )
+    ids: list[str] = []
+    records: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ReservationGraphDriftError(
+                f"Frozen {record_name} record must be an object."
+            )
+        record_id = _require_identity(row.get(id_field), id_field, record_name)
+        if record_id in records:
+            raise ReservationGraphDriftError(
+                f"Frozen {record_name} has duplicate ID: {record_id}."
+            )
+        ids.append(record_id)
+        records[record_id] = _normalized_record(row, record_name)
+    return ids, records
+
+
+def _normalize_frozen_graph(
+    frozen_reservations: Mapping[str, object],
+) -> dict[str, object]:
+    requested_ids = frozen_reservations.get("ReservationBatchIDs")
+    if not isinstance(requested_ids, list):
+        raise ReservationGraphDriftError(
+            "Frozen reservation graph ReservationBatchIDs must be a list."
+        )
+    batch_ids, batches = _records_by_id(
+        frozen_reservations.get("Batches"),
+        id_field="ReservationBatchID",
+        record_name="Reservation batch",
+    )
+    _, capacities = _records_by_id(
+        frozen_reservations.get("CapacityReservations"),
+        id_field="CapacityReservationID",
+        record_name="Capacity reservation",
+    )
+    _, materials = _records_by_id(
+        frozen_reservations.get("MaterialAllocations"),
+        id_field="MaterialAllocationID",
+        record_name="Material allocation",
+    )
+    if requested_ids != batch_ids:
+        raise ReservationGraphDriftError(
+            "Frozen reservation graph batch identity order is inconsistent."
+        )
+    try:
+        captured = _capture_graph(
+            batch_ids=requested_ids,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=materials,
+            require_freeze_eligibility=True,
+        )
+    except ReservationBatchReferenceError as error:
+        raise ReservationGraphDriftError(str(error)) from error
+    for field in ("GraphID", "GraphVersion", "GraphFingerprint"):
+        persisted = frozen_reservations.get(field)
+        if persisted is not None and persisted != captured[field]:
+            raise ReservationGraphDriftError(
+                f"Frozen reservation graph {field} does not match its content."
+            )
+    return captured
+
+
+def _immutable_record(record: Mapping[str, object]) -> dict[str, object]:
     return {
-        "ReservationBatchIDs": deepcopy(selected_ids),
-        "Batches": [deepcopy(batches[batch_id]) for batch_id in selected_ids],
-        "CapacityReservations": [
-            deepcopy(capacity_reservations[capacity_id]) for capacity_id in capacity_ids
-        ],
-        "MaterialAllocations": [
-            deepcopy(material_allocations[material_id]) for material_id in material_ids
-        ],
+        key: deepcopy(value)
+        for key, value in record.items()
+        if key not in TRANSITION_METADATA_FIELDS
     }
+
+
+def _assert_record_compare_and_set(
+    *,
+    live: Mapping[str, object],
+    frozen: Mapping[str, object],
+    run_id: str,
+    record_name: str,
+) -> None:
+    if _immutable_record(live) != _immutable_record(frozen):
+        raise ReservationGraphDriftError(
+            f"{record_name} immutable content drifted after Planning Run freeze."
+        )
+    frozen_version = _record_version(frozen, record_name)
+    live_version = _record_version(live, record_name)
+    if (
+        live_version == frozen_version
+        and live.get("Status") == frozen.get("Status")
+    ):
+        return
+    if (
+        live_version > frozen_version
+        and live.get("PlanningRunID") == run_id
+        and live.get("EventType")
+        in {"PlanningRunFailed", "PlanningRunDeadLetter"}
+        and live.get("Status")
+        in {
+            "HeldForPlanningError",
+            "ActivePlanReservation",
+            "LinkedToFormalOrder",
+        }
+    ):
+        return
+    raise ReservationGraphDriftError(
+        f"{record_name} status or RecordVersion drifted after Planning Run freeze."
+    )
+
+
+def _compare_live_graph_to_frozen(
+    *,
+    run_id: str,
+    frozen: Mapping[str, object],
+    batches: Mapping[str, Mapping[str, object]],
+    capacity_reservations: Mapping[str, Mapping[str, object]],
+    material_allocations: Mapping[str, Mapping[str, object]],
+) -> tuple[list[str], list[str], list[str]]:
+    frozen_batch_ids = list(frozen["ReservationBatchIDs"])  # type: ignore[arg-type]
+    frozen_batches = {
+        str(record["ReservationBatchID"]): record
+        for record in frozen["Batches"]  # type: ignore[union-attr]
+    }
+    frozen_capacities = {
+        str(record["CapacityReservationID"]): record
+        for record in frozen["CapacityReservations"]  # type: ignore[union-attr]
+    }
+    frozen_materials = {
+        str(record["MaterialAllocationID"]): record
+        for record in frozen["MaterialAllocations"]  # type: ignore[union-attr]
+    }
+    try:
+        live_batch_ids, live_capacity_ids, live_material_ids = _resolve_batch_graph(
+            batch_ids=frozen_batch_ids,
+            batches=batches,
+            capacity_reservations=capacity_reservations,
+            material_allocations=material_allocations,
+            require_freeze_eligibility=False,
+        )
+    except ReservationBatchReferenceError as error:
+        raise ReservationGraphDriftError(str(error)) from error
+    frozen_capacity_ids = list(frozen_capacities)
+    frozen_material_ids = list(frozen_materials)
+    if (
+        live_batch_ids != frozen_batch_ids
+        or live_capacity_ids != frozen_capacity_ids
+        or live_material_ids != frozen_material_ids
+    ):
+        raise ReservationGraphDriftError(
+            "Live reservation graph child identity set drifted after freeze."
+        )
+    for batch_id in frozen_batch_ids:
+        _assert_record_compare_and_set(
+            live=batches[batch_id],
+            frozen=frozen_batches[batch_id],
+            run_id=run_id,
+            record_name=f"Reservation batch {batch_id}",
+        )
+    for capacity_id in frozen_capacity_ids:
+        _assert_record_compare_and_set(
+            live=capacity_reservations[capacity_id],
+            frozen=frozen_capacities[capacity_id],
+            run_id=run_id,
+            record_name=f"Capacity reservation {capacity_id}",
+        )
+    for material_id in frozen_material_ids:
+        _assert_record_compare_and_set(
+            live=material_allocations[material_id],
+            frozen=frozen_materials[material_id],
+            run_id=run_id,
+            record_name=f"Material allocation {material_id}",
+        )
+    return frozen_batch_ids, frozen_capacity_ids, frozen_material_ids
 
 
 def _validate_transition_inputs(run_status: str, occurred_at: object) -> None:
@@ -257,11 +655,97 @@ def _validate_transition_inputs(run_status: str, occurred_at: object) -> None:
         raise ValueError("Planning run transition time must be timezone-aware.")
 
 
+def _parse_aware_datetime(value: object, field_name: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be an ISO datetime string.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be an ISO datetime string.") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must be timezone-aware.")
+    return parsed
+
+
+def _positive_finite_number(value: object, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ReservationBatchReferenceError(
+            f"{field_name} must be a finite positive number."
+        )
+    try:
+        normalized = float(value)
+    except OverflowError as error:
+        raise ReservationBatchReferenceError(
+            f"{field_name} must be a finite positive number."
+        ) from error
+    if not isfinite(normalized) or normalized <= 0:
+        raise ReservationBatchReferenceError(
+            f"{field_name} must be a finite positive number."
+        )
+    return normalized
+
+
+def _exact_scheduled_occupancy_errors(
+    *,
+    capacity_records: Iterable[Mapping[str, object]],
+    schedule: Mapping[str, object] | None,
+) -> dict[str, str]:
+    schedule_rows = (
+        scheduled_work_order_rows_from_schedule(dict(schedule))
+        if isinstance(schedule, Mapping)
+        else []
+    )
+    rows_by_correlation: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for row in schedule_rows:
+        order_id = row.get("OrderID")
+        operation_id = row.get("OperationID")
+        if isinstance(order_id, str) and isinstance(operation_id, str):
+            rows_by_correlation.setdefault((order_id, operation_id), []).append(row)
+
+    errors: dict[str, str] = {}
+    for capacity in capacity_records:
+        capacity_id = str(capacity["CapacityReservationID"])
+        correlation = (str(capacity["OrderID"]), str(capacity["OperationID"]))
+        matches = rows_by_correlation.get(correlation, [])
+        if len(matches) != 1:
+            errors[capacity_id] = "Expected exactly one correlated schedule operation."
+            continue
+        row = matches[0]
+        try:
+            reserved_minutes = _positive_finite_number(
+                capacity.get("ReservedMinutes"), "ReservedMinutes"
+            )
+            scheduled_minutes = _positive_finite_number(
+                row.get("DurationMinutes"), "DurationMinutes"
+            )
+            window_start = _parse_aware_datetime(
+                capacity.get("WindowStartAt"), "WindowStartAt"
+            )
+            window_end = _parse_aware_datetime(
+                capacity.get("WindowEndAt"), "WindowEndAt"
+            )
+            scheduled_start = _parse_aware_datetime(row.get("Start"), "Start")
+            scheduled_end = _parse_aware_datetime(row.get("End"), "End")
+        except (ReservationBatchReferenceError, ValueError) as error:
+            errors[capacity_id] = str(error)
+            continue
+        if str(row.get("ResourceID")) != str(capacity.get("ResourceID")):
+            errors[capacity_id] = "Correlated schedule operation uses a different resource."
+        elif scheduled_minutes != reserved_minutes:
+            errors[capacity_id] = "Correlated schedule duration does not equal reserved minutes."
+        elif scheduled_start < window_start or scheduled_end > window_end:
+            errors[capacity_id] = "Correlated schedule operation is outside the reserved window."
+        elif scheduled_end <= scheduled_start:
+            errors[capacity_id] = "Correlated schedule operation has an invalid time range."
+    return errors
+
+
 def _trace_run_record(
     record: dict[str, object], *, run_id: str, run_status: str, occurred_at: datetime
 ) -> None:
     record.update(
         {
+            "RecordVersion": _record_version(record, "Reservation record") + 1,
             "PlanningRunID": run_id,
             "LastTransitionAt": occurred_at.isoformat(),
             "EventType": f"PlanningRun{run_status}",
@@ -269,25 +753,58 @@ def _trace_run_record(
     )
 
 
+def _held_by_this_run(record: Mapping[str, object], run_id: str) -> bool:
+    return (
+        record.get("PlanningRunID") == run_id
+        and record.get("EventType")
+        in {"PlanningRunFailed", "PlanningRunDeadLetter"}
+    )
+
+
 def transition_planning_reservations_for_run(
     *,
     run_id: str,
     run_status: str,
-    batch_ids: Iterable[str],
     occurred_at: datetime,
     batches: Mapping[str, Mapping[str, object]],
     capacity_reservations: Mapping[str, Mapping[str, object]],
     material_allocations: Mapping[str, Mapping[str, object]],
+    batch_ids: Iterable[str] | None = None,
+    frozen_reservations: Mapping[str, object] | None = None,
+    schedule: Mapping[str, object] | None = None,
 ) -> dict[str, dict[str, dict[str, object]]]:
-    """Copy a complete reservation batch graph and apply its planning-run lifecycle."""
+    """Compare-and-set a frozen graph and apply its planning-run lifecycle."""
     _validate_transition_inputs(run_status, occurred_at)
-    selected_ids, capacity_ids, material_ids = _resolve_batch_graph(
-        batch_ids=batch_ids,
-        batches=batches,
-        capacity_reservations=capacity_reservations,
-        material_allocations=material_allocations,
-        require_freeze_eligibility=False,
-    )
+    legacy_transition = frozen_reservations is None
+    if frozen_reservations is None:
+        if batch_ids is None:
+            raise ValueError("Reservation batch IDs or a frozen graph are required.")
+        frozen = _capture_graph(
+            batch_ids=batch_ids,
+            batches=batches,
+            capacity_reservations=capacity_reservations,
+            material_allocations=material_allocations,
+            require_freeze_eligibility=False,
+        )
+        selected_ids = list(frozen["ReservationBatchIDs"])  # type: ignore[arg-type]
+        capacity_ids = [
+            str(record["CapacityReservationID"])
+            for record in frozen["CapacityReservations"]  # type: ignore[union-attr]
+        ]
+        material_ids = [
+            str(record["MaterialAllocationID"])
+            for record in frozen["MaterialAllocations"]  # type: ignore[union-attr]
+        ]
+    else:
+        frozen = _normalize_frozen_graph(frozen_reservations)
+        selected_ids, capacity_ids, material_ids = _compare_live_graph_to_frozen(
+            run_id=run_id,
+            frozen=frozen,
+            batches=batches,
+            capacity_reservations=capacity_reservations,
+            material_allocations=material_allocations,
+        )
+
     result = {
         "Batches": deepcopy(dict(batches)),
         "CapacityReservations": deepcopy(dict(capacity_reservations)),
@@ -295,6 +812,21 @@ def transition_planning_reservations_for_run(
     }
     if run_status == "Queued":
         return result
+
+    if run_status == "Completed":
+        frozen_capacities = {
+            str(record["CapacityReservationID"]): record
+            for record in frozen["CapacityReservations"]  # type: ignore[union-attr]
+        }
+        evidence_errors = _exact_scheduled_occupancy_errors(
+            capacity_records=[frozen_capacities[item] for item in capacity_ids],
+            schedule=schedule,
+        )
+        if evidence_errors:
+            raise ScheduledOccupancyEvidenceError(
+                [item for item in capacity_ids if item in evidence_errors],
+                reasons=evidence_errors,
+            )
 
     batch_records = result["Batches"]
     capacity_records = result["CapacityReservations"]
@@ -330,6 +862,7 @@ def transition_planning_reservations_for_run(
         elif (
             run_status == "Completed"
             and material.get("Status") == "HeldForPlanningError"
+            and (legacy_transition or _held_by_this_run(material, run_id))
         ):
             material["Status"] = "ActivePlanReservation"
         _trace_run_record(

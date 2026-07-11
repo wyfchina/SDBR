@@ -1,6 +1,6 @@
 """Acceptance evidence for BE-SDBR-006 stable demand commitment identity."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -20,6 +20,7 @@ def _commitment(
     version: str = "1",
     quantity: float = 10,
     required_at: datetime | None = None,
+    trace_id: str = "TRACE-SO-100-10",
 ) -> dict[str, object]:
     return create_demand_commitment(
         demand_source_type=demand_source_type,
@@ -35,7 +36,7 @@ def _commitment(
         required_at=required_at
         or datetime(2026, 7, 20, 8, tzinfo=timezone.utc),
         demand_class="MTO",
-        trace_id="TRACE-SO-100-10",
+        trace_id=trace_id,
     )
 
 
@@ -99,6 +100,40 @@ def test_create_demand_commitment_identity_and_fingerprint_are_deterministic():
     assert first["BusinessKey"] == second["BusinessKey"]
     assert first["LogicalDemandKey"] == second["LogicalDemandKey"]
     assert first["ContentFingerprint"] == second["ContentFingerprint"]
+
+
+def test_business_fingerprint_normalizes_equivalent_required_at_offsets_to_utc():
+    utc_commitment = _commitment(
+        required_at=datetime(2026, 7, 20, 8, tzinfo=timezone.utc)
+    )
+    offset_commitment = _commitment(
+        required_at=datetime(
+            2026,
+            7,
+            20,
+            16,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+    )
+
+    assert utc_commitment["RequiredAt"] == "2026-07-20T08:00:00+00:00"
+    assert offset_commitment["RequiredAt"] == "2026-07-20T08:00:00+00:00"
+    assert offset_commitment["ContentFingerprint"] == utc_commitment[
+        "ContentFingerprint"
+    ]
+
+
+def test_trace_id_change_is_idempotent_business_replay_metadata():
+    existing = _commitment(trace_id="TRACE-ATTEMPT-1")
+    replay = _commitment(trace_id="TRACE-ATTEMPT-2")
+
+    status, registered = register_demand_commitment(
+        {str(existing["DemandCommitmentID"]): existing}, replay
+    )
+
+    assert replay["ContentFingerprint"] == existing["ContentFingerprint"]
+    assert status == "Duplicate"
+    assert registered == existing
 
 
 def test_create_demand_commitment_delimited_source_identifiers_remain_distinct():

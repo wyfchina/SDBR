@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, get_ident
@@ -59,17 +60,22 @@ def _seed_active_planning_reservation(
         "MaterialAllocationIDs": ["MPA-1"],
         "ConfirmedBy": "planner-phase0",
         "ConfirmedAt": "2026-06-22T07:45:00+00:00",
+        "RecordVersion": 1,
     }
     store.ccr_capacity_reservations["CCR-RES-1"] = {
         "CapacityReservationID": "CCR-RES-1",
         "ReservationBatchID": batch_id,
         "DemandCommitmentID": "DC-PHASE0",
         "DemandClass": "MTO",
+        "ReservationLineID": "CAP-PHASE0-1",
+        "OrderID": "TST-WO-0001",
+        "OperationID": "TST-WO-0001:CCR",
         "ResourceID": "TST_WC_DRUM",
         "WindowStartAt": "2026-06-22T08:00:00+00:00",
         "WindowEndAt": "2026-06-22T16:00:00+00:00",
         "ReservedMinutes": 95,
         "Status": "ActivePlanReservation",
+        "RecordVersion": 1,
     }
     store.material_planning_allocations["MPA-1"] = {
         "MaterialAllocationID": "MPA-1",
@@ -84,6 +90,7 @@ def _seed_active_planning_reservation(
         "SupplySourceType": "OnHand",
         "MaterialSnapshotID": BASELINE_OPERATIONAL_STATE_ID,
         "Status": "ActivePlanReservation",
+        "RecordVersion": 1,
     }
 
 
@@ -92,7 +99,22 @@ def _completed_execution(**_kwargs) -> dict[str, object]:
         "Status": "Completed",
         "SolverStatus": "Optimal",
         "SolverMessage": "Completed for API integration test.",
-        "Schedule": {},
+        "Schedule": {
+            "GanttRows": [
+                {
+                    "ResourceID": "TST_WC_DRUM",
+                    "Bars": [
+                        {
+                            "OrderID": "TST-WO-0001",
+                            "OperationID": "TST-WO-0001:CCR",
+                            "Start": "2026-06-22T08:00:00+00:00",
+                            "End": "2026-06-22T09:35:00+00:00",
+                            "DurationMinutes": 95,
+                        }
+                    ],
+                }
+            ]
+        },
     }
 
 
@@ -399,6 +421,169 @@ def test_planning_reservation_failed_run_holds_for_error(monkeypatch):
     assert store.audit_events[-1]["Details"]["PlanningReservationsHeldForError"] == [
         "PRB-FAILED"
     ]
+
+
+def test_planning_reservation_direct_failed_run_recovers_while_held_and_completes(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-DIRECT-RECOVER")
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _raising_execution)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-DIRECT-RECOVER"),
+            "PlanningReservationBatchIDs": ["PRB-DIRECT-RECOVER"],
+        },
+    ).status_code == 200
+    failed = client.post(
+        "/planner/workbench/planning-runs/RUN-DIRECT-RECOVER/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00+00:00",
+            "CompletedAt": "2026-06-22T07:56:00+00:00",
+        },
+    )
+    assert failed.json()["Data"]["PlanningRun"]["Status"] == "Failed"
+
+    recovered = client.post(
+        "/planner/workbench/planning-runs/RUN-DIRECT-RECOVER/recover",
+        json={
+            "RecoveredBy": "planner-phase0",
+            "RecoveredAt": "2026-06-22T08:00:00+00:00",
+            "Reason": "Direct solver dependency restored.",
+            "ResetAttempts": True,
+        },
+    )
+
+    assert recovered.status_code == 200
+    assert recovered.json()["Data"]["PlanningRun"]["Status"] == "Queued"
+    assert store.planning_reservation_batches["PRB-DIRECT-RECOVER"]["Status"] == (
+        "HeldForPlanningError"
+    )
+    assert store.ccr_capacity_reservations["CCR-RES-1"]["Status"] == (
+        "HeldForPlanningError"
+    )
+    assert store.material_planning_allocations["MPA-1"]["Status"] == (
+        "HeldForPlanningError"
+    )
+
+    claimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-phase0",
+            "ClaimedAt": "2026-06-22T08:00:00+00:00",
+            "LeaseSeconds": 120,
+        },
+    ).json()["Data"]["PlanningRun"]
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    completed = client.post(
+        "/planner/workbench/planning-runs/RUN-DIRECT-RECOVER/execute",
+        json={
+            "ExecutedBy": "worker-phase0",
+            "StartedAt": "2026-06-22T08:00:01+00:00",
+            "CompletedAt": "2026-06-22T08:00:10+00:00",
+            "LeaseToken": claimed["LeaseToken"],
+        },
+    )
+
+    assert completed.status_code == 200
+    assert completed.json()["Data"]["PlanningRun"]["Status"] == "Completed"
+    assert store.planning_reservation_batches["PRB-DIRECT-RECOVER"]["Status"] == (
+        "ConvertedToScheduledOccupancy"
+    )
+    assert store.ccr_capacity_reservations["CCR-RES-1"]["Status"] == (
+        "ConvertedToScheduledOccupancy"
+    )
+    assert store.material_planning_allocations["MPA-1"]["Status"] == (
+        "ActivePlanReservation"
+    )
+
+
+def test_planning_reservation_completed_run_without_occupancy_returns_structured_error_and_holds(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-NO-OCCUPANCY")
+    monkeypatch.setattr(
+        "sdbr.api._execute_planning_run",
+        lambda **_kwargs: {
+            "Status": "Completed",
+            "SolverStatus": "Optimal",
+            "SolverMessage": "No matching operation emitted.",
+            "Schedule": {"GanttRows": []},
+        },
+    )
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-NO-OCCUPANCY"),
+            "PlanningReservationBatchIDs": ["PRB-NO-OCCUPANCY"],
+        },
+    ).status_code == 200
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-NO-OCCUPANCY/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00+00:00",
+            "CompletedAt": "2026-06-22T07:56:00+00:00",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == (
+        "PlanningReservationScheduledOccupancyIncomplete"
+    )
+    assert response.json()["Data"]["PlanningRun"]["Status"] == "Failed"
+    assert response.json()["Data"]["CapacityReservationIDs"] == ["CCR-RES-1"]
+    assert store.planning_reservation_batches["PRB-NO-OCCUPANCY"]["Status"] == (
+        "HeldForPlanningError"
+    )
+    assert store.ccr_capacity_reservations["CCR-RES-1"]["Status"] == (
+        "HeldForPlanningError"
+    )
+
+
+def test_planning_reservation_live_graph_drift_returns_structured_conflict_without_conversion(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-DRIFT")
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-DRIFT"),
+            "PlanningReservationBatchIDs": ["PRB-DRIFT"],
+        },
+    ).status_code == 200
+    store.ccr_capacity_reservations["CCR-RES-1"]["ReservedMinutes"] = 94
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-DRIFT/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00+00:00",
+            "CompletedAt": "2026-06-22T07:56:00+00:00",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "PlanningReservationGraphDrift"
+    assert response.json()["Data"]["PlanningRun"]["Status"] == "Failed"
+    assert store.planning_reservation_batches["PRB-DRIFT"]["Status"] == (
+        "ActivePlanReservation"
+    )
+    assert store.ccr_capacity_reservations["CCR-RES-1"]["Status"] == (
+        "ActivePlanReservation"
+    )
 
 
 def test_planning_reservation_dead_letter_run_holds_for_error(monkeypatch):
@@ -868,6 +1053,92 @@ def test_planning_reservation_sqlite_conflict_reloads_in_place_and_discards_stal
     )
 
 
+def test_planning_reservation_non_revision_save_failure_rolls_back_all_visible_state(
+    monkeypatch,
+):
+    class FailingSaveStore(WorkbenchStateStore):
+        fail_next_save = False
+
+        def save(self) -> None:
+            super().save()
+            if self.fail_next_save:
+                self.planning_reservation_events.append(
+                    {"EventID": "PRE-SAVE-FAILURE"}
+                )
+                self.execution_events.append({"EventID": "EXEC-SAVE-FAILURE"})
+                raise OSError("deterministic non-revision persistence failure")
+
+    store = FailingSaveStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-SAVE-FAIL")
+    store.planning_reservation_events.append({"EventID": "PRE-BASELINE"})
+    store.processed_planning_event_keys.add("BASELINE-KEY")
+    client = TestClient(
+        create_app(state_store=store),
+        raise_server_exceptions=False,
+    )
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-SAVE-FAIL"),
+            "PlanningReservationBatchIDs": ["PRB-SAVE-FAIL"],
+        },
+    ).status_code == 200
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    aliases = {
+        "planning_runs": store.planning_runs,
+        "batches": store.planning_reservation_batches,
+        "capacities": store.ccr_capacity_reservations,
+        "materials": store.material_planning_allocations,
+        "audit_events": store.audit_events,
+        "reservation_events": store.planning_reservation_events,
+        "execution_events": store.execution_events,
+        "processed_keys": store.processed_planning_event_keys,
+    }
+    before = {
+        "planning_runs": deepcopy(store.planning_runs),
+        "commitments": deepcopy(store.planning_demand_commitments),
+        "batches": deepcopy(store.planning_reservation_batches),
+        "capacities": deepcopy(store.ccr_capacity_reservations),
+        "materials": deepcopy(store.material_planning_allocations),
+        "audit_events": deepcopy(store.audit_events),
+        "reservation_events": deepcopy(store.planning_reservation_events),
+        "execution_events": deepcopy(store.execution_events),
+        "processed_keys": set(store.processed_planning_event_keys),
+        "revision": store.current_revision(),
+    }
+    store.fail_next_save = True
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-SAVE-FAIL/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00+00:00",
+            "CompletedAt": "2026-06-22T07:56:00+00:00",
+        },
+    )
+
+    assert response.status_code == 500
+    assert store.planning_runs is aliases["planning_runs"]
+    assert store.planning_reservation_batches is aliases["batches"]
+    assert store.ccr_capacity_reservations is aliases["capacities"]
+    assert store.material_planning_allocations is aliases["materials"]
+    assert store.audit_events is aliases["audit_events"]
+    assert store.planning_reservation_events is aliases["reservation_events"]
+    assert store.execution_events is aliases["execution_events"]
+    assert store.processed_planning_event_keys is aliases["processed_keys"]
+    assert store.planning_runs == before["planning_runs"]
+    assert store.planning_demand_commitments == before["commitments"]
+    assert store.planning_reservation_batches == before["batches"]
+    assert store.ccr_capacity_reservations == before["capacities"]
+    assert store.material_planning_allocations == before["materials"]
+    assert store.audit_events == before["audit_events"]
+    assert store.planning_reservation_events == before["reservation_events"]
+    assert store.execution_events == before["execution_events"]
+    assert store.processed_planning_event_keys == before["processed_keys"]
+    assert store.current_revision() == before["revision"]
+
+
 # BE-RUN-011 / BE-SDBR-007 / BE-SDBR-008 / BE-SDBR-009
 def test_planning_reservation_workbench_blocks_during_sqlite_conflict_reload(
     tmp_path,
@@ -969,12 +1240,20 @@ def test_planning_reservation_workbench_blocks_during_sqlite_conflict_reload(
             "ActiveCount": 0,
             "MTOCount": 1,
             "MTACount": 0,
+            "DemandSourceTypeCounts": {
+                "Adjustment": 0,
+                "DependentDemand": 0,
+                "ExternalFormalOrder": 0,
+                "MTAReplenishment": 0,
+                "MTOCustomerOrder": 1,
+            },
         },
         "Rows": [
             {
                 "ReservationBatchID": "PRB-CONFLICT-READ",
                 "DemandCommitmentID": "DC-PHASE0",
                 "DemandClass": "MTO",
+                "DemandSourceType": "MTOCustomerOrder",
                 "Status": "LinkedToFormalOrder",
                 "ConfirmedBy": "planner-phase0",
                 "ConfirmedAt": "2026-06-22T07:45:00+00:00",
@@ -1014,12 +1293,20 @@ def test_planning_reservation_workbench_summarizes_copied_business_rows_only():
         "ActiveCount": 1,
         "MTOCount": 1,
         "MTACount": 0,
+        "DemandSourceTypeCounts": {
+            "Adjustment": 0,
+            "DependentDemand": 0,
+            "ExternalFormalOrder": 0,
+            "MTAReplenishment": 0,
+            "MTOCustomerOrder": 1,
+        },
     }
     assert data["Boundary"] == (
         "Shared planning reservations only; not ERP/WMS inventory authority."
     )
     assert data["Rows"][0]["ReservationBatchID"] == "PRB-1"
     assert data["Rows"][0]["DemandClass"] == "MTO"
+    assert data["Rows"][0]["DemandSourceType"] == "MTOCustomerOrder"
     assert "Resources" not in data["Rows"][0]
     assert "Routings" not in data["Rows"][0]
     assert "Orders" not in data["Rows"][0]
@@ -1029,6 +1316,7 @@ def test_planning_reservation_workbench_summarizes_copied_business_rows_only():
         "ReservationBatchID",
         "DemandCommitmentID",
         "DemandClass",
+        "DemandSourceType",
         "Status",
         "ConfirmationID",
         "ConfirmedBy",

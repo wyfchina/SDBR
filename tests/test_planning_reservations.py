@@ -60,15 +60,28 @@ def _apply(write_set: object, collections: tuple[dict, dict, dict, dict, list, s
     )
 
 
+def _capacity_request(
+    *,
+    reservation_line_id: str = "CAP-LINE-1",
+    order_id: str = "WO-1",
+    operation_id: str = "WO-1:CCR",
+    reserved_minutes: float = 120,
+) -> dict[str, object]:
+    return {
+        "ReservationLineID": reservation_line_id,
+        "OrderID": order_id,
+        "OperationID": operation_id,
+        "ResourceID": "CCR-1",
+        "WindowStartAt": "2026-07-20T08:00:00+00:00",
+        "WindowEndAt": "2026-07-20T16:00:00+00:00",
+        "ReservedMinutes": reserved_minutes,
+        "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
+    }
+
+
 def test_prepare_and_apply_confirmation_writes_batch_capacity_material_and_event():
     write_set = _prepare(
-        capacity_requests=[{
-            "ResourceID": "CCR-1",
-            "WindowStartAt": "2026-07-20T08:00:00+00:00",
-            "WindowEndAt": "2026-07-20T16:00:00+00:00",
-            "ReservedMinutes": 120,
-            "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
-        }],
+        capacity_requests=[_capacity_request()],
         material_requests=[{
             "RequirementLineID": "REQ-1",
             "ItemID": "RM-1",
@@ -86,6 +99,13 @@ def test_prepare_and_apply_confirmation_writes_batch_capacity_material_and_event
     assert len(collections[0]) == len(collections[1]) == 1
     assert len(collections[2]) == len(collections[3]) == 1
     assert collections[4][0]["EventType"] == "PlanningReservationActivated"
+    assert collections[4][0]["PayloadFingerprint"] == write_set.payload_fingerprint
+    assert collections[4][0]["Result"] == {
+        "DemandCommitmentID": write_set.demand_commitment["DemandCommitmentID"],
+        "ReservationBatchID": write_set.batch["ReservationBatchID"],
+        "CapacityReservationIDs": list(write_set.batch["CapacityReservationIDs"]),
+        "MaterialAllocationIDs": list(write_set.batch["MaterialAllocationIDs"]),
+    }
     assert write_set.idempotency_key in collections[5]
 
 
@@ -100,10 +120,142 @@ def test_duplicate_confirmation_does_not_create_second_batch():
     assert len(collections[4]) == 1
 
 
+def test_exact_replay_accepts_historic_result_without_fingerprint_metadata():
+    write_set = _prepare(capacity_requests=[_capacity_request()])
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    collections[4][0].pop("PayloadFingerprint")
+    collections[4][0].pop("Result")
+    collections[1][str(write_set.batch["ReservationBatchID"])].pop("RecordVersion")
+    for record in collections[2].values():
+        record.pop("RecordVersion")
+
+    _apply(write_set, collections)
+
+    assert len(collections[1]) == 1
+    assert len(collections[2]) == 1
+    assert len(collections[4]) == 1
+
+
+def test_idempotency_key_reuse_with_changed_payload_is_rejected_without_mutation():
+    original = _prepare(capacity_requests=[_capacity_request(reserved_minutes=120)])
+    changed = _prepare(capacity_requests=[_capacity_request(reserved_minutes=121)])
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(original, collections)
+    before = (
+        dict(collections[0]),
+        dict(collections[1]),
+        dict(collections[2]),
+        dict(collections[3]),
+        list(collections[4]),
+        set(collections[5]),
+    )
+
+    with pytest.raises(ReservationConflict, match="idempotency key"):
+        _apply(changed, collections)
+
+    assert collections == before
+
+
+def test_demand_cannot_have_two_non_terminal_reservation_batches():
+    first = _prepare(confirmation_id="CONFIRM-1")
+    competing = _prepare(confirmation_id="CONFIRM-2")
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(first, collections)
+    before = (
+        dict(collections[0]),
+        dict(collections[1]),
+        dict(collections[2]),
+        dict(collections[3]),
+        list(collections[4]),
+        set(collections[5]),
+    )
+
+    with pytest.raises(ReservationConflict, match="non-terminal reservation batch"):
+        _apply(competing, collections)
+
+    assert collections == before
+
+
+def test_stable_child_ids_and_payload_fingerprint_do_not_depend_on_request_order():
+    capacity_a = _capacity_request(
+        reservation_line_id="CAP-A", operation_id="WO-1:CCR-A"
+    )
+    capacity_b = _capacity_request(
+        reservation_line_id="CAP-B", operation_id="WO-1:CCR-B"
+    )
+    material_a = {
+        "RequirementLineID": "REQ-A",
+        "ItemID": "RM-1",
+        "LocationID": "MAIN",
+        "AllocatedQty": 10,
+    }
+    material_b = {
+        "RequirementLineID": "REQ-B",
+        "ItemID": "RM-2",
+        "LocationID": "MAIN",
+        "AllocatedQty": 20,
+    }
+
+    first = _prepare(
+        capacity_requests=[capacity_a, capacity_b],
+        material_requests=[material_a, material_b],
+    )
+    reordered = _prepare(
+        capacity_requests=[capacity_b, capacity_a],
+        material_requests=[material_b, material_a],
+    )
+
+    assert first.capacity_reservations == reordered.capacity_reservations
+    assert first.material_allocations == reordered.material_allocations
+    assert first.payload_fingerprint == reordered.payload_fingerprint
+
+
+@pytest.mark.parametrize("line_kind", ["capacity_identity", "capacity_correlation", "material"])
+def test_prepare_rejects_duplicate_semantic_reservation_lines(line_kind: str):
+    if line_kind == "capacity_identity":
+        capacity_requests = [
+            _capacity_request(),
+            _capacity_request(operation_id="WO-1:CCR-2"),
+        ]
+        material_requests = []
+    elif line_kind == "capacity_correlation":
+        capacity_requests = [
+            _capacity_request(reservation_line_id="CAP-A"),
+            _capacity_request(reservation_line_id="CAP-B"),
+        ]
+        material_requests = []
+    else:
+        capacity_requests = []
+        material_requests = [
+            {
+                "RequirementLineID": "REQ-1",
+                "ItemID": "RM-1",
+                "LocationID": "MAIN",
+                "AllocatedQty": 10,
+            },
+            {
+                "RequirementLineID": "REQ-1",
+                "ItemID": "RM-2",
+                "LocationID": "MAIN",
+                "AllocatedQty": 20,
+            },
+        ]
+
+    with pytest.raises(ReservationConflict, match="duplicate semantic"):
+        _prepare(
+            capacity_requests=capacity_requests,
+            material_requests=material_requests,
+        )
+
+
 def test_invalid_capacity_request_builds_no_partial_write_set():
     with pytest.raises(ReservationConflict, match="positive reserved minutes"):
         _prepare(
             capacity_requests=[{
+                "ReservationLineID": "CAP-LINE-1",
+                "OrderID": "WO-1",
+                "OperationID": "WO-1:CCR",
                 "ResourceID": "CCR-1",
                 "WindowStartAt": "2026-07-20T08:00:00+00:00",
                 "WindowEndAt": "2026-07-20T16:00:00+00:00",
@@ -145,6 +297,9 @@ def test_prepare_rejects_invalid_capacity_windows(
 
 def test_prepare_deep_copies_request_rows_before_validation_records_are_returned():
     capacity_request = {
+        "ReservationLineID": "CAP-LINE-1",
+        "OrderID": "WO-1",
+        "OperationID": "WO-1:CCR",
         "ResourceID": "CCR-1",
         "WindowStartAt": "2026-07-20T08:00:00+00:00",
         "WindowEndAt": "2026-07-20T16:00:00+00:00",
@@ -176,10 +331,7 @@ def test_prepare_deep_copies_request_rows_before_validation_records_are_returned
 def test_apply_deep_copies_write_set_records_into_stored_collections():
     write_set = _prepare(
         capacity_requests=[{
-            "ResourceID": "CCR-1",
-            "WindowStartAt": "2026-07-20T08:00:00+00:00",
-            "WindowEndAt": "2026-07-20T16:00:00+00:00",
-            "ReservedMinutes": 120,
+            **_capacity_request(),
             "RequestContext": {"priority": "original"},
         }]
     )
@@ -200,12 +352,7 @@ def test_apply_deep_copies_write_set_records_into_stored_collections():
 @pytest.mark.parametrize("target", ["capacity", "material", "event"])
 def test_duplicate_ids_inside_write_set_are_rejected_without_mutation(target: str):
     write_set = _prepare(
-        capacity_requests=[{
-            "ResourceID": "CCR-1",
-            "WindowStartAt": "2026-07-20T08:00:00+00:00",
-            "WindowEndAt": "2026-07-20T16:00:00+00:00",
-            "ReservedMinutes": 120,
-        }],
+        capacity_requests=[_capacity_request()],
         material_requests=[{
             "RequirementLineID": "REQ-1",
             "ItemID": "RM-1",
@@ -247,6 +394,9 @@ def test_request_control_fields_cannot_override_generated_reservation_values():
             "DemandCommitmentID": "CALLER-DEMAND-ID",
             "DemandClass": "CALLER-CLASS",
             "Status": "CallerStatus",
+            "ReservationLineID": "CAP-LINE-1",
+            "OrderID": "WO-1",
+            "OperationID": "WO-1:CCR",
             "ResourceID": "CCR-1",
             "WindowStartAt": "2026-07-20T08:00:00+00:00",
             "WindowEndAt": "2026-07-20T16:00:00+00:00",

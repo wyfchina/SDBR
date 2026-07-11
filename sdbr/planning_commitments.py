@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from math import isfinite
@@ -26,6 +26,22 @@ class DemandCommitmentConflict(ValueError):
     pass
 
 
+BUSINESS_CONTENT_FIELDS = (
+    "DemandSourceType",
+    "SourceSystem",
+    "SourceObjectType",
+    "SourceObjectID",
+    "SourceObjectVersion",
+    "DemandLineID",
+    "ItemOrProductID",
+    "LocationID",
+    "Quantity",
+    "Uom",
+    "RequiredAt",
+    "DemandClass",
+)
+
+
 def _canonical_identity(**identity_fields: str) -> str:
     return json.dumps(identity_fields, sort_keys=True, separators=(",", ":"))
 
@@ -46,6 +62,26 @@ def _validate_quantity(quantity: float) -> float:
             "Demand commitment quantity must be a finite, strictly positive real number."
         )
     return normalized_quantity
+
+
+def _canonical_utc_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _business_content_from_record(
+    record: Mapping[str, object],
+) -> dict[str, object] | None:
+    try:
+        content = {field: record[field] for field in BUSINESS_CONTENT_FIELDS}
+        required_at = datetime.fromisoformat(
+            str(content["RequiredAt"]).replace("Z", "+00:00")
+        )
+        if required_at.tzinfo is None or required_at.utcoffset() is None:
+            return None
+        content["RequiredAt"] = _canonical_utc_datetime(required_at)
+        return content
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def create_demand_commitment(
@@ -86,7 +122,7 @@ def create_demand_commitment(
         ItemOrProductID=item_or_product_id,
         LocationID=location_id,
     )
-    content = {
+    business_content = {
         "DemandSourceType": demand_source_type,
         "SourceSystem": source_system,
         "SourceObjectType": source_object_type,
@@ -97,12 +133,13 @@ def create_demand_commitment(
         "LocationID": location_id,
         "Quantity": normalized_quantity,
         "Uom": uom,
-        "RequiredAt": required_at.isoformat(),
+        "RequiredAt": _canonical_utc_datetime(required_at),
         "DemandClass": demand_class,
-        "TraceID": trace_id,
     }
     fingerprint = sha256(
-        json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            business_content, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     ).hexdigest()
     return {
         "DemandCommitmentID": f"DC-{sha256(business_key.encode('utf-8')).hexdigest()[:20]}",
@@ -110,7 +147,8 @@ def create_demand_commitment(
         "LogicalDemandKey": logical_demand_key,
         "ContentFingerprint": f"sha256:{fingerprint}",
         "Status": "PendingConfirmation",
-        **content,
+        **business_content,
+        "TraceID": trace_id,
     }
 
 
@@ -121,7 +159,11 @@ def register_demand_commitment(
     for existing in commitments.values():
         if existing.get("BusinessKey") != candidate.get("BusinessKey"):
             continue
-        if existing.get("ContentFingerprint") == candidate.get("ContentFingerprint"):
+        if (
+            existing.get("ContentFingerprint") == candidate.get("ContentFingerprint")
+            or _business_content_from_record(existing)
+            == _business_content_from_record(candidate)
+        ):
             return "Duplicate", dict(existing)
         raise DemandCommitmentConflict(
             "Demand commitment with the same business key has different content."

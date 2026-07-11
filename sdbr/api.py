@@ -7,7 +7,7 @@ from hmac import compare_digest
 from pathlib import Path
 from secrets import token_urlsafe
 from threading import Lock, RLock
-from typing import Literal
+from typing import Literal, Mapping
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Query, Request
@@ -115,9 +115,12 @@ from sdbr.planning_run_view import (
 )
 from sdbr.planning_run_reservation_bridge import (
     ReservationBatchReferenceError,
+    ReservationGraphDriftError,
+    ScheduledOccupancyEvidenceError,
     freeze_planning_reservations,
     transition_planning_reservations_for_run,
 )
+from sdbr.planning_commitments import DEMAND_SOURCE_TYPES
 from sdbr.schedule_result_view import (
     build_schedule_result_workbench,
     compare_schedule_results,
@@ -1045,6 +1048,59 @@ def _latest_completed_run_id(
     return str(completed[0].get("RunID"))
 
 
+_RESERVATION_PERSISTENCE_ROLLBACK_FIELDS = (
+    "planning_runs",
+    "planning_demand_commitments",
+    "planning_reservation_batches",
+    "ccr_capacity_reservations",
+    "material_planning_allocations",
+    "planning_reservation_events",
+    "processed_planning_event_keys",
+    "audit_events",
+    "execution_events",
+)
+
+
+def _snapshot_reservation_persistence_state(
+    store: WorkbenchStateStore,
+) -> dict[str, object]:
+    snapshot = {
+        field: deepcopy(getattr(store, field))
+        for field in _RESERVATION_PERSISTENCE_ROLLBACK_FIELDS
+    }
+    snapshot["revision"] = store.revision
+    if hasattr(store, "_revision"):
+        snapshot["_revision"] = getattr(store, "_revision")
+    if hasattr(store, "_last_saved_at"):
+        snapshot["_last_saved_at"] = getattr(store, "_last_saved_at")
+    return snapshot
+
+
+def _restore_reservation_persistence_state(
+    store: WorkbenchStateStore,
+    snapshot: Mapping[str, object],
+) -> None:
+    for field in _RESERVATION_PERSISTENCE_ROLLBACK_FIELDS:
+        current = getattr(store, field)
+        saved = snapshot[field]
+        if isinstance(current, dict) and isinstance(saved, dict):
+            current.clear()
+            current.update(deepcopy(saved))
+        elif isinstance(current, list) and isinstance(saved, list):
+            current.clear()
+            current.extend(deepcopy(saved))
+        elif isinstance(current, set) and isinstance(saved, set):
+            current.clear()
+            current.update(deepcopy(saved))
+        else:
+            raise TypeError(f"Unsupported rollback collection: {field}.")
+    store.revision = int(snapshot["revision"])
+    if "_revision" in snapshot:
+        setattr(store, "_revision", int(snapshot["_revision"]))
+    if "_last_saved_at" in snapshot:
+        setattr(store, "_last_saved_at", snapshot["_last_saved_at"])
+
+
 def _enrich_test_case_openability(cases: list[dict[str, object]]) -> None:
     for case in cases:
         actual = case.get("Actual") if isinstance(case.get("Actual"), dict) else {}
@@ -1162,8 +1218,14 @@ def create_app(
                 current_revision=active_store.current_revision(),
                 message="Workbench state changed; reload the latest state before retrying.",
             )
+        with reservation_graph_lock:
+            persistence_snapshot = _snapshot_reservation_persistence_state(
+                active_store
+            )
         response = await call_next(request)
-        if response.status_code < 400:
+        if response.status_code < 400 or getattr(
+            request.state, "persist_workbench_write", False
+        ):
             try:
                 active_store.save()
             except StateStoreRevisionConflict as error:
@@ -1175,6 +1237,12 @@ def create_app(
                     current_revision=error.current_revision,
                     message="Workbench state changed; reload completed and the request can be retried.",
                 )
+            except Exception:
+                with reservation_graph_lock:
+                    _restore_reservation_persistence_state(
+                        active_store, persistence_snapshot
+                    )
+                raise
         response.headers["X-Workbench-Revision"] = str(
             active_store.current_revision()
         )
@@ -3608,36 +3676,108 @@ def create_app(
             else []
         )
         reservation_audit_details: dict[str, object] = {}
+        reservation_error: dict[str, object] | None = None
         if frozen_batch_ids and completed_run["Status"] in {
             "Completed",
             "Failed",
             "DeadLetter",
         }:
             with reservation_graph_lock:
-                transitioned = transition_planning_reservations_for_run(
-                    run_id=run_id,
-                    run_status=str(completed_run["Status"]),
-                    batch_ids=frozen_batch_ids,
-                    occurred_at=completed_at,
-                    batches=planning_reservation_batches,
-                    capacity_reservations=ccr_capacity_reservations,
-                    material_allocations=material_planning_allocations,
+                transitioned = None
+                try:
+                    transitioned = transition_planning_reservations_for_run(
+                        run_id=run_id,
+                        run_status=str(completed_run["Status"]),
+                        occurred_at=completed_at,
+                        frozen_reservations=frozen_planning_reservations,
+                        schedule=(
+                            completed_run.get("Schedule")
+                            if isinstance(completed_run.get("Schedule"), dict)
+                            else None
+                        ),
+                        batches=planning_reservation_batches,
+                        capacity_reservations=ccr_capacity_reservations,
+                        material_allocations=material_planning_allocations,
+                    )
+                except ScheduledOccupancyEvidenceError as error:
+                    reservation_error = {
+                        "Status": "PlanningReservationScheduledOccupancyIncomplete",
+                        "CapacityReservationIDs": list(
+                            error.capacity_reservation_ids
+                        ),
+                        "Reasons": error.reasons,
+                        "Message": str(error),
+                    }
+                    completed_run.update(
+                        {
+                            "Status": "Failed",
+                            "SolverStatus": "Error",
+                            "SolverMessage": str(error),
+                            "PublicationStatus": None,
+                            "PlanningError": deepcopy(reservation_error),
+                        }
+                    )
+                    try:
+                        transitioned = transition_planning_reservations_for_run(
+                            run_id=run_id,
+                            run_status="Failed",
+                            occurred_at=completed_at,
+                            frozen_reservations=frozen_planning_reservations,
+                            batches=planning_reservation_batches,
+                            capacity_reservations=ccr_capacity_reservations,
+                            material_allocations=material_planning_allocations,
+                        )
+                    except ReservationBatchReferenceError as drift_error:
+                        reservation_error = {
+                            "Status": "PlanningReservationGraphDrift",
+                            "ReservationBatchIDs": list(frozen_batch_ids),
+                            "Message": str(drift_error),
+                        }
+                        completed_run["SolverMessage"] = str(drift_error)
+                        completed_run["PlanningError"] = deepcopy(
+                            reservation_error
+                        )
+                except (
+                    ReservationGraphDriftError,
+                    ReservationBatchReferenceError,
+                ) as error:
+                    reservation_error = {
+                        "Status": "PlanningReservationGraphDrift",
+                        "ReservationBatchIDs": list(frozen_batch_ids),
+                        "Message": str(error),
+                    }
+                    completed_run.update(
+                        {
+                            "Status": "Failed",
+                            "SolverStatus": "Error",
+                            "SolverMessage": str(error),
+                            "PublicationStatus": None,
+                            "PlanningError": deepcopy(reservation_error),
+                        }
+                    )
+                if transitioned is not None:
+                    planning_reservation_batches.clear()
+                    planning_reservation_batches.update(transitioned["Batches"])
+                    ccr_capacity_reservations.clear()
+                    ccr_capacity_reservations.update(
+                        transitioned["CapacityReservations"]
+                    )
+                    material_planning_allocations.clear()
+                    material_planning_allocations.update(
+                        transitioned["MaterialAllocations"]
+                    )
+            if reservation_error is not None:
+                detail_name = (
+                    "PlanningReservationsHeldForError"
+                    if transitioned is not None
+                    else "PlanningReservationsPreservedForGraphDrift"
                 )
-                planning_reservation_batches.clear()
-                planning_reservation_batches.update(transitioned["Batches"])
-                ccr_capacity_reservations.clear()
-                ccr_capacity_reservations.update(
-                    transitioned["CapacityReservations"]
+            else:
+                detail_name = (
+                    "PlanningReservationsConverted"
+                    if completed_run["Status"] == "Completed"
+                    else "PlanningReservationsHeldForError"
                 )
-                material_planning_allocations.clear()
-                material_planning_allocations.update(
-                    transitioned["MaterialAllocations"]
-                )
-            detail_name = (
-                "PlanningReservationsConverted"
-                if completed_run["Status"] == "Completed"
-                else "PlanningReservationsHeldForError"
-            )
             reservation_audit_details[detail_name] = list(frozen_batch_ids)
         status_history.append(
             {
@@ -3645,6 +3785,11 @@ def create_app(
                 "ChangedAt": completed_at.isoformat(),
                 "ChangedBy": payload.ExecutedBy,
                 "Reason": completed_run.get("DeadLetterReason")
+                or (
+                    completed_run.get("PlanningError", {}).get("Status")
+                    if isinstance(completed_run.get("PlanningError"), dict)
+                    else None
+                )
                 or (
                     "RetryScheduled"
                     if completed_run["Status"] == "Queued"
@@ -3664,9 +3809,29 @@ def create_app(
                 "Status": completed_run["Status"],
                 "SolverStatus": completed_run.get("SolverStatus"),
                 "AttemptCount": completed_run.get("AttemptCount", 0),
+                **(
+                    {"PlanningError": deepcopy(reservation_error)}
+                    if reservation_error is not None
+                    else {}
+                ),
                 **reservation_audit_details,
             },
         )
+        if reservation_error is not None:
+            request.state.persist_workbench_write = True
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        **reservation_error,
+                        "PlanningRun": _planning_run_public_record(
+                            completed_run
+                        ),
+                    },
+                },
+            )
         return {
             "Endpoint": endpoint,
             "StatusCode": 200,
@@ -3913,13 +4078,26 @@ def create_app(
         planning_run = planning_runs.get(run_id)
         if planning_run is None:
             return _planning_run_not_found(endpoint=endpoint, run_id=run_id)
-        if planning_run["Status"] != "DeadLetter":
+        recovery_source_status = str(planning_run["Status"])
+        if recovery_source_status not in {"DeadLetter", "Failed"}:
             return _planning_run_transition_conflict(
                 endpoint=endpoint,
                 planning_run=planning_run,
-                message=f"Planning run {run_id} is not dead-lettered and cannot be recovered.",
+                message=(
+                    f"Planning run {run_id} is neither failed nor dead-lettered "
+                    "and cannot be recovered."
+                ),
             )
         recovered_run = dict(planning_run)
+        previous_failure = {
+            "Status": recovery_source_status,
+            "FailedAt": planning_run.get("CompletedAt"),
+            "Reason": planning_run.get("DeadLetterReason")
+            or planning_run.get("SolverMessage"),
+            "AttemptCount": planning_run.get("AttemptCount"),
+            "LastFailure": planning_run.get("LastFailure"),
+            "PlanningError": deepcopy(planning_run.get("PlanningError")),
+        }
         recovered_run.update(
             {
                 "Status": "Queued",
@@ -3935,34 +4113,44 @@ def create_app(
                 "DeadLetterAt": None,
                 "DeadLetterReason": None,
                 "SolverStatus": "Pending",
-                "SolverMessage": "Dead-lettered planning run recovered for retry.",
-                "PreviousDeadLetter": {
-                    "DeadLetterAt": planning_run.get("DeadLetterAt"),
-                    "Reason": planning_run.get("DeadLetterReason"),
-                    "AttemptCount": planning_run.get("AttemptCount"),
-                    "LastFailure": planning_run.get("LastFailure"),
-                },
+                "SolverMessage": (
+                    f"{recovery_source_status} planning run recovered for retry."
+                ),
+                "PreviousFailure": previous_failure,
+                "PlanningError": None,
             }
         )
+        if recovery_source_status == "DeadLetter":
+            recovered_run["PreviousDeadLetter"] = {
+                "DeadLetterAt": planning_run.get("DeadLetterAt"),
+                "Reason": planning_run.get("DeadLetterReason"),
+                "AttemptCount": planning_run.get("AttemptCount"),
+                "LastFailure": planning_run.get("LastFailure"),
+            }
         recovered_run["StatusHistory"] = [
             *planning_run["StatusHistory"],
             {
                 "Status": "Queued",
                 "ChangedAt": payload.RecoveredAt.isoformat(),
                 "ChangedBy": payload.RecoveredBy,
-                "Reason": "DeadLetterRecovery",
+                "Reason": f"{recovery_source_status}Recovery",
             },
         ]
         planning_runs[run_id] = recovered_run
         _append_planning_run_audit_event(
             audit_events=audit_events,
             run_id=run_id,
-            action="PlanningRunDeadLetterRecovered",
+            action=(
+                "PlanningRunDeadLetterRecovered"
+                if recovery_source_status == "DeadLetter"
+                else "PlanningRunFailedRecovered"
+            ),
             actor_id=_effective_actor_id(request, payload.RecoveredBy),
             occurred_at=payload.RecoveredAt,
             details={
                 "Reason": payload.Reason,
                 "ResetAttempts": payload.ResetAttempts,
+                "RecoveredFromStatus": recovery_source_status,
             },
         )
         return {
@@ -4123,14 +4311,17 @@ def create_app(
                     for field in reservation_workbench_fields
                     if field in batch
                 }
-                if not row.get("DemandClass"):
-                    commitment = planning_demand_commitments.get(
-                        str(row.get("DemandCommitmentID"))
-                    )
-                    if commitment is not None:
+                commitment = planning_demand_commitments.get(
+                    str(row.get("DemandCommitmentID"))
+                )
+                if commitment is not None:
+                    if not row.get("DemandClass"):
                         row["DemandClass"] = deepcopy(
                             commitment.get("DemandClass")
                         )
+                    demand_source_type = commitment.get("DemandSourceType")
+                    if demand_source_type in DEMAND_SOURCE_TYPES:
+                        row["DemandSourceType"] = demand_source_type
                 rows.append(row)
             rows.sort(
                 key=lambda item: (
@@ -4151,6 +4342,14 @@ def create_app(
                 "MTACount": sum(
                     1 for row in rows if row.get("DemandClass") == "MTA"
                 ),
+                "DemandSourceTypeCounts": {
+                    source_type: sum(
+                        1
+                        for row in rows
+                        if row.get("DemandSourceType") == source_type
+                    )
+                    for source_type in sorted(DEMAND_SOURCE_TYPES)
+                },
             }
             snapshot = {
                 "Summary": summary,

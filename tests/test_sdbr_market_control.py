@@ -307,7 +307,15 @@ class TestSharedCcrLoadClassifier:
             protective_capacity_target_percent=target,
         ) == "Watch"
         assert classify_ccr_load(
+            load_percent=90.0,
+            protective_capacity_target_percent=target,
+        ) == "Watch"
+        assert classify_ccr_load(
             load_percent=95.0,
+            protective_capacity_target_percent=target,
+        ) == "NearLimit"
+        assert classify_ccr_load(
+            load_percent=100.0,
             protective_capacity_target_percent=target,
         ) == "NearLimit"
         assert classify_ccr_load(

@@ -86,8 +86,31 @@ class TestMtoOrderAndProtectionPolicy:
             "2",
         ]
         assert order["RequestedDueAt"] == "2026-07-20T18:00:00+00:00"
-        assert order["PlanningOrderID"] == "SO-100:10"
+        assert str(order["PlanningOrderID"]).startswith("MTO-")
         assert candidate_demand_commitment_id(order).startswith("DC-")
+
+    def test_planning_order_identity_isolates_delimiters_and_sources(self):
+        delimiter_left = _mto_order()
+        delimiter_left["OrderID"] = "A:B"
+        delimiter_left["DemandLineID"] = "C"
+        delimiter_right = _mto_order()
+        delimiter_right["OrderID"] = "A"
+        delimiter_right["DemandLineID"] = "B:C"
+        other_source = _mto_order()
+        other_source["SourceSystem"] = "OtherERP"
+
+        normalized = [
+            normalize_mto_order(order)
+            for order in (delimiter_left, delimiter_right, other_source)
+        ]
+
+        assert len({row["PlanningOrderID"] for row in normalized}) == 3
+        assert normalized[0]["LogicalOrderKey"] != normalized[1][
+            "LogicalOrderKey"
+        ]
+        assert normalized[2]["PlanningOrderID"] != normalize_mto_order(
+            _mto_order()
+        )["PlanningOrderID"]
 
     def test_order_fingerprint_covers_sorted_material_requirements_but_not_evaluation_time(
         self,
@@ -110,6 +133,75 @@ class TestMtoOrderAndProtectionPolicy:
             "OrderContentFingerprint"
         ]
         assert "EvaluatedAt" not in first
+
+    def test_material_requirement_permutations_have_canonical_order(self):
+        source = _mto_order()
+        source["MaterialRequirements"] = [
+            {
+                "RequirementLineID": "30",
+                "ItemID": "RM-3",
+                "LocationID": "SECONDARY",
+                "RequiredQty": 1,
+                "Uom": "KG",
+            },
+            *source["MaterialRequirements"],
+        ]
+        reversed_source = deepcopy(source)
+        reversed_source["MaterialRequirements"] = list(
+            reversed(reversed_source["MaterialRequirements"])
+        )
+
+        first = normalize_mto_order(source)
+        second = normalize_mto_order(reversed_source)
+
+        assert first["MaterialRequirements"] == second["MaterialRequirements"]
+        assert first["OrderContentFingerprint"] == second[
+            "OrderContentFingerprint"
+        ]
+
+    def test_duplicate_requirement_line_is_rejected_across_material_keys(self):
+        source = _mto_order()
+        requirements = source["MaterialRequirements"]
+        assert isinstance(requirements, list)
+        requirements.append(
+            {
+                "RequirementLineID": "10",
+                "ItemID": "RM-DIFFERENT",
+                "LocationID": "SECONDARY",
+                "RequiredQty": 1,
+                "Uom": "KG",
+            }
+        )
+
+        with pytest.raises(
+            OrderCommitmentConflict,
+            match="requirement line",
+        ):
+            normalize_mto_order(source)
+
+    def test_trace_id_only_retry_replays_but_business_change_conflicts(self):
+        first_source = _mto_order()
+        retry_source = _mto_order()
+        retry_source["TraceID"] = "TRACE-SO-100-10-V2-RETRY"
+        changed_source = deepcopy(retry_source)
+        changed_source["Quantity"] = 11
+
+        first = normalize_mto_order(first_source)
+        retry = normalize_mto_order(retry_source)
+        changed = normalize_mto_order(changed_source)
+
+        assert retry["TraceID"] != first["TraceID"]
+        assert retry["OrderKey"] == first["OrderKey"]
+        assert retry["OrderContentFingerprint"] == first[
+            "OrderContentFingerprint"
+        ]
+        assert candidate_demand_commitment_id(retry) == (
+            candidate_demand_commitment_id(first)
+        )
+        assert changed["OrderKey"] == first["OrderKey"]
+        assert changed["OrderContentFingerprint"] != first[
+            "OrderContentFingerprint"
+        ]
 
     def test_order_rejects_blank_identity_naive_times_duplicate_requirements_and_nonfinite_quantity(
         self,
@@ -184,3 +276,42 @@ class TestMtoOrderAndProtectionPolicy:
         for policy in inconsistent:
             with pytest.raises(OrderCommitmentConflict):
                 normalized_policy_dict(policy)
+
+    @pytest.mark.parametrize("approved", [0, 1, "true", None])
+    def test_policy_approved_flag_requires_exact_bool(self, approved: object):
+        policy = CcrProtectionPolicy(
+            80,
+            "ReferenceFallback",
+            approved,  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(OrderCommitmentConflict, match="boolean"):
+            normalized_policy_dict(policy)
+
+    @pytest.mark.parametrize(
+        ("source", "approved", "target", "configuration_id"),
+        [
+            ("ApprovedOperatingModel", True, 75, 123),
+            ("ApprovedOperatingModel", True, 75, ""),
+            ("ApprovedOperatingModel", True, 75, "   "),
+            ("ApprovedOperatingModel", True, 75, "OMC 1"),
+            ("ApprovedOperatingModel", True, 75, "OMC\n1"),
+            ("ReferenceFallback", False, 80, 123),
+        ],
+    )
+    def test_policy_rejects_malformed_configuration_id(
+        self,
+        source: object,
+        approved: bool,
+        target: int,
+        configuration_id: object,
+    ):
+        policy = CcrProtectionPolicy(
+            target,
+            source,  # type: ignore[arg-type]
+            approved,
+            configuration_id,  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(OrderCommitmentConflict, match="ConfigurationID"):
+            normalized_policy_dict(policy)

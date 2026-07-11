@@ -97,7 +97,6 @@ ORDER_CONTENT_FIELDS = (
     "RequestedDueAt",
     "BusinessPriority",
     "ReceivedAt",
-    "TraceID",
     "BaselinePlanningRunID",
     "RoutingID",
     "MaterialRequirements",
@@ -153,7 +152,7 @@ def normalize_mto_order(record: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(raw_requirements, list):
         raise OrderCommitmentConflict("MaterialRequirements must be a list.")
     requirements: list[dict[str, object]] = []
-    identities: set[tuple[str, str, str]] = set()
+    requirement_line_ids: set[str] = set()
     for raw in raw_requirements:
         if not isinstance(raw, Mapping):
             raise OrderCommitmentConflict("Material requirement must be an object.")
@@ -164,20 +163,22 @@ def normalize_mto_order(record: Mapping[str, object]) -> dict[str, object]:
             "RequiredQty": _positive_number(raw.get("RequiredQty"), "RequiredQty"),
             "Uom": _required_text(raw, "Uom"),
         }
-        identity = (
-            str(requirement["ItemID"]),
-            str(requirement["LocationID"]),
-            str(requirement["RequirementLineID"]),
-        )
-        if identity in identities:
+        requirement_line_id = str(requirement["RequirementLineID"])
+        if requirement_line_id in requirement_line_ids:
             raise OrderCommitmentConflict(
-                "Material requirement identity is duplicated."
+                "Material requirement line is duplicated."
             )
-        identities.add(identity)
+        requirement_line_ids.add(requirement_line_id)
         requirements.append(requirement)
     order["MaterialRequirements"] = sorted(
         requirements,
-        key=lambda row: str(row["RequirementLineID"]),
+        key=lambda row: (
+            str(row["RequirementLineID"]),
+            str(row["ItemID"]),
+            str(row["LocationID"]),
+            str(row["Uom"]),
+            float(row["RequiredQty"]),
+        ),
     )
     identity = {
         "SourceSystem": order["SourceSystem"],
@@ -189,11 +190,14 @@ def normalize_mto_order(record: Mapping[str, object]) -> dict[str, object]:
         "LocationID": order["LocationID"],
     }
     order["OrderKey"] = canonical_json(identity)
-    order["LogicalOrderKey"] = canonical_json(
+    logical_order_key = canonical_json(
         {key: value for key, value in identity.items() if key != "OrderVersion"}
     )
+    order["LogicalOrderKey"] = logical_order_key
     order["OrderVersionRank"] = [order["ReceivedAt"], order["OrderVersion"]]
-    order["PlanningOrderID"] = f"{order['OrderID']}:{order['DemandLineID']}"
+    order["PlanningOrderID"] = (
+        f"MTO-{sha256(logical_order_key.encode('utf-8')).hexdigest()}"
+    )
     order["OrderContentFingerprint"] = canonical_fingerprint(
         {field: order[field] for field in ORDER_CONTENT_FIELDS}
     )
@@ -223,13 +227,24 @@ def candidate_demand_commitment_id(order: Mapping[str, object]) -> str:
 def normalized_policy_dict(
     policy: CcrProtectionPolicy,
 ) -> dict[str, object]:
+    if type(policy.approved) is not bool:
+        raise OrderCommitmentConflict("Approved must be a boolean.")
     target = _positive_number(policy.target_percent, "TargetPercent")
-    configuration_id = (
-        policy.configuration_id.strip()
-        if isinstance(policy.configuration_id, str)
-        and policy.configuration_id.strip()
-        else None
-    )
+    if policy.configuration_id is None:
+        configuration_id = None
+    elif not isinstance(policy.configuration_id, str):
+        raise OrderCommitmentConflict(
+            "ConfigurationID must be a nonblank identifier string."
+        )
+    else:
+        configuration_id = policy.configuration_id.strip()
+        if not configuration_id or any(
+            character.isspace() or not character.isprintable()
+            for character in configuration_id
+        ):
+            raise OrderCommitmentConflict(
+                "ConfigurationID must be a nonblank identifier string."
+            )
     if policy.source == "ApprovedOperatingModel":
         if not policy.approved or configuration_id is None or target > 100:
             raise OrderCommitmentConflict("Approved policy is inconsistent.")

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 from math import isfinite
 from numbers import Real
 from typing import Literal
 
+from sdbr.operational_state import (
+    OperationalStateSnapshot,
+    evaluate_operational_state_freshness,
+)
 from sdbr.planning_commitments import create_demand_commitment
 
 
@@ -43,6 +47,8 @@ REFERENCE_CCR_PROTECTION_POLICY = CcrProtectionPolicy(
     source="ReferenceFallback",
     approved=False,
 )
+
+ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES = 60
 
 
 def require_aware(value: datetime, field: str) -> datetime:
@@ -260,4 +266,74 @@ def normalized_policy_dict(
         "Source": policy.source,
         "Approved": policy.approved,
         "ConfigurationID": configuration_id,
+    }
+
+
+def select_order_commitment_operational_snapshot(
+    *,
+    snapshots: Mapping[str, OperationalStateSnapshot],
+    evaluated_at: datetime,
+    requested_snapshot_id: str | None,
+) -> dict[str, object]:
+    evaluated_at = _utc(require_aware(evaluated_at, "evaluated_at"))
+    requested = (
+        requested_snapshot_id.strip()
+        if isinstance(requested_snapshot_id, str)
+        and requested_snapshot_id.strip()
+        else None
+    )
+    mode = "Explicit" if requested is not None else "LatestCurrent"
+    if requested is not None:
+        snapshot = snapshots.get(requested)
+        if snapshot is None:
+            raise OrderCommitmentSnapshotNotFound(requested)
+    else:
+        eligible = [
+            row
+            for row in snapshots.values()
+            if row.captured_at <= evaluated_at
+        ]
+        snapshot = max(
+            eligible,
+            key=lambda row: (row.captured_at, row.snapshot_id),
+            default=None,
+        )
+    if snapshot is None:
+        return {
+            "SnapshotSelectionMode": mode,
+            "RequestedOperationalStateSnapshotID": requested,
+            "OperationalStateSnapshot": None,
+            "OperationalStateSnapshotID": None,
+            "OperationalStateCapturedAt": None,
+            "OperationalStateFreshnessStatus": "Missing",
+            "OperationalStateAgeMinutes": None,
+            "OperationalStateMaxAgeMinutes": (
+                ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES
+            ),
+            "OperationalStateValidThroughAt": None,
+            "Acceptable": False,
+        }
+    freshness = evaluate_operational_state_freshness(
+        snapshot=snapshot,
+        evaluated_at=evaluated_at,
+        max_age_minutes=(
+            ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES
+        ),
+    )
+    return {
+        "SnapshotSelectionMode": mode,
+        "RequestedOperationalStateSnapshotID": requested,
+        "OperationalStateSnapshot": snapshot,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "OperationalStateCapturedAt": snapshot.captured_at.isoformat(),
+        "OperationalStateFreshnessStatus": freshness.status,
+        "OperationalStateAgeMinutes": freshness.age_minutes,
+        "OperationalStateMaxAgeMinutes": freshness.max_age_minutes,
+        "OperationalStateValidThroughAt": (
+            snapshot.captured_at
+            + timedelta(
+                minutes=ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES
+            )
+        ).isoformat(),
+        "Acceptable": freshness.acceptable,
     }

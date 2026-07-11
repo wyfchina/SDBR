@@ -7,13 +7,17 @@ from math import inf, nan
 import pytest
 
 from sdbr.order_commitment_evaluation import (
+    ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES,
     REFERENCE_CCR_PROTECTION_POLICY,
     CcrProtectionPolicy,
     OrderCommitmentConflict,
+    OrderCommitmentSnapshotNotFound,
     candidate_demand_commitment_id,
     normalize_mto_order,
     normalized_policy_dict,
+    select_order_commitment_operational_snapshot,
 )
+from sdbr.operational_state import OperationalStateSnapshot
 
 
 def _mto_order() -> dict[str, object]:
@@ -63,6 +67,19 @@ def _mto_order() -> dict[str, object]:
             },
         ],
     }
+
+
+def _operational_snapshot(
+    snapshot_id: str,
+    captured_at: datetime,
+) -> OperationalStateSnapshot:
+    return OperationalStateSnapshot(
+        snapshot_id=snapshot_id,
+        captured_at=captured_at,
+        inventory_buffers=[],
+        material_availability=[],
+        wip_limits=[],
+    )
 
 
 class TestMtoOrderAndProtectionPolicy:
@@ -315,3 +332,167 @@ class TestMtoOrderAndProtectionPolicy:
 
         with pytest.raises(OrderCommitmentConflict, match="ConfigurationID"):
             normalized_policy_dict(policy)
+
+
+class TestOrderCommitmentSnapshotFreshness:
+    evaluated_at = datetime(2026, 7, 12, 9, tzinfo=timezone.utc)
+
+    def test_default_selection_uses_latest_nonfuture_snapshot_with_id_tiebreak(
+        self,
+    ):
+        snapshots = {
+            snapshot.snapshot_id: snapshot
+            for snapshot in (
+                _operational_snapshot(
+                    "OPS-EARLIER",
+                    self.evaluated_at - timedelta(minutes=30),
+                ),
+                _operational_snapshot(
+                    "OPS-LATEST-A",
+                    self.evaluated_at - timedelta(minutes=10),
+                ),
+                _operational_snapshot(
+                    "OPS-LATEST-B",
+                    self.evaluated_at - timedelta(minutes=10),
+                ),
+                _operational_snapshot(
+                    "OPS-FUTURE",
+                    self.evaluated_at + timedelta(minutes=1),
+                ),
+            )
+        }
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots=snapshots,
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id=None,
+        )
+
+        assert result == {
+            "SnapshotSelectionMode": "LatestCurrent",
+            "RequestedOperationalStateSnapshotID": None,
+            "OperationalStateSnapshot": snapshots["OPS-LATEST-B"],
+            "OperationalStateSnapshotID": "OPS-LATEST-B",
+            "OperationalStateCapturedAt": "2026-07-12T08:50:00+00:00",
+            "OperationalStateFreshnessStatus": "Fresh",
+            "OperationalStateAgeMinutes": 10.0,
+            "OperationalStateMaxAgeMinutes": 60,
+            "OperationalStateValidThroughAt": "2026-07-12T09:50:00+00:00",
+            "Acceptable": True,
+        }
+
+    def test_explicit_fresh_snapshot_is_selected_exactly(self):
+        snapshots = {
+            "OPS-REQUESTED": _operational_snapshot(
+                "OPS-REQUESTED",
+                self.evaluated_at - timedelta(minutes=20),
+            ),
+            "OPS-LATEST": _operational_snapshot(
+                "OPS-LATEST",
+                self.evaluated_at - timedelta(minutes=5),
+            ),
+        }
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots=snapshots,
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id="  OPS-REQUESTED  ",
+        )
+
+        assert result["SnapshotSelectionMode"] == "Explicit"
+        assert result["RequestedOperationalStateSnapshotID"] == "OPS-REQUESTED"
+        assert result["OperationalStateSnapshot"] is snapshots["OPS-REQUESTED"]
+        assert result["OperationalStateSnapshotID"] == "OPS-REQUESTED"
+        assert result["OperationalStateFreshnessStatus"] == "Fresh"
+        assert result["Acceptable"] is True
+
+    def test_snapshot_at_sixty_minutes_is_fresh(self):
+        snapshot = _operational_snapshot(
+            "OPS-BOUNDARY",
+            self.evaluated_at - timedelta(minutes=60),
+        )
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id=None,
+        )
+
+        assert result["OperationalStateFreshnessStatus"] == "Fresh"
+        assert result["OperationalStateAgeMinutes"] == 60.0
+        assert result["OperationalStateMaxAgeMinutes"] == (
+            ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES
+        )
+        assert result["OperationalStateValidThroughAt"] == (
+            self.evaluated_at.isoformat()
+        )
+        assert result["Acceptable"] is True
+
+    def test_snapshot_older_than_sixty_minutes_is_stale(self):
+        snapshot = _operational_snapshot(
+            "OPS-STALE",
+            self.evaluated_at - timedelta(minutes=61),
+        )
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id=None,
+        )
+
+        assert result["OperationalStateFreshnessStatus"] == "Stale"
+        assert result["OperationalStateAgeMinutes"] == 61.0
+        assert result["Acceptable"] is False
+
+    def test_explicit_future_snapshot_is_future_and_unacceptable(self):
+        snapshot = _operational_snapshot(
+            "OPS-FUTURE",
+            self.evaluated_at + timedelta(minutes=1),
+        )
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id=snapshot.snapshot_id,
+        )
+
+        assert result["SnapshotSelectionMode"] == "Explicit"
+        assert result["OperationalStateFreshnessStatus"] == "Future"
+        assert result["OperationalStateAgeMinutes"] == -1.0
+        assert result["Acceptable"] is False
+
+    def test_no_nonfuture_snapshot_returns_no_current_snapshot(self):
+        future = _operational_snapshot(
+            "OPS-FUTURE",
+            self.evaluated_at + timedelta(minutes=1),
+        )
+
+        result = select_order_commitment_operational_snapshot(
+            snapshots={future.snapshot_id: future},
+            evaluated_at=self.evaluated_at,
+            requested_snapshot_id=None,
+        )
+
+        assert result == {
+            "SnapshotSelectionMode": "LatestCurrent",
+            "RequestedOperationalStateSnapshotID": None,
+            "OperationalStateSnapshot": None,
+            "OperationalStateSnapshotID": None,
+            "OperationalStateCapturedAt": None,
+            "OperationalStateFreshnessStatus": "Missing",
+            "OperationalStateAgeMinutes": None,
+            "OperationalStateMaxAgeMinutes": 60,
+            "OperationalStateValidThroughAt": None,
+            "Acceptable": False,
+        }
+
+    def test_unknown_explicit_snapshot_raises_snapshot_not_found(self):
+        with pytest.raises(OrderCommitmentSnapshotNotFound) as raised:
+            select_order_commitment_operational_snapshot(
+                snapshots={},
+                evaluated_at=self.evaluated_at,
+                requested_snapshot_id="  OPS-UNKNOWN  ",
+            )
+
+        assert raised.value.status == "OperationalStateSnapshotNotFound"
+        assert raised.value.snapshot_id == "OPS-UNKNOWN"

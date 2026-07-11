@@ -255,15 +255,44 @@ def test_queued_recovery_from_held_batch_returns_unchanged_deep_copies():
     assert batches["PRB-1"]["Details"] == {"source": "planner-confirmation"}
 
 
-def test_completed_recovery_converts_held_batch_and_capacity_without_releasing_material():
+def test_completed_recovery_restores_only_material_held_by_planning_error():
+    batches = _batches(status="HeldForPlanningError")
+    capacities = _capacities(status="HeldForPlanningError")
+    allocations = _allocations(status="HeldForPlanningError")
+    batches["PRB-1"]["MaterialAllocationIDs"] = [
+        "MA-1",
+        "MA-LINKED",
+        "MA-EXTERNAL",
+        "MA-OTHER-AUTHORITY",
+    ]
+    allocations.update(
+        {
+            "MA-LINKED": {
+                "MaterialAllocationID": "MA-LINKED",
+                "ReservationBatchID": "PRB-1",
+                "Status": "LinkedToFormalOrder",
+            },
+            "MA-EXTERNAL": {
+                "MaterialAllocationID": "MA-EXTERNAL",
+                "ReservationBatchID": "PRB-1",
+                "Status": "Externalized",
+            },
+            "MA-OTHER-AUTHORITY": {
+                "MaterialAllocationID": "MA-OTHER-AUTHORITY",
+                "ReservationBatchID": "PRB-1",
+                "Status": "AuthorityTransferred",
+            },
+        }
+    )
+
     result = transition_planning_reservations_for_run(
         run_id="RUN-RECOVERY",
         run_status="Completed",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
-        batches=_batches(status="HeldForPlanningError"),
-        capacity_reservations=_capacities(status="HeldForPlanningError"),
-        material_allocations=_allocations(status="HeldForPlanningError"),
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
     )
 
     assert result["Batches"]["PRB-1"]["Status"] == "ConvertedToScheduledOccupancy"
@@ -271,8 +300,31 @@ def test_completed_recovery_converts_held_batch_and_capacity_without_releasing_m
         result["CapacityReservations"]["CCR-1"]["Status"]
         == "ConvertedToScheduledOccupancy"
     )
-    assert result["MaterialAllocations"]["MA-1"]["Status"] == "HeldForPlanningError"
+    assert result["MaterialAllocations"]["MA-1"]["Status"] == "ActivePlanReservation"
     assert result["MaterialAllocations"]["MA-1"]["EventType"] == "PlanningRunCompleted"
+    assert result["MaterialAllocations"]["MA-1"]["PlanningRunID"] == "RUN-RECOVERY"
+    assert result["MaterialAllocations"]["MA-LINKED"]["Status"] == "LinkedToFormalOrder"
+    assert result["MaterialAllocations"]["MA-EXTERNAL"]["Status"] == "Externalized"
+    assert (
+        result["MaterialAllocations"]["MA-OTHER-AUTHORITY"]["Status"]
+        == "AuthorityTransferred"
+    )
+
+
+@pytest.mark.parametrize("malformed_batch_id", [[], {"bad": "id"}])
+def test_rejects_unhashable_child_batch_identity_as_reference_error(
+    malformed_batch_id: object,
+):
+    capacities = _capacities()
+    capacities["CCR-1"]["ReservationBatchID"] = malformed_batch_id
+
+    with pytest.raises(ReservationBatchReferenceError, match="identity"):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            batches=_batches(),
+            capacity_reservations=capacities,
+            material_allocations=_allocations(),
+        )
 
 
 @pytest.mark.parametrize("operation", ["freeze", "transition"])

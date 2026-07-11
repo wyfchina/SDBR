@@ -6,7 +6,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from pathlib import Path
 from secrets import token_urlsafe
-from threading import Lock
+from threading import Lock, RLock
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -602,7 +602,7 @@ class PlanningRunPayload(BaseModel):
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
     MaxAttempts: int = Field(default=3, ge=1, le=10)
     RetryDelaySeconds: int = Field(default=60, ge=0, le=3600)
-    PlanningReservationBatchIDs: list[str] = Field(default_factory=list)
+    PlanningReservationBatchIDs: list[object] = Field(default_factory=list)
     RequestedBy: str
     RequestedAt: datetime
 
@@ -1113,11 +1113,29 @@ def create_app(
         simio_template_registry.update(default_simio_template_registry())
         active_store.active_simio_template_id = next(iter(simio_template_registry))
     claim_lock = Lock()
+    reservation_graph_lock = RLock()
+    reservation_workbench_fields = (
+        "ReservationBatchID",
+        "DemandCommitmentID",
+        "DemandClass",
+        "Status",
+        "ConfirmationID",
+        "ConfirmedBy",
+        "ConfirmedAt",
+        "CapacityReservationIDs",
+        "MaterialAllocationIDs",
+        "PlanningRunID",
+        "LastTransitionAt",
+        "EventType",
+    )
 
     @app.middleware("http")
     async def persist_successful_writes(request, call_next):
         if require_auth and request.url.path.startswith(
-            "/planner/workbench/planning-runs"
+            (
+                "/planner/workbench/planning-runs",
+                "/planner/workbench/planning-reservations",
+            )
         ):
             auth_error = _planning_run_authorization_error(request)
             if auth_error is not None:
@@ -3160,61 +3178,95 @@ def create_app(
                         },
                     },
                 )
-        for batch_id in payload.PlanningReservationBatchIDs:
-            batch = planning_reservation_batches.get(batch_id)
-            if batch is None:
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "Endpoint": endpoint,
-                        "StatusCode": 404,
-                        "Data": {
-                            "ReservationBatchID": batch_id,
-                            "Status": "PlanningReservationBatchNotFound",
-                            "Message": "Requested planning reservation batch was not found.",
+        with reservation_graph_lock:
+            for batch_id in payload.PlanningReservationBatchIDs:
+                if not isinstance(batch_id, str) or not batch_id.strip():
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "Status": "PlanningReservationBatchInvalid",
+                                "Message": (
+                                    "Planning reservation batch graph is incomplete or "
+                                    "inconsistent."
+                                ),
+                            },
                         },
-                    },
+                    )
+                batch = planning_reservation_batches.get(batch_id)
+                if batch is None:
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 404,
+                            "Data": {
+                                "ReservationBatchID": batch_id,
+                                "Status": "PlanningReservationBatchNotFound",
+                                "Message": "Requested planning reservation batch was not found.",
+                            },
+                        },
+                    )
+                if not isinstance(batch, dict) or not isinstance(
+                    batch.get("Status"), str
+                ):
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "ReservationBatchID": batch_id,
+                                "Status": "PlanningReservationBatchInvalid",
+                                "Message": (
+                                    "Planning reservation batch graph is incomplete or "
+                                    "inconsistent."
+                                ),
+                            },
+                        },
+                    )
+                if batch.get("Status") not in {
+                    "ActivePlanReservation",
+                    "LinkedToFormalOrder",
+                }:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {
+                                "ReservationBatchID": batch_id,
+                                "Status": "PlanningReservationBatchNotEligible",
+                                "Message": (
+                                    "Requested planning reservation batch is not eligible "
+                                    "for a planning run."
+                                ),
+                            },
+                        },
+                    )
+            try:
+                frozen_planning_reservations = freeze_planning_reservations(
+                    batch_ids=payload.PlanningReservationBatchIDs,
+                    batches=planning_reservation_batches,
+                    capacity_reservations=ccr_capacity_reservations,
+                    material_allocations=material_planning_allocations,
                 )
-            if isinstance(batch, dict) and batch.get("Status") not in {
-                "ActivePlanReservation",
-                "LinkedToFormalOrder",
-            }:
+            except ReservationBatchReferenceError:
                 return JSONResponse(
                     status_code=409,
                     content={
                         "Endpoint": endpoint,
                         "StatusCode": 409,
                         "Data": {
-                            "ReservationBatchID": batch_id,
-                            "Status": "PlanningReservationBatchNotEligible",
+                            "Status": "PlanningReservationBatchInvalid",
                             "Message": (
-                                "Requested planning reservation batch is not eligible "
-                                "for a planning run."
+                                "Planning reservation batch graph is incomplete or inconsistent."
                             ),
                         },
                     },
                 )
-        try:
-            frozen_planning_reservations = freeze_planning_reservations(
-                batch_ids=payload.PlanningReservationBatchIDs,
-                batches=planning_reservation_batches,
-                capacity_reservations=ccr_capacity_reservations,
-                material_allocations=material_planning_allocations,
-            )
-        except ReservationBatchReferenceError:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "Endpoint": endpoint,
-                    "StatusCode": 409,
-                    "Data": {
-                        "Status": "PlanningReservationBatchInvalid",
-                        "Message": (
-                            "Planning reservation batch graph is incomplete or inconsistent."
-                        ),
-                    },
-                },
-            )
         planning_run = _pending_planning_run(
             payload=payload,
             master_data_version=master_data_version,
@@ -3560,21 +3612,26 @@ def create_app(
             "Failed",
             "DeadLetter",
         }:
-            transitioned = transition_planning_reservations_for_run(
-                run_id=run_id,
-                run_status=str(completed_run["Status"]),
-                batch_ids=frozen_batch_ids,
-                occurred_at=completed_at,
-                batches=planning_reservation_batches,
-                capacity_reservations=ccr_capacity_reservations,
-                material_allocations=material_planning_allocations,
-            )
-            planning_reservation_batches.clear()
-            planning_reservation_batches.update(transitioned["Batches"])
-            ccr_capacity_reservations.clear()
-            ccr_capacity_reservations.update(transitioned["CapacityReservations"])
-            material_planning_allocations.clear()
-            material_planning_allocations.update(transitioned["MaterialAllocations"])
+            with reservation_graph_lock:
+                transitioned = transition_planning_reservations_for_run(
+                    run_id=run_id,
+                    run_status=str(completed_run["Status"]),
+                    batch_ids=frozen_batch_ids,
+                    occurred_at=completed_at,
+                    batches=planning_reservation_batches,
+                    capacity_reservations=ccr_capacity_reservations,
+                    material_allocations=material_planning_allocations,
+                )
+                planning_reservation_batches.clear()
+                planning_reservation_batches.update(transitioned["Batches"])
+                ccr_capacity_reservations.clear()
+                ccr_capacity_reservations.update(
+                    transitioned["CapacityReservations"]
+                )
+                material_planning_allocations.clear()
+                material_planning_allocations.update(
+                    transitioned["MaterialAllocations"]
+                )
             detail_name = (
                 "PlanningReservationsConverted"
                 if completed_run["Status"] == "Completed"
@@ -4057,47 +4114,54 @@ def create_app(
 
     @app.get("/planner/workbench/planning-reservations/workbench")
     def planning_reservation_workbench():
-        rows: list[dict[str, object]] = []
-        for batch in planning_reservation_batches.values():
-            row = deepcopy(batch)
-            row.pop("Resources", None)
-            row.pop("Routings", None)
-            if not row.get("DemandClass"):
-                commitment = planning_demand_commitments.get(
-                    str(row.get("DemandCommitmentID"))
+        with reservation_graph_lock:
+            rows: list[dict[str, object]] = []
+            for batch in planning_reservation_batches.values():
+                row = {
+                    field: deepcopy(batch[field])
+                    for field in reservation_workbench_fields
+                    if field in batch
+                }
+                if not row.get("DemandClass"):
+                    commitment = planning_demand_commitments.get(
+                        str(row.get("DemandCommitmentID"))
+                    )
+                    if commitment is not None:
+                        row["DemandClass"] = deepcopy(
+                            commitment.get("DemandClass")
+                        )
+                rows.append(row)
+            rows.sort(
+                key=lambda item: (
+                    str(item.get("Status")),
+                    str(item.get("ReservationBatchID")),
                 )
-                if commitment is not None:
-                    row["DemandClass"] = commitment.get("DemandClass")
-            rows.append(row)
-        rows.sort(
-            key=lambda item: (
-                str(item.get("Status")),
-                str(item.get("ReservationBatchID")),
             )
-        )
-        return {
-            "Endpoint": "/planner/workbench/planning-reservations/workbench",
-            "StatusCode": 200,
-            "Data": {
-                "Summary": {
-                    "BatchCount": len(rows),
-                    "ActiveCount": sum(
-                        1
-                        for row in rows
-                        if row.get("Status") == "ActivePlanReservation"
-                    ),
-                    "MTOCount": sum(
-                        1 for row in rows if row.get("DemandClass") == "MTO"
-                    ),
-                    "MTACount": sum(
-                        1 for row in rows if row.get("DemandClass") == "MTA"
-                    ),
-                },
+            summary = {
+                "BatchCount": len(rows),
+                "ActiveCount": sum(
+                    1
+                    for row in rows
+                    if row.get("Status") == "ActivePlanReservation"
+                ),
+                "MTOCount": sum(
+                    1 for row in rows if row.get("DemandClass") == "MTO"
+                ),
+                "MTACount": sum(
+                    1 for row in rows if row.get("DemandClass") == "MTA"
+                ),
+            }
+            snapshot = {
+                "Summary": summary,
                 "Rows": rows,
                 "Boundary": (
                     "Shared planning reservations only; not ERP/WMS inventory authority."
                 ),
-            },
+            }
+        return {
+            "Endpoint": "/planner/workbench/planning-reservations/workbench",
+            "StatusCode": 200,
+            "Data": snapshot,
         }
 
     @app.get("/planner/workbench/planning-runs/{run_id}/workbench")

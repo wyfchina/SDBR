@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import get_ident
+from threading import Event, get_ident
 from time import sleep
 
 from fastapi.testclient import TestClient
@@ -96,13 +96,8 @@ def _completed_execution(**_kwargs) -> dict[str, object]:
     }
 
 
-def _failed_execution(**_kwargs) -> dict[str, object]:
-    return {
-        "Status": "Failed",
-        "SolverStatus": "Error",
-        "SolverMessage": "Failed for API integration test.",
-        "Schedule": None,
-    }
+def _raising_execution(**_kwargs) -> dict[str, object]:
+    raise RuntimeError("solver exploded before producing a result")
 
 
 # BE-RUN-011 / BE-SDBR-007 / BE-SDBR-008 / BE-SDBR-009
@@ -144,6 +139,63 @@ def test_planning_reservation_run_rejects_ineligible_batch():
     assert response.status_code == 409
     assert response.json()["Data"]["Status"] == "PlanningReservationBatchNotEligible"
     assert "RUN-INELIGIBLE-RES" not in store.planning_runs
+
+
+def test_planning_reservation_run_maps_malformed_requested_ids_to_invalid_graph():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+
+    for index, batch_id in enumerate(("", 17, ["PRB-NESTED"])):
+        response = client.post(
+            "/planner/workbench/planning-runs",
+            json={
+                **_phase0_planning_run_payload(f"RUN-MALFORMED-ID-{index}"),
+                "PlanningReservationBatchIDs": [batch_id],
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == "PlanningReservationBatchInvalid"
+
+
+def test_planning_reservation_run_maps_non_string_batch_status_to_invalid_graph():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-MALFORMED-STATUS")
+    client = TestClient(create_app(state_store=store))
+
+    for index, status in enumerate((17, [], {"bad": "status"})):
+        store.planning_reservation_batches["PRB-MALFORMED-STATUS"]["Status"] = status
+        response = client.post(
+            "/planner/workbench/planning-runs",
+            json={
+                **_phase0_planning_run_payload(f"RUN-MALFORMED-STATUS-{index}"),
+                "PlanningReservationBatchIDs": ["PRB-MALFORMED-STATUS"],
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == "PlanningReservationBatchInvalid"
+
+
+def test_planning_reservation_run_maps_unhashable_child_batch_id_to_invalid_graph():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-MALFORMED-CHILD")
+    store.ccr_capacity_reservations["CCR-RES-1"]["ReservationBatchID"] = []
+    client = TestClient(create_app(state_store=store), raise_server_exceptions=False)
+
+    response = client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-MALFORMED-CHILD"),
+            "PlanningReservationBatchIDs": ["PRB-MALFORMED-CHILD"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "PlanningReservationBatchInvalid"
 
 
 def test_planning_reservation_run_rejects_invalid_batch_graph_without_mutation():
@@ -255,7 +307,7 @@ def test_planning_reservation_failed_run_holds_for_error(monkeypatch):
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
     _seed_active_planning_reservation(store, batch_id="PRB-FAILED")
-    monkeypatch.setattr("sdbr.api._execute_planning_run", _failed_execution)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _raising_execution)
     client = TestClient(create_app(state_store=store))
     assert client.post(
         "/planner/workbench/planning-runs",
@@ -293,7 +345,7 @@ def test_planning_reservation_dead_letter_run_holds_for_error(monkeypatch):
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
     _seed_active_planning_reservation(store, batch_id="PRB-DEAD")
-    monkeypatch.setattr("sdbr.api._execute_planning_run", _failed_execution)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _raising_execution)
     client = TestClient(create_app(state_store=store))
     assert client.post(
         "/planner/workbench/planning-runs",
@@ -340,13 +392,100 @@ def test_planning_reservation_dead_letter_run_holds_for_error(monkeypatch):
     ]
 
 
+def test_planning_reservation_dead_letter_recovery_completion_restores_held_material(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-RECOVER")
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _raising_execution)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-RECOVER-RES"),
+            "PlanningReservationBatchIDs": ["PRB-RECOVER"],
+            "MaxAttempts": 1,
+        },
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-RECOVER-RES/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+            "MaxAttempts": 1,
+            "RetryDelaySeconds": 60,
+        },
+    ).status_code == 200
+    first_claim = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-phase0",
+            "ClaimedAt": "2026-06-22T07:52:00+00:00",
+            "LeaseSeconds": 120,
+        },
+    ).json()["Data"]["PlanningRun"]
+    dead_letter = client.post(
+        "/planner/workbench/planning-runs/RUN-RECOVER-RES/execute",
+        json={
+            "ExecutedBy": "worker-phase0",
+            "StartedAt": "2026-06-22T07:52:01+00:00",
+            "CompletedAt": "2026-06-22T07:52:10+00:00",
+            "LeaseToken": first_claim["LeaseToken"],
+        },
+    )
+    assert dead_letter.json()["Data"]["PlanningRun"]["Status"] == "DeadLetter"
+    assert store.material_planning_allocations["MPA-1"]["Status"] == (
+        "HeldForPlanningError"
+    )
+
+    recovered = client.post(
+        "/planner/workbench/planning-runs/RUN-RECOVER-RES/recover",
+        json={
+            "RecoveredBy": "planner-phase0",
+            "RecoveredAt": "2026-06-22T08:00:00+00:00",
+            "Reason": "Solver restored.",
+            "ResetAttempts": True,
+        },
+    )
+    assert recovered.json()["Data"]["PlanningRun"]["Status"] == "Queued"
+    assert store.material_planning_allocations["MPA-1"]["Status"] == (
+        "HeldForPlanningError"
+    )
+    second_claim = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-phase0",
+            "ClaimedAt": "2026-06-22T08:00:00+00:00",
+            "LeaseSeconds": 120,
+        },
+    ).json()["Data"]["PlanningRun"]
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    completed = client.post(
+        "/planner/workbench/planning-runs/RUN-RECOVER-RES/execute",
+        json={
+            "ExecutedBy": "worker-phase0",
+            "StartedAt": "2026-06-22T08:00:01+00:00",
+            "CompletedAt": "2026-06-22T08:00:10+00:00",
+            "LeaseToken": second_claim["LeaseToken"],
+        },
+    )
+
+    assert completed.json()["Data"]["PlanningRun"]["Status"] == "Completed"
+    material = store.material_planning_allocations["MPA-1"]
+    assert material["Status"] == "ActivePlanReservation"
+    assert material["PlanningRunID"] == "RUN-RECOVER-RES"
+    assert material["LastTransitionAt"] == "2026-06-22T08:00:10+00:00"
+    assert material["EventType"] == "PlanningRunCompleted"
+
+
 def test_planning_reservation_queued_retry_does_not_transition_or_claim_audit(
     monkeypatch,
 ):
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
     _seed_active_planning_reservation(store, batch_id="PRB-RETRY")
-    monkeypatch.setattr("sdbr.api._execute_planning_run", _failed_execution)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _raising_execution)
     client = TestClient(create_app(state_store=store))
     assert client.post(
         "/planner/workbench/planning-runs",
@@ -473,6 +612,94 @@ def test_planning_reservation_transition_is_atomic_when_bridge_fails(monkeypatch
     assert store.planning_runs["RUN-ATOMIC-RES"]["Status"] == "Pending"
 
 
+def test_planning_reservation_transition_is_atomically_visible_to_workbench_readers(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-VISIBLE")
+    graph_cleared = Event()
+    allow_update = Event()
+
+    class PausingBatchMap(dict):
+        def clear(self):
+            super().clear()
+            graph_cleared.set()
+            assert allow_update.wait(timeout=2)
+
+    store.planning_reservation_batches = PausingBatchMap(
+        store.planning_reservation_batches
+    )
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-VISIBLE-RES"),
+            "PlanningReservationBatchIDs": ["PRB-VISIBLE"],
+        },
+    ).status_code == 200
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        execution = executor.submit(
+            client.post,
+            "/planner/workbench/planning-runs/RUN-VISIBLE-RES/execute",
+            json={
+                "ExecutedBy": "planner-phase0",
+                "StartedAt": "2026-06-22T07:55:00+00:00",
+                "CompletedAt": "2026-06-22T07:56:00+00:00",
+            },
+        )
+        assert graph_cleared.wait(timeout=2)
+        read = executor.submit(
+            client.get,
+            "/planner/workbench/planning-reservations/workbench",
+        )
+        sleep(0.1)
+        read_finished_during_replacement = read.done()
+        allow_update.set()
+        executed = execution.result(timeout=2)
+        workbench = read.result(timeout=2)
+
+    assert not read_finished_during_replacement
+    assert executed.status_code == 200
+    assert workbench.json()["Data"]["Summary"]["BatchCount"] == 1
+    assert workbench.json()["Data"]["Rows"][0]["Status"] == (
+        "ConvertedToScheduledOccupancy"
+    )
+
+
+def test_historic_planning_run_without_reservation_fields_executes_with_empty_graph(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-HISTORIC-RES"),
+    ).status_code == 200
+    historic = store.planning_runs["RUN-HISTORIC-RES"]
+    historic.pop("PlanningReservationBatchIDs")
+    historic.pop("FrozenPlanningReservations")
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-HISTORIC-RES/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00+00:00",
+            "CompletedAt": "2026-06-22T07:56:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    run = response.json()["Data"]["PlanningRun"]
+    assert run["Status"] == "Completed"
+    assert run.get("PlanningReservationBatchIDs", []) == []
+    assert run.get("FrozenPlanningReservations", {}) == {}
+
+
 def test_planning_reservation_snapshot_and_transition_persist_in_sqlite(
     tmp_path,
     monkeypatch,
@@ -526,6 +753,9 @@ def test_planning_reservation_workbench_summarizes_copied_business_rows_only():
     batch.pop("DemandClass")
     batch["Resources"] = [{"ResourceID": "RAW"}]
     batch["Routings"] = [{"RoutingID": "RAW"}]
+    batch["Orders"] = [{"OrderID": "RAW"}]
+    batch["InventoryBuffers"] = [{"ItemID": "RAW"}]
+    batch["MasterDataPayload"] = {"Resources": ["RAW"]}
     client = TestClient(create_app(state_store=store))
 
     response = client.get("/planner/workbench/planning-reservations/workbench")
@@ -545,7 +775,51 @@ def test_planning_reservation_workbench_summarizes_copied_business_rows_only():
     assert data["Rows"][0]["DemandClass"] == "MTO"
     assert "Resources" not in data["Rows"][0]
     assert "Routings" not in data["Rows"][0]
+    assert "Orders" not in data["Rows"][0]
+    assert "InventoryBuffers" not in data["Rows"][0]
+    assert "MasterDataPayload" not in data["Rows"][0]
+    assert set(data["Rows"][0]) <= {
+        "ReservationBatchID",
+        "DemandCommitmentID",
+        "DemandClass",
+        "Status",
+        "ConfirmationID",
+        "ConfirmedBy",
+        "ConfirmedAt",
+        "CapacityReservationIDs",
+        "MaterialAllocationIDs",
+        "PlanningRunID",
+        "LastTransitionAt",
+        "EventType",
+    }
     assert "DemandClass" not in store.planning_reservation_batches["PRB-1"]
+
+
+# BE-OPS-001
+def test_planning_reservation_workbench_enforces_optional_rbac_convention():
+    client = TestClient(create_app(require_auth=True))
+    endpoint = "/planner/workbench/planning-reservations/workbench"
+
+    missing = client.get(endpoint)
+    viewer = client.get(
+        endpoint,
+        headers={"X-Actor-ID": "viewer-1", "X-Actor-Role": "Viewer"},
+    )
+    planner = client.get(
+        endpoint,
+        headers={"X-Actor-ID": "planner-1", "X-Actor-Role": "Planner"},
+    )
+    forbidden = client.get(
+        endpoint,
+        headers={"X-Actor-ID": "unknown-1", "X-Actor-Role": "Unknown"},
+    )
+
+    assert missing.status_code == 401
+    assert missing.json()["Data"]["Status"] == "AuthenticationRequired"
+    assert viewer.status_code == 200
+    assert planner.status_code == 200
+    assert forbidden.status_code == 403
+    assert forbidden.json()["Data"]["Status"] == "PermissionDenied"
 
 
 def test_planner_workbench_demo_endpoint_returns_payload():

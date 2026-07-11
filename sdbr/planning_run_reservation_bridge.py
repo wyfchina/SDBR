@@ -15,7 +15,7 @@ class ReservationBatchReferenceError(ValueError):
 
 
 def _require_identity(value: object, field_name: str, record_name: str) -> str:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         raise ReservationBatchReferenceError(
             f"{record_name} identity field {field_name} is required."
         )
@@ -131,13 +131,14 @@ def _resolve_declared_child_ids(
     for mapping_key, record in records.items():
         if not isinstance(record, Mapping):
             continue
-        child_batch_id = record.get("ReservationBatchID")
+        child_batch_id = _require_identity(
+            record.get("ReservationBatchID"), "ReservationBatchID", record_name
+        )
         if child_batch_id not in selected_batch_id_set:
             continue
         canonical_child_id = _require_identity(
             record.get(child_id_field), child_id_field, record_name
         )
-        _require_identity(record.get("ReservationBatchID"), "ReservationBatchID", record_name)
         if canonical_child_id in canonical_ids:
             raise ReservationBatchReferenceError(
                 f"Selected {record_name} records have duplicate canonical ID: "
@@ -326,6 +327,11 @@ def transition_planning_reservations_for_run(
             "Status"
         ) == "ActivePlanReservation":
             material["Status"] = "HeldForPlanningError"
+        elif (
+            run_status == "Completed"
+            and material.get("Status") == "HeldForPlanningError"
+        ):
+            material["Status"] = "ActivePlanReservation"
         _trace_run_record(
             material, run_id=run_id, run_status=run_status, occurred_at=occurred_at
         )

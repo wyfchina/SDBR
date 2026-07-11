@@ -239,3 +239,31 @@ def _commit_candidate(
         }
     )
     state["CandidateAssignments"] = assignments
+
+
+def _reservation_request(
+    *,
+    order_id: str,
+    operation: Mapping[str, object],
+    state: Mapping[str, object],
+    operation_deadline: datetime,
+) -> dict[str, object]:
+    window_start = state["WindowStart"]
+    window_end = state["WindowEnd"]
+    assert isinstance(window_start, datetime)
+    assert isinstance(window_end, datetime)
+    latest = min(window_end, operation_deadline)
+    if not window_start < latest <= window_end:
+        raise ValueError("Reservation deadline must be inside its exact window.")
+    return {
+        "ReservationLineID": (
+            f"{operation['OperationID']}:{_utc_iso(window_start)}"
+        ),
+        "OrderID": order_id,
+        "OperationID": operation["OperationID"],
+        "ResourceID": operation["ResourceID"],
+        "WindowStartAt": _utc_iso(window_start),
+        "WindowEndAt": _utc_iso(window_end),
+        "ReservedMinutes": int(operation["DurationMinutes"]),
+        "LatestAllowedCompletionAt": _utc_iso(latest),
+    }

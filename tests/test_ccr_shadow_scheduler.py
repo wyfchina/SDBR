@@ -3,11 +3,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from sdbr.ccr_shadow_scheduler import (
+    _commit_candidate,
     _extract_route_operations,
+    _reservation_request,
     _validate_shadow_request,
     _window_metrics,
 )
 from sdbr.planner_workbench import Operation, Resource, Routing
+from sdbr.planning_commitments import create_demand_commitment
+from sdbr.planning_reservations import prepare_reservation_confirmation
 from sdbr.scheduling_solver import SetupTransition
 
 
@@ -176,3 +180,59 @@ class TestCcrShadowCapacityParity:
         assert aggregate["ScheduledLoadBeforeDeadlineMinutes"] == 0
         assert aggregate["AggregateRemainingMinutes"] == 300
         assert aggregate["Fits"] is False
+
+    def test_repeated_visits_share_only_their_exact_resource_window(self):
+        state = self._state()
+        _commit_candidate(
+            state,
+            minutes=300,
+            latest_allowed_completion_at=state["WindowEnd"],
+        )
+        second = _window_metrics(
+            state,
+            usable_start=state["WindowStart"],
+            deadline=state["WindowEnd"],
+            candidate_minutes=200,
+        )
+        assert second["AggregateRemainingMinutes"] == 180
+        assert second["Fits"] is False
+
+    def test_end_equal_deadline_is_accepted_by_phase0(self):
+        operation = {
+            "OperationID": "SO-1:10:CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 60,
+        }
+        state = self._state()
+        request = _reservation_request(
+            order_id="SO-1:10",
+            operation=operation,
+            state=state,
+            operation_deadline=state["WindowEnd"],
+        )
+        demand = create_demand_commitment(
+            demand_source_type="MTOCustomerOrder",
+            source_system="MockERP",
+            source_object_type="CustomerOrder",
+            source_object_id="SO-1",
+            source_object_version="1",
+            demand_line_id="10",
+            item_or_product_id="FG-1",
+            location_id="MAIN",
+            quantity=1.0,
+            uom="EA",
+            required_at=state["WindowEnd"],
+            demand_class="MTO",
+            trace_id="TRACE-1",
+        )
+        write_set = prepare_reservation_confirmation(
+            demand_commitment=demand,
+            existing_commitments={},
+            confirmation_id="DEC-1",
+            confirmed_by="planner-1",
+            confirmed_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
+            capacity_requests=[request],
+            material_requests=[],
+        )
+        assert request["LatestAllowedCompletionAt"] == request["WindowEndAt"]
+        assert len(write_set.capacity_reservations) == 1

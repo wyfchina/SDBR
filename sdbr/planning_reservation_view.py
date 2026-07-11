@@ -36,10 +36,22 @@ def reservation_load_by_bucket(
             },
         )
         if _demand_class(reservation) == "MTA":
-            bucket["MtaReservationMinutes"] += reserved_minutes
+            bucket["MtaReservationMinutes"] = _checked_finite_sum(
+                bucket["MtaReservationMinutes"],
+                reserved_minutes,
+                "MtaReservationMinutes",
+            )
         else:
-            bucket["MtoReservationMinutes"] += reserved_minutes
-        bucket["ReservationLoadMinutes"] += reserved_minutes
+            bucket["MtoReservationMinutes"] = _checked_finite_sum(
+                bucket["MtoReservationMinutes"],
+                reserved_minutes,
+                "MtoReservationMinutes",
+            )
+        bucket["ReservationLoadMinutes"] = _checked_finite_sum(
+            bucket["ReservationLoadMinutes"],
+            reserved_minutes,
+            "ReservationLoadMinutes",
+        )
     return buckets
 
 
@@ -63,8 +75,10 @@ def planning_allocated_qty_for_other_demands(
             continue
         if str(allocation.get("DemandCommitmentID")) == current_demand_commitment_id:
             continue
-        allocated_qty += _finite_non_negative(
-            allocation.get("AllocatedQty"), "AllocatedQty"
+        allocated_qty = _checked_finite_sum(
+            allocated_qty,
+            _finite_non_negative(allocation.get("AllocatedQty"), "AllocatedQty"),
+            "AllocatedQty",
         )
     return allocated_qty
 
@@ -144,6 +158,21 @@ def _finite_non_negative(value: object, field: str) -> float:
     if not isfinite(normalized_value) or normalized_value < 0:
         raise ValueError(f"{field} must be a finite non-negative number.")
     return normalized_value
+
+
+def _checked_finite_sum(
+    left: int | float,
+    right: int | float,
+    field: str,
+) -> int | float:
+    try:
+        total = left + right
+        is_total_finite = isfinite(float(total))
+    except OverflowError as error:
+        raise ValueError(f"{field} aggregate overflow.") from error
+    if not is_total_finite:
+        raise ValueError(f"{field} aggregate overflow.")
+    return total
 
 
 def _demand_class(record: dict[str, object]) -> str:

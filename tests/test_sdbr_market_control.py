@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from sdbr.planning_reservation_view import reservation_load_by_bucket
 from sdbr.sdbr_market_control import (
     build_ccr_planned_load,
@@ -101,6 +103,108 @@ def test_ccr_planned_load_ignores_valid_reservations_outside_visible_buckets():
     bucket = result["Buckets"][0]
     assert bucket["ReservationLoadMinutes"] == 0
     assert bucket["TotalPlannedLoadMinutes"] == 0
+
+
+def test_ccr_planned_load_rejects_finite_scheduled_and_reservation_total_overflow():
+    with pytest.raises(ValueError, match="TotalPlannedLoadMinutes.*aggregate overflow"):
+        build_ccr_planned_load(
+            gantt_rows=[{
+                "ResourceID": "CCR-1",
+                "Bars": [{
+                    "OrderID": "WO-MTO-1",
+                    "OperationID": "DRUM",
+                    "Start": "2026-07-20T08:00:00+00:00",
+                    "DurationMinutes": 1e308,
+                }],
+            }],
+            resources=[{
+                "ResourceID": "CCR-1",
+                "Name": "Constraint",
+                "IsConstraint": True,
+                "DailyCapacityMinutes": {"2026-07-20": 1},
+            }],
+            orders=[{"OrderID": "WO-MTO-1", "DemandClass": "MTO"}],
+            ddmrp_lines=[],
+            horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+            capacity_reservations=[{
+                "CapacityReservationID": "R-1",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": "2026-07-20T10:00:00+00:00",
+                "ReservedMinutes": 1e308,
+                "DemandClass": "MTA",
+                "Status": "ActivePlanReservation",
+            }],
+        )
+
+
+def test_ccr_planned_load_rejects_finite_load_percent_overflow():
+    with pytest.raises(ValueError, match="LoadPercent.*aggregate overflow"):
+        build_ccr_planned_load(
+            gantt_rows=[{
+                "ResourceID": "CCR-1",
+                "Bars": [{
+                    "OrderID": "WO-MTO-1",
+                    "OperationID": "DRUM",
+                    "Start": "2026-07-20T08:00:00+00:00",
+                    "DurationMinutes": 1e308,
+                }],
+            }],
+            resources=[{
+                "ResourceID": "CCR-1",
+                "Name": "Constraint",
+                "IsConstraint": True,
+                "DailyCapacityMinutes": {"2026-07-20": 1},
+            }],
+            orders=[{"OrderID": "WO-MTO-1", "DemandClass": "MTO"}],
+            ddmrp_lines=[],
+            horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
+
+
+def test_ccr_planned_load_rejects_finite_summary_mto_aggregate_overflow():
+    with pytest.raises(ValueError, match="Summary.MtoLoadMinutes.*aggregate overflow"):
+        build_ccr_planned_load(
+            gantt_rows=[
+                {
+                    "ResourceID": "CCR-1",
+                    "Bars": [{
+                        "OrderID": "WO-MTO-1",
+                        "OperationID": "DRUM",
+                        "Start": "2026-07-20T08:00:00+00:00",
+                        "DurationMinutes": 1e308,
+                    }],
+                },
+                {
+                    "ResourceID": "CCR-2",
+                    "Bars": [{
+                        "OrderID": "WO-MTO-2",
+                        "OperationID": "DRUM",
+                        "Start": "2026-07-20T08:00:00+00:00",
+                        "DurationMinutes": 1e308,
+                    }],
+                },
+            ],
+            resources=[
+                {
+                    "ResourceID": "CCR-1",
+                    "Name": "Constraint 1",
+                    "IsConstraint": True,
+                    "DailyCapacityMinutes": {"2026-07-20": 10**308},
+                },
+                {
+                    "ResourceID": "CCR-2",
+                    "Name": "Constraint 2",
+                    "IsConstraint": True,
+                    "DailyCapacityMinutes": {"2026-07-20": 10**308},
+                },
+            ],
+            orders=[
+                {"OrderID": "WO-MTO-1", "DemandClass": "MTO"},
+                {"OrderID": "WO-MTO-2", "DemandClass": "MTO"},
+            ],
+            ddmrp_lines=[],
+            horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
 
 
 def test_ccr_planned_load_splits_mto_and_mta_load():

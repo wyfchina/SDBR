@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
+from math import isfinite
 from typing import Any
 
 from sdbr.planning_reservation_view import reservation_load_by_bucket
@@ -77,9 +78,13 @@ def build_ccr_planned_load(
             demand_class = _demand_class(orders_by_id.get(order_id, {}))
             duration = _duration_minutes(bar)
             if demand_class == "MTA":
-                bucket["MtaLoadMinutes"] = int(bucket["MtaLoadMinutes"]) + duration
+                bucket["MtaLoadMinutes"] = _checked_finite_sum(
+                    int(bucket["MtaLoadMinutes"]), duration, "MtaLoadMinutes"
+                )
             else:
-                bucket["MtoLoadMinutes"] = int(bucket["MtoLoadMinutes"]) + duration
+                bucket["MtoLoadMinutes"] = _checked_finite_sum(
+                    int(bucket["MtoLoadMinutes"]), duration, "MtoLoadMinutes"
+                )
             _dict_list(bucket["DemandBreakdown"]).append(
                 {
                     "OrderID": order_id,
@@ -97,8 +102,12 @@ def build_ccr_planned_load(
             continue
         mto_minutes = reservation_load["MtoReservationMinutes"]
         mta_minutes = reservation_load["MtaReservationMinutes"]
-        bucket["MtoLoadMinutes"] = int(bucket["MtoLoadMinutes"]) + mto_minutes
-        bucket["MtaLoadMinutes"] = int(bucket["MtaLoadMinutes"]) + mta_minutes
+        bucket["MtoLoadMinutes"] = _checked_finite_sum(
+            int(bucket["MtoLoadMinutes"]), mto_minutes, "MtoLoadMinutes"
+        )
+        bucket["MtaLoadMinutes"] = _checked_finite_sum(
+            int(bucket["MtaLoadMinutes"]), mta_minutes, "MtaLoadMinutes"
+        )
         bucket["ReservationLoadMinutes"] = reservation_load["ReservationLoadMinutes"]
 
     for bucket in buckets.values():
@@ -106,9 +115,13 @@ def build_ccr_planned_load(
 
     rows = []
     for bucket in buckets.values():
-        total = bucket["MtoLoadMinutes"] + bucket["MtaLoadMinutes"]
+        total = _checked_finite_sum(
+            bucket["MtoLoadMinutes"],
+            bucket["MtaLoadMinutes"],
+            "TotalPlannedLoadMinutes",
+        )
         capacity = int(bucket["CapacityMinutes"])
-        load_percent = round(total / capacity * 100, 2) if capacity > 0 else 0.0
+        load_percent = _finite_load_percent(total, capacity)
         bucket["TotalPlannedLoadMinutes"] = total
         bucket["LoadPercent"] = load_percent
         bucket["Status"] = _load_status(
@@ -122,7 +135,10 @@ def build_ccr_planned_load(
         ddmrp_lines=ddmrp_lines,
         orders=orders,
     )
-    max_load = max((float(item["LoadPercent"]) for item in rows), default=0.0)
+    max_load = _finite_value(
+        max((float(item["LoadPercent"]) for item in rows), default=0.0),
+        "Summary.MaxLoadPercent",
+    )
     status = _summary_load_status(rows)
     return {
         "Mode": "SDBRCCRPlannedLoadV1",
@@ -136,8 +152,14 @@ def build_ccr_planned_load(
             "Status": status,
             "BucketCount": len(rows),
             "ResourceCount": len({str(item["ResourceID"]) for item in rows}),
-            "MtoLoadMinutes": sum(item["MtoLoadMinutes"] for item in rows),
-            "MtaLoadMinutes": sum(item["MtaLoadMinutes"] for item in rows),
+            "MtoLoadMinutes": _checked_finite_total(
+                (item["MtoLoadMinutes"] for item in rows),
+                "Summary.MtoLoadMinutes",
+            ),
+            "MtaLoadMinutes": _checked_finite_total(
+                (item["MtaLoadMinutes"] for item in rows),
+                "Summary.MtaLoadMinutes",
+            ),
             "MaxLoadPercent": round(max_load, 2),
             "ProtectiveCapacityTargetPercent": protective_capacity_target_percent,
             "MappedMtaSuggestionCount": mta_load["MappedSuggestionCount"],
@@ -339,6 +361,48 @@ def _duration_minutes(bar: dict[str, object]) -> int:
     if not start or not end:
         return 0
     return max(int((end - start).total_seconds() // 60), 0)
+
+
+def _checked_finite_sum(
+    left: int | float,
+    right: int | float,
+    field: str,
+) -> int | float:
+    try:
+        total = left + right
+    except OverflowError as error:
+        raise ValueError(f"{field} aggregate overflow.") from error
+    return _finite_value(total, field)
+
+
+def _checked_finite_total(
+    values: object,
+    field: str,
+) -> int | float:
+    total: int | float = 0
+    for value in values:
+        total = _checked_finite_sum(total, value, field)
+    return total
+
+
+def _finite_load_percent(total: int | float, capacity: int) -> float:
+    if capacity <= 0:
+        return 0.0
+    try:
+        load_percent = total / capacity * 100
+    except OverflowError as error:
+        raise ValueError("LoadPercent aggregate overflow.") from error
+    return round(_finite_value(load_percent, "LoadPercent"), 2)
+
+
+def _finite_value(value: int | float, field: str) -> int | float:
+    try:
+        is_value_finite = isfinite(float(value))
+    except OverflowError as error:
+        raise ValueError(f"{field} aggregate overflow.") from error
+    if not is_value_finite:
+        raise ValueError(f"{field} aggregate overflow.")
+    return value
 
 
 def _mto_time_buffer_position(

@@ -284,6 +284,30 @@ def test_capacity_projection_rejects_non_finite_or_negative_reserved_minutes(
         ])
 
 
+def test_capacity_projection_rejects_finite_reservation_bucket_aggregate_overflow():
+    reservations = [
+        {
+            "CapacityReservationID": "R-1",
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+            "ReservedMinutes": 1e308,
+            "DemandClass": "MTO",
+            "Status": "ActivePlanReservation",
+        },
+        {
+            "CapacityReservationID": "R-2",
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-20T10:00:00+00:00",
+            "ReservedMinutes": 1e308,
+            "DemandClass": "MTO",
+            "Status": "ActivePlanReservation",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="MtoReservationMinutes.*aggregate overflow"):
+        reservation_load_by_bucket(reservations)
+
+
 @pytest.mark.parametrize(
     ("qualified_supply_qty", "authority_allocated_qty", "message"),
     [(float("inf"), 0, "qualified_supply_qty"), (10, -1, "authority_allocated_qty")],
@@ -315,6 +339,35 @@ def test_material_projection_rejects_non_finite_active_allocation_quantity():
                 "AllocatedQty": float("nan"),
                 "Status": "ActivePlanReservation",
             }],
+            item_id="RM-1",
+            location_id="MAIN",
+            current_demand_commitment_id="DC-A",
+        )
+
+
+def test_material_projection_rejects_finite_allocation_aggregate_overflow():
+    allocations = [
+        {
+            "MaterialAllocationID": "MA-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "DemandCommitmentID": "DC-B",
+            "AllocatedQty": 1e308,
+            "Status": "ActivePlanReservation",
+        },
+        {
+            "MaterialAllocationID": "MA-2",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "DemandCommitmentID": "DC-C",
+            "AllocatedQty": 1e308,
+            "Status": "ActivePlanReservation",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="AllocatedQty.*aggregate overflow"):
+        planning_allocated_qty_for_other_demands(
+            allocations=allocations,
             item_id="RM-1",
             location_id="MAIN",
             current_demand_commitment_id="DC-A",

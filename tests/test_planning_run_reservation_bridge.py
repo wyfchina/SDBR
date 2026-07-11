@@ -130,6 +130,49 @@ def test_freeze_copies_only_explicit_eligible_batches_in_caller_and_ledger_order
     ]
 
 
+def test_empty_selection_ignores_malformed_unrelated_child_batch_references():
+    capacities = _capacities()
+    allocations = _allocations()
+    capacities["CCR-OTHER"]["ReservationBatchID"] = []
+    allocations["MA-OTHER"]["ReservationBatchID"] = {"bad": "id"}
+
+    frozen = freeze_planning_reservations(
+        batch_ids=[],
+        batches=_batches(),
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    assert frozen == {
+        "ReservationBatchIDs": [],
+        "Batches": [],
+        "CapacityReservations": [],
+        "MaterialAllocations": [],
+    }
+
+
+def test_selected_batch_ignores_malformed_unrelated_child_batch_references():
+    capacities = _capacities()
+    allocations = _allocations()
+    capacities["CCR-OTHER"]["ReservationBatchID"] = []
+    allocations["MA-OTHER"]["ReservationBatchID"] = {"bad": "id"}
+
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        batches=_batches(),
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+    assert frozen["ReservationBatchIDs"] == ["PRB-1"]
+    assert [row["CapacityReservationID"] for row in frozen["CapacityReservations"]] == [
+        "CCR-1"
+    ]
+    assert [row["MaterialAllocationID"] for row in frozen["MaterialAllocations"]] == [
+        "MA-1"
+    ]
+
+
 @pytest.mark.parametrize(
     ("batch_ids", "batches", "message"),
     [
@@ -311,19 +354,27 @@ def test_completed_recovery_restores_only_material_held_by_planning_error():
     )
 
 
+@pytest.mark.parametrize(
+    ("collection", "record_id"),
+    [("capacity", "CCR-1"), ("material", "MA-1")],
+)
 @pytest.mark.parametrize("malformed_batch_id", [[], {"bad": "id"}])
 def test_rejects_unhashable_child_batch_identity_as_reference_error(
+    collection: str,
+    record_id: str,
     malformed_batch_id: object,
 ):
     capacities = _capacities()
-    capacities["CCR-1"]["ReservationBatchID"] = malformed_batch_id
+    allocations = _allocations()
+    records = capacities if collection == "capacity" else allocations
+    records[record_id]["ReservationBatchID"] = malformed_batch_id
 
     with pytest.raises(ReservationBatchReferenceError, match="identity"):
         freeze_planning_reservations(
             batch_ids=["PRB-1"],
             batches=_batches(),
             capacity_reservations=capacities,
-            material_allocations=_allocations(),
+            material_allocations=allocations,
         )
 
 

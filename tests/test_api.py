@@ -180,22 +180,82 @@ def test_planning_reservation_run_maps_non_string_batch_status_to_invalid_graph(
 
 
 def test_planning_reservation_run_maps_unhashable_child_batch_id_to_invalid_graph():
+    for collection_name, record_id in (
+        ("ccr_capacity_reservations", "CCR-RES-1"),
+        ("material_planning_allocations", "MPA-1"),
+    ):
+        store = WorkbenchStateStore()
+        seed_baseline_test_data(store)
+        _seed_active_planning_reservation(store, batch_id="PRB-MALFORMED-CHILD")
+        collection = getattr(store, collection_name)
+        collection[record_id]["ReservationBatchID"] = []
+        client = TestClient(
+            create_app(state_store=store), raise_server_exceptions=False
+        )
+
+        response = client.post(
+            "/planner/workbench/planning-runs",
+            json={
+                **_phase0_planning_run_payload(f"RUN-MALFORMED-{record_id}"),
+                "PlanningReservationBatchIDs": ["PRB-MALFORMED-CHILD"],
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == "PlanningReservationBatchInvalid"
+
+
+def test_planning_run_without_reservations_ignores_malformed_unrelated_children():
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
-    _seed_active_planning_reservation(store, batch_id="PRB-MALFORMED-CHILD")
-    store.ccr_capacity_reservations["CCR-RES-1"]["ReservationBatchID"] = []
+    store.ccr_capacity_reservations["CCR-UNRELATED"] = {
+        "CapacityReservationID": "CCR-UNRELATED",
+        "ReservationBatchID": [],
+    }
+    store.material_planning_allocations["MPA-UNRELATED"] = {
+        "MaterialAllocationID": "MPA-UNRELATED",
+        "ReservationBatchID": {"bad": "id"},
+    }
     client = TestClient(create_app(state_store=store), raise_server_exceptions=False)
 
     response = client.post(
         "/planner/workbench/planning-runs",
         json={
-            **_phase0_planning_run_payload("RUN-MALFORMED-CHILD"),
-            "PlanningReservationBatchIDs": ["PRB-MALFORMED-CHILD"],
+            **_phase0_planning_run_payload("RUN-NO-RES-MALFORMED-UNRELATED"),
+            "PlanningReservationBatchIDs": [],
         },
     )
 
-    assert response.status_code == 409
-    assert response.json()["Data"]["Status"] == "PlanningReservationBatchInvalid"
+    assert response.status_code == 200
+    assert response.json()["Data"]["PlanningRun"]["PlanningReservationBatchIDs"] == []
+
+
+def test_selected_reservation_ignores_malformed_unrelated_children():
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    _seed_active_planning_reservation(store, batch_id="PRB-SCOPED")
+    store.ccr_capacity_reservations["CCR-UNRELATED"] = {
+        "CapacityReservationID": "CCR-UNRELATED",
+        "ReservationBatchID": [],
+    }
+    store.material_planning_allocations["MPA-UNRELATED"] = {
+        "MaterialAllocationID": "MPA-UNRELATED",
+        "ReservationBatchID": {"bad": "id"},
+    }
+    client = TestClient(create_app(state_store=store), raise_server_exceptions=False)
+
+    response = client.post(
+        "/planner/workbench/planning-runs",
+        json={
+            **_phase0_planning_run_payload("RUN-SCOPED-MALFORMED-UNRELATED"),
+            "PlanningReservationBatchIDs": ["PRB-SCOPED"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["Data"]["PlanningRun"]["PlanningReservationBatchIDs"] == [
+        "PRB-SCOPED"
+    ]
 
 
 def test_planning_reservation_run_rejects_invalid_batch_graph_without_mutation():
@@ -742,6 +802,69 @@ def test_planning_reservation_snapshot_and_transition_persist_in_sqlite(
     )
     assert restored.material_planning_allocations["MPA-1"]["Status"] == (
         "ActivePlanReservation"
+    )
+
+
+def test_planning_reservation_sqlite_conflict_reloads_in_place_and_discards_stale_mutations(
+    tmp_path,
+):
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    database_path = tmp_path / "planning-reservation-conflict.db"
+    seed_store = SQLiteWorkbenchStateStore(database_path)
+    seed_baseline_test_data(seed_store)
+    _seed_active_planning_reservation(seed_store, batch_id="PRB-CONFLICT")
+    seed_store.save()
+
+    first_store = SQLiteWorkbenchStateStore(database_path)
+    stale_store = SQLiteWorkbenchStateStore(database_path)
+    first_client = TestClient(create_app(state_store=first_store))
+    stale_client = TestClient(create_app(state_store=stale_store))
+    stale_batch_alias = stale_store.planning_reservation_batches
+    stale_capacity_alias = stale_store.ccr_capacity_reservations
+    stale_material_alias = stale_store.material_planning_allocations
+
+    first_store.planning_reservation_batches["PRB-CONFLICT"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    first_store.ccr_capacity_reservations["CCR-RES-1"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    first_store.material_planning_allocations["MPA-1"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    assert first_client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-RESERVATION-WRITER",
+            "CapturedAt": "2026-06-20T06:00:00+00:00",
+        },
+    ).status_code == 200
+
+    stale_batch_alias["PRB-CONFLICT"]["Status"] = "HeldForPlanningError"
+    stale_capacity_alias["CCR-RES-1"]["Status"] = "HeldForPlanningError"
+    stale_material_alias["MPA-1"]["Status"] = "HeldForPlanningError"
+    conflict = stale_client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-STALE-RESERVATION-WRITER",
+            "CapturedAt": "2026-06-20T06:05:00+00:00",
+        },
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["Data"]["Status"] == "StateStoreRevisionConflict"
+    assert stale_store.planning_reservation_batches is stale_batch_alias
+    assert stale_store.ccr_capacity_reservations is stale_capacity_alias
+    assert stale_store.material_planning_allocations is stale_material_alias
+    assert stale_batch_alias["PRB-CONFLICT"]["Status"] == "LinkedToFormalOrder"
+    assert stale_capacity_alias["CCR-RES-1"]["Status"] == "LinkedToFormalOrder"
+    assert stale_material_alias["MPA-1"]["Status"] == "LinkedToFormalOrder"
+    assert (
+        stale_client.get(
+            "/planner/workbench/operational-state/snapshots/OPS-STALE-RESERVATION-WRITER"
+        ).status_code
+        == 404
     )
 
 

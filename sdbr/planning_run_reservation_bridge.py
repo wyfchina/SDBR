@@ -131,9 +131,9 @@ def _resolve_declared_child_ids(
     for mapping_key, record in records.items():
         if not isinstance(record, Mapping):
             continue
-        child_batch_id = _require_identity(
-            record.get("ReservationBatchID"), "ReservationBatchID", record_name
-        )
+        child_batch_id = record.get("ReservationBatchID")
+        if not isinstance(child_batch_id, str) or not child_batch_id:
+            continue
         if child_batch_id not in selected_batch_id_set:
             continue
         canonical_child_id = _require_identity(

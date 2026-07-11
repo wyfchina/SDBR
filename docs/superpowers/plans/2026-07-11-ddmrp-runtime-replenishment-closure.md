@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** First deliver an authority-correct, immutable DDMRP runtime evaluation and read-only replenishment workbench; preserve planner-confirmed Buy/Make and atomic Make candidate/CCR/material activation as an explicitly blocked second tranche that cannot execute until Contract Agent-accepted target-time, ERP/MRP advice, Plan BOM/feasibility, and production-authority evidence exists.
+**Goal:** First deliver an authority-correct, immutable DDMRP runtime evaluation and read-only replenishment workbench; preserve planner-confirmed Buy/Make and atomic Make candidate/CCR/material activation as an explicitly blocked second tranche that cannot execute until Contract Agent-accepted target-time, ERP/MRP advice, Plan BOM/feasibility, and production-authority evidence exists. Transfer remains a separate deferred non-claim outside both executable NOW scope and this activation blueprint.
 
 **Architecture:** Keep `sdbr/ddmrp.py` as the pure V1 net-flow engine and keep `sdbr/ddsop_runtime_planning_input.py` as the only current consumer of `DDSOP-RUNTIME-PLANNING-INPUT-V1`. Add an immutable evaluation/recommendation ledger and safe workbench projection now, but record missing operational authority as structured gates rather than accepting caller-asserted advice or deriving an unsupported target date. After the external gate is accepted, a fresh contract-mapping revision may activate Buy/Make confirmation; Make then uses the shared reservation foundation through copy-on-write composite staging and extends the Planning Run frozen graph so the candidate, CCR reservations, and material allocations have one lifecycle.
 
@@ -42,7 +42,8 @@
 - Public-demo, reviewed, fixture-seeded, candidate-only, or unresolved evidence cannot mutate operational shared reservation ledgers.
 - Preserve OR-Tools CP-SAT as the only executable solver for new Planning Runs. This work does not change Gurobi or Simio scope.
 - Do not expose raw DDAE payloads, ERP/MRP evidence, BOM rows, capacity requests, material requests, or raw JSON in the planner workflow.
-- Every changed/new test file has an exact module docstring naming its applicable `BE-*`/`UI-*` acceptance IDs.
+- Focused single-capability test modules use an exact module docstring naming their applicable `BE-*`/`UI-*` acceptance IDs. Multi-capability modules such as `tests/test_api.py` use an exact comment on every new test; the DDMRP RBAC tests cite `BE-OPS-001` as well as the applicable DDMRP/UI ID.
+- The approved design's eventual Transfer behavior is intentionally not claimed by `BE-DDMRP-008`, `BE-DDMRP-009`, or `UI-DDMRP-004` in this plan. Transfer requires accepted source-selection, feasibility, governance, and authority evidence plus a future specification revision and implementation plan.
 - Do not modify `nofinish/`.
 
 ## Review Finding Closure Map
@@ -67,6 +68,15 @@
 | M3 browser reproducibility | Task 11 fixes the seed, database, port, hidden process, health check, shutdown, evidence paths, and 1280/1920/390 viewports. |
 | M4 spec versions/date | `2.80 -> 2.81` and `5.35 -> 5.36`, all dated `2026-07-11`, are exact and justified. |
 | M5 global-only traceability | The per-test table at the end requires module/test-level BE/UI edits in every touched test file. |
+| Round-2 I1 NOW replay/global revision | Task 3 replaces the global store revision with a canonical DDMRP-relevant planning-ledger identity. Tasks 4/5 persist an immutable request-result record, and Task 8 performs exact lookup/graph validation before rebuilding. |
+| Round-2 I2 strict model/runtime time | Task 8 imports `ConfigDict`/`TypeAdapter`, forbids request extras, parses `RuntimeEvidenceSnapshot.SnapshotAt` as `AwareDatetime`, and passes that same value to calculation and immutable records. |
+| Round-2 I3 activation freshness/replay | The signature includes target-policy ID/version/fingerprint and calendar version. A5 verifies exact persisted replay before freshness; freshness remains mandatory for an unprocessed action. |
+| Round-2 I4 identity/execution facts | Task 4 hashes canonical structured JSON and tests delimiter-shaped identifiers. Gated A3 defines candidate/formal-supply handoff, cancellation, allocation, residual, and signed adjustment-delta semantics while preserving the active-graph guard. |
+| Round-2 I5 exact lifecycle/projections/persistence | Tasks 4/5 define immutable field sets, fingerprints, folds, terminal/active sets, and orphan rejection; Task 7 fixes every nested allowlist; gated A6 persists and binds every composite ledger before any confirmation API. |
+| Round-2 I6 RED/GREEN evidence | Every NOW task that adds tests has matching exact-node RED/GREEN commands, an expected RED reason, and explicit selected/pass counts. |
+| Round-2 M1 browser reproducibility | Tasks 9/11 add tested acceptance-only seeded/empty/error/403/409 modes, exact case lookup, a port check, bounded health polling, and `try/finally` shutdown. |
+| Round-2 M2 traceability | The final table includes `tests/test_ddmrp_feasibility.py`, per-test API comments, and NOW/activation RBAC coverage of `BE-OPS-001`. |
+| Round-2 M3 Transfer boundary | Transfer is explicitly deferred in Task 1, the closed gate, A2/A8, the traceability matrix, and the non-claims; no accepted Transfer authority is implied. |
 
 ## Capability And Version Sequence
 
@@ -96,6 +106,7 @@ The two backend versions represent two genuine ledger changes: `2.80` establishe
 - Modify `sdbr/web/planner-workbench.html`, `sdbr/web/planner-workbench.js`, and `sdbr/web/planner-workbench.css`: render the safe workbench and gate state without confirmation controls.
 - Modify `tests/test_ddmrp.py`, `tests/test_ddsop_runtime_planning_input.py`, `tests/test_state_store.py`, `tests/test_api.py`, and `tests/test_test_data.py`.
 - Create `tests/test_ddmrp_replenishment.py` and `tests/test_ddmrp_replenishment_view.py`.
+- Create `tests/ddmrp_browser_acceptance_app.py`: acceptance-only ASGI fixture modes for reproducible seeded/empty/error/403/409 browser states; never imported by the production app.
 
 ### BLOCKED-ACTIVATION files
 
@@ -140,7 +151,7 @@ Add these capability rows after `BE-DDMRP-006`:
 
 ```markdown
 | `BE-DDMRP-007` | 不可变 DDMRP 运行评估与版本化只读补货建议 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 直接消费已校验运行包 `AvailableQty`；冻结完整权威签名；Red/Yellow 形成稳定逻辑补货链上的不可变版本；缺失目标日期、Advice/BOM/物料/产能或生产权威时返回结构化阻塞；不产生操作写入。 |
-| `BE-DDMRP-008` | 契约授权的 Buy/Make 建议与计划员确认治理 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 仅在 `CONTRACT-GATE-DDMRP-ACTIVATION-001` 关闭项全部验收后启动；建议类型由服务端已验收契约证据决定，计划员逐条确认，身份/时间由服务端记录，当前不得新增调用方自报 advice envelope。 |
+| `BE-DDMRP-008` | 契约授权的 Buy/Make 建议与计划员确认治理 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 仅在 `CONTRACT-GATE-DDMRP-ACTIVATION-001` 关闭项全部验收后启动；建议类型由服务端已验收契约证据决定，计划员逐条确认，身份/时间由服务端记录，当前不得新增调用方自报 advice envelope；Transfer 属于原设计的后续目标，但本验收项不包含且不得声明。 |
 | `BE-DDMRP-009` | Make 可行性、计划制造候选和共享 CCR/物料预留 | `[NOT-STARTED]` | `D` approved DDMRP and shared-reservation designs | 仅在已验收 Plan BOM、目标日期、物料/CCR 日历可行性和生产权威证据存在后启动；确认 Make 必须原子创建候选、CCR 预留和下级物料分配，并进入完整 Planning Run 生命周期。 |
 ```
 
@@ -154,7 +165,7 @@ Set the UI header to `5.35`, date `2026-07-11`, and append:
 | 5.35 | 2026-07-11 | 新增 `UI-DDMRP-003` 版本化只读补货评估与契约门控工作台，以及后续 `UI-DDMRP-004` Buy/Make 人工确认单元；两单元分开验收，当前不暴露确认动作或外部订单创建 |
 ```
 
-Define `UI-DDMRP-003` as the safe read-only evaluation/workbench unit and `UI-DDMRP-004` as the contract-gated confirmation unit. Add section 16 rows in this order:
+Define `UI-DDMRP-003` as the safe read-only evaluation/workbench unit and `UI-DDMRP-004` as the contract-gated **Buy/Make-only** confirmation unit. Add an explicit specification boundary note that Transfer remains deferred until accepted Transfer authority/feasibility/governance evidence, a future backend/UI version, and a fresh implementation plan exist. This narrows the implementation tranche without changing the approved design's eventual product direction. Add section 16 rows in this order:
 
 ```markdown
 | 13 | DDMRP 版本化评估与契约门控工作台 | UI-DDMRP-003 | 是 |
@@ -272,10 +283,14 @@ Add `test_be_ddmrp_007_preserves_contract_demand_supply_ids_and_uom` and assert 
 - [ ] **Step 3: Run RED**
 
 ```powershell
-pytest tests/test_ddmrp.py tests/test_ddsop_runtime_planning_input.py -q -k "be_ddmrp_007" --basetemp .tmp/pytest-ddmrp-available-red -p no:cacheprovider
+$tests = @(
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_consumes_authority_available_qty_without_quality_reinterpretation',
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_preserves_contract_demand_supply_ids_and_uom'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-available-red -p no:cacheprovider
 ```
 
-Expected: failures show the adapter still uses `OnHandQty` and source/context fields are missing.
+Expected RED: 5 selected cases (four quality-state parametrizations plus one source-ID case), 0 passed, 5 failed because the adapter still uses `OnHandQty` and source/context fields are missing. Record the actual selected/failed counts in the task report.
 
 - [ ] **Step 4: Extend the pure records without changing formulas**
 
@@ -340,11 +355,16 @@ Do not validate a new quality/availability invariant in SDBR; contract clarifica
 - [ ] **Step 6: Run GREEN and compatibility tests**
 
 ```powershell
-pytest tests/test_ddmrp.py tests/test_ddsop_runtime_planning_input.py tests/test_api.py -q -k "ddmrp" --basetemp .tmp/pytest-ddmrp-available-green -p no:cacheprovider
+$tests = @(
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_consumes_authority_available_qty_without_quality_reinterpretation',
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_preserves_contract_demand_supply_ids_and_uom'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-available-green -p no:cacheprovider
+pytest tests/test_ddmrp.py tests/test_ddsop_runtime_planning_input.py tests/test_api.py -q -k "ddmrp" --basetemp .tmp/pytest-ddmrp-available-regression -p no:cacheprovider
 python -m compileall -q sdbr
 ```
 
-Expected: selected tests pass; Green/AboveGreen remain zero; no target timestamp appears.
+Expected GREEN: the exact focused selection reports 5 passed; the separate regression selection passes with a non-zero recorded count; Green/AboveGreen remain zero and no target timestamp appears.
 
 - [ ] **Step 7: Commit**
 
@@ -355,87 +375,84 @@ git commit -m "fix: consume authoritative DDMRP availability"
 
 ---
 
-### Task 3: Complete Read-Only Authority Signature And Target Gate
+### Task 3: Complete Read-Only Authority Signature, Relevant Ledger Identity, And Target Gate
 
 **Files:**
 - Create: `sdbr/ddmrp_replenishment.py`
+- Modify: `sdbr/ddsop_runtime_planning_input.py`
 - Create: `tests/test_ddmrp_replenishment.py`
+- Modify: `tests/test_ddsop_runtime_planning_input.py`
 
 **Interfaces:**
-- Produces `DdmrpAuthoritySignature`, `DdmrpGate`, `canonical_fingerprint(...)`, and `build_read_only_authority_signature(...)`.
-- Every advice/BOM/material/capacity ID has a paired fingerprint field; absence is explicit `None`, not omission.
+- Produces `DdmrpAuthoritySignature`, `DdmrpRelevantPlanningLedgerIdentity`, `DdmrpGate`, `canonical_fingerprint(...)`, `build_relevant_planning_ledger_identity(...)`, and `build_read_only_authority_signature(...)`.
+- The global `WorkbenchStateStore.current_revision()` is deliberately absent. The local identity changes only when a canonical, item/location-scoped active planning fact changes.
+- Every target/advice/BOM/material/capacity authority ID has its exact paired version/fingerprint where defined below; absence is explicit `None`, never omission.
 
-- [ ] **Step 1: Write the module traceability and failing tests**
+- [ ] **Step 1: Write traceability and all failing tests**
 
-Start the test file with:
+Start `tests/test_ddmrp_replenishment.py` with:
 
 ```python
 """Acceptance evidence for BE-DDMRP-007; activation-only cases also trace BE-DDMRP-008 and BE-DDMRP-009."""
 ```
 
-Add these exact test names:
+Add these exact names. Use local imports inside these initial tests so all node IDs collect while the new module is still absent:
 
 ```text
 test_be_ddmrp_007_signature_freezes_runtime_config_and_all_current_authority_slots
 test_be_ddmrp_007_public_demo_signature_is_read_only
 test_be_ddmrp_007_missing_target_semantics_returns_named_gate_and_null_target
-test_be_ddmrp_007_signature_fingerprint_changes_for_runtime_or_local_ledger_drift
+test_be_ddmrp_007_signature_fingerprint_changes_for_runtime_or_relevant_ledger_drift
 test_be_ddmrp_007_rejects_runtime_configuration_reference_mismatch
+test_be_ddmrp_007_relevant_ledger_identity_ignores_global_revision_and_unrelated_facts
+test_be_ddmrp_007_rejects_runtime_spike_without_accepted_threshold_authority
 ```
 
-The first test asserts this complete key set after `asdict(signature)`:
+The first test asserts this complete `asdict(signature)` key set:
 
 ```python
 {
-    "runtime_package_id",
-    "runtime_package_version",
-    "runtime_package_fingerprint",
-    "runtime_snapshot_id",
-    "runtime_snapshot_at",
-    "operating_model_configuration_id",
-    "operating_model_fingerprint",
-    "ddmrp_configuration_id",
-    "target_time_semantics_id",
-    "target_calendar_id",
-    "target_calendar_fingerprint",
-    "planning_advice_package_id",
-    "planning_advice_package_fingerprint",
-    "plan_bom_package_id",
-    "plan_bom_package_fingerprint",
-    "material_authority_snapshot_id",
-    "material_authority_snapshot_fingerprint",
-    "capacity_calendar_snapshot_id",
-    "capacity_calendar_snapshot_fingerprint",
-    "local_planning_ledger_revision",
-    "local_planning_ledger_fingerprint",
-    "scenario_label",
-    "mapping_confidence",
-    "parameter_authority_fingerprint",
-    "signature_fingerprint",
+    "runtime_package_id", "runtime_package_version",
+    "runtime_package_fingerprint", "runtime_snapshot_id", "runtime_snapshot_at",
+    "operating_model_configuration_id", "operating_model_fingerprint",
+    "ddmrp_configuration_id", "target_time_semantics_id",
+    "target_policy_id", "target_policy_version", "target_policy_fingerprint",
+    "target_calendar_id", "target_calendar_version", "target_calendar_fingerprint",
+    "planning_advice_package_id", "planning_advice_package_fingerprint",
+    "plan_bom_package_id", "plan_bom_package_fingerprint",
+    "material_authority_snapshot_id", "material_authority_snapshot_fingerprint",
+    "capacity_calendar_snapshot_id", "capacity_calendar_snapshot_fingerprint",
+    "local_planning_ledger_schema_version", "local_planning_ledger_identity",
+    "local_planning_ledger_fingerprint", "scenario_label", "mapping_confidence",
+    "parameter_authority_fingerprint", "signature_fingerprint",
 }
 ```
 
-- [ ] **Step 2: Run RED**
+- [ ] **Step 2: Run the exact RED selection**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment.py -q -k "signature or target_semantics or public_demo" --basetemp .tmp/pytest-ddmrp-signature-red -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_signature_freezes_runtime_config_and_all_current_authority_slots',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_public_demo_signature_is_read_only',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_missing_target_semantics_returns_named_gate_and_null_target',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_signature_fingerprint_changes_for_runtime_or_relevant_ledger_drift',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_rejects_runtime_configuration_reference_mismatch',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_relevant_ledger_identity_ignores_global_revision_and_unrelated_facts',
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_rejects_runtime_spike_without_accepted_threshold_authority'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-signature-red -p no:cacheprovider
 ```
 
-Expected: import failure because the new module does not exist.
+Expected RED: 7 selected, 0 passed, 7 failed. The first six fail on the missing module/symbols and the last fails because the adapter does not yet reject unqualified local spike calculation. Record the actual counts.
 
-- [ ] **Step 3: Implement exact internal signature types**
-
-Create:
+- [ ] **Step 3: Add exact immutable types and canonical projection field sets**
 
 ```python
-from __future__ import annotations
-
-from dataclasses import asdict, dataclass
+from copy import deepcopy
+from dataclasses import dataclass
 from hashlib import sha256
 import json
-from typing import Mapping
-
-from sdbr.ddsop_contracts import canonical_operating_model_fingerprint
+from typing import Iterable, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,6 +467,14 @@ class DdmrpReplenishmentConflict(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class DdmrpRelevantPlanningLedgerIdentity:
+    schema_version: str
+    scope_item_locations: tuple[tuple[str, str], ...]
+    identity: str
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
 class DdmrpAuthoritySignature:
     runtime_package_id: str
     runtime_package_version: str
@@ -460,7 +485,11 @@ class DdmrpAuthoritySignature:
     operating_model_fingerprint: str
     ddmrp_configuration_id: str
     target_time_semantics_id: str | None
+    target_policy_id: str | None
+    target_policy_version: str | None
+    target_policy_fingerprint: str | None
     target_calendar_id: str | None
+    target_calendar_version: str | None
     target_calendar_fingerprint: str | None
     planning_advice_package_id: str | None
     planning_advice_package_fingerprint: str | None
@@ -470,7 +499,8 @@ class DdmrpAuthoritySignature:
     material_authority_snapshot_fingerprint: str | None
     capacity_calendar_snapshot_id: str | None
     capacity_calendar_snapshot_fingerprint: str | None
-    local_planning_ledger_revision: int
+    local_planning_ledger_schema_version: str
+    local_planning_ledger_identity: str
     local_planning_ledger_fingerprint: str
     scenario_label: str
     mapping_confidence: str
@@ -480,212 +510,162 @@ class DdmrpAuthoritySignature:
 
 def canonical_fingerprint(value: object) -> str:
     encoded = json.dumps(
-        value,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return f"sha256:{sha256(encoded).hexdigest()}"
 ```
 
-Use this public signature:
+Define these exact V1 allowlists once; no whole-record `dict(row)` is legal in the relevant-ledger fingerprint:
+
+```python
+RELEVANT_DEMAND_FIELDS = (
+    "DemandCommitmentID", "DemandSourceType", "SourceSystem", "SourceObjectType",
+    "SourceObjectID", "SourceObjectVersion", "DemandLineID", "ItemOrProductID",
+    "LocationID", "Quantity", "Uom", "RequiredAt", "DemandClass", "Status",
+    "RecordVersion", "ContentFingerprint",
+)
+RELEVANT_BATCH_FIELDS = (
+    "ReservationBatchID", "DemandCommitmentID", "DemandClass", "Status",
+    "CapacityReservationIDs", "MaterialAllocationIDs", "PlanningRunID",
+    "RecordVersion", "LastTransitionAt", "EventType",
+)
+RELEVANT_CAPACITY_FIELDS = (
+    "CapacityReservationID", "ReservationBatchID", "DemandCommitmentID",
+    "DemandClass", "ResourceID", "WindowStartAt", "WindowEndAt",
+    "ReservedMinutes", "LatestAllowedCompletionAt", "Status", "PlanningRunID",
+    "RecordVersion", "LastTransitionAt", "EventType",
+)
+RELEVANT_MATERIAL_FIELDS = (
+    "MaterialAllocationID", "ReservationBatchID", "DemandCommitmentID",
+    "RequirementLineID", "ItemID", "LocationID", "Uom", "AllocatedQty",
+    "SupplySourceType", "SupplyID", "MaterialSnapshotID", "ExternalAllocationRef",
+    "Status", "RecordVersion", "LastTransitionAt", "EventType",
+)
+RELEVANT_GRAPH_FIELDS = (
+    "LogicalReplenishmentID", "RecommendationID", "ItemID", "LocationID", "Uom",
+    "GraphStatus", "DemandCommitmentID", "ReservationBatchID",
+    "PlannedManufacturingCandidateID", "FormalSupplyID", "RecordVersion",
+)
+RELEVANT_DEMAND_STATUSES = frozenset(
+    {"Active", "LinkedToFormalOrder", "HeldForPlanningError", "AdjustmentRequired"}
+)
+RELEVANT_PLANNING_STATUSES = frozenset(
+    {"ActivePlanReservation", "LinkedToFormalOrder", "HeldForPlanningError", "AdjustmentRequired"}
+)
+RELEVANT_GRAPH_STATUSES = frozenset(
+    {"ActivePlanReservation", "LinkedToFormalOrder", "HeldForPlanningError", "AdjustmentRequired", "InExecution"}
+)
+```
+
+- [ ] **Step 4: Build the dedicated relevant-ledger identity**
+
+Use this exact interface:
+
+```python
+def build_relevant_planning_ledger_identity(
+    *,
+    scope_item_locations: Iterable[tuple[str, str]],
+    planning_demand_commitments: Mapping[str, Mapping[str, object]],
+    planning_reservation_batches: Mapping[str, Mapping[str, object]],
+    ccr_capacity_reservations: Mapping[str, Mapping[str, object]],
+    material_planning_allocations: Mapping[str, Mapping[str, object]],
+    active_replenishment_graphs: Mapping[str, Mapping[str, object]],
+) -> DdmrpRelevantPlanningLedgerIdentity:
+```
+
+The implementation must normalize `scope_item_locations` to a sorted unique non-empty tuple, select only scoped demand rows in `RELEVANT_DEMAND_STATUSES`, join batches by `DemandCommitmentID`, join capacity/material rows by both batch and demand IDs, and select scoped graphs in `RELEVANT_GRAPH_STATUSES`. For every mapping, the mapping key must equal its canonical ID; missing join targets, duplicate semantic IDs, missing allowlisted required identity/status fields, or non-JSON values raise `DdmrpReplenishmentConflict`.
+
+Sort each exact projection by its canonical ID and fingerprint exactly:
+
+```python
+payload = {
+    "SchemaVersion": "DdmrpRelevantPlanningLedgerV1",
+    "ScopeItemLocations": [
+        {"ItemID": item_id, "LocationID": location_id}
+        for item_id, location_id in scope
+    ],
+    "DemandCommitments": demand_rows,
+    "ReservationBatches": batch_rows,
+    "CapacityReservations": capacity_rows,
+    "MaterialAllocations": material_rows,
+    "ActiveReplenishmentGraphs": graph_rows,
+}
+fingerprint = canonical_fingerprint(payload)
+return DdmrpRelevantPlanningLedgerIdentity(
+    schema_version="DdmrpRelevantPlanningLedgerV1",
+    scope_item_locations=scope,
+    identity=f"DPL-{fingerprint.removeprefix('sha256:')[:20]}",
+    fingerprint=fingerprint,
+)
+```
+
+No global revision, unrelated workbench collection, out-of-scope item/location, terminal record, audit event, or dictionary insertion order participates. A change to any selected allowlisted field changes both identity and fingerprint. Activation must introduce an explicit V2 before adding candidate/formal-supply fields; it may not silently widen V1.
+
+- [ ] **Step 5: Build the complete read-only authority signature**
+
+Use this exact signature:
 
 ```python
 def build_read_only_authority_signature(
     *,
     package_record: Mapping[str, object],
     operating_model_configuration: Mapping[str, object],
-    local_planning_ledger_revision: int,
-    active_capacity_reservations: Mapping[str, Mapping[str, object]],
-    active_material_allocations: Mapping[str, Mapping[str, object]],
+    relevant_planning_ledger: DdmrpRelevantPlanningLedgerIdentity,
 ) -> tuple[DdmrpAuthoritySignature, tuple[DdmrpGate, ...]]:
-    package_payload = package_record.get("Payload")
-    config_payload = operating_model_configuration.get(
-        "Payload", operating_model_configuration
-    )
-    if not isinstance(package_payload, Mapping) or not isinstance(
-        config_payload, Mapping
-    ):
-        raise DdmrpReplenishmentConflict("Validated authority payload is unavailable.")
-    identity = package_payload.get("PackageIdentity")
-    frozen = package_payload.get("FrozenDdsopConfiguration")
-    runtime = package_payload.get("RuntimeEvidenceSnapshot")
-    parameter_evidence = package_payload.get("ParameterAuthorityEvidence")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (identity, frozen, runtime, parameter_evidence)
-    ):
-        raise DdmrpReplenishmentConflict("Validated authority sections are incomplete.")
-
-    expected_configuration_fingerprint = canonical_operating_model_fingerprint(
-        config_payload
-    )
-    expected_configuration_id = str(
-        config_payload["OperatingModelConfigurationID"]
-    )
-    expected_ddmrp_id = str(
-        config_payload["DDMRPConfiguration"]["DDMRPConfigurationID"]
-    )
-    if (
-        frozen["OperatingModelConfigurationID"] != expected_configuration_id
-        or frozen["OperatingModelFingerprint"]
-        != expected_configuration_fingerprint
-        or frozen["DDMRPConfigurationID"] != expected_ddmrp_id
-    ):
-        raise DdmrpReplenishmentConflict(
-            "Runtime package/configuration authority references do not match."
-        )
-    if (
-        isinstance(local_planning_ledger_revision, bool)
-        or not isinstance(local_planning_ledger_revision, int)
-        or local_planning_ledger_revision < 0
-    ):
-        raise DdmrpReplenishmentConflict(
-            "Local planning ledger revision must be a non-negative integer."
-        )
-
-    active_statuses = {
-        "ActivePlanReservation",
-        "LinkedToFormalOrder",
-        "HeldForPlanningError",
-    }
-    ledger_payload = {
-        "CapacityReservations": sorted(
-            (
-                dict(row)
-                for row in active_capacity_reservations.values()
-                if row.get("Status") in active_statuses
-            ),
-            key=lambda row: str(row.get("CapacityReservationID")),
-        ),
-        "MaterialAllocations": sorted(
-            (
-                dict(row)
-                for row in active_material_allocations.values()
-                if row.get("Status") in active_statuses
-            ),
-            key=lambda row: str(row.get("MaterialAllocationID")),
-        ),
-    }
-    base = {
-        "runtime_package_id": str(identity["RuntimePlanningInputPackageID"]),
-        "runtime_package_version": str(identity["PackageVersion"]),
-        "runtime_package_fingerprint": canonical_fingerprint(package_payload),
-        "runtime_snapshot_id": str(runtime["OperationalStateSnapshotID"]),
-        "runtime_snapshot_at": str(runtime["SnapshotAt"]),
-        "operating_model_configuration_id": expected_configuration_id,
-        "operating_model_fingerprint": expected_configuration_fingerprint,
-        "ddmrp_configuration_id": expected_ddmrp_id,
-        "target_time_semantics_id": None,
-        "target_calendar_id": None,
-        "target_calendar_fingerprint": None,
-        "planning_advice_package_id": None,
-        "planning_advice_package_fingerprint": None,
-        "plan_bom_package_id": None,
-        "plan_bom_package_fingerprint": None,
-        "material_authority_snapshot_id": None,
-        "material_authority_snapshot_fingerprint": None,
-        "capacity_calendar_snapshot_id": None,
-        "capacity_calendar_snapshot_fingerprint": None,
-        "local_planning_ledger_revision": local_planning_ledger_revision,
-        "local_planning_ledger_fingerprint": canonical_fingerprint(ledger_payload),
-        "scenario_label": str(identity["ScenarioLabel"]),
-        "mapping_confidence": str(identity["MappingConfidence"]),
-        "parameter_authority_fingerprint": canonical_fingerprint(
-            parameter_evidence
-        ),
-    }
-    signature = DdmrpAuthoritySignature(
-        **base,
-        signature_fingerprint=canonical_fingerprint(base),
-    )
-
-    refs = parameter_evidence.get("ParameterEvidenceRefs", [])
-    accepted_operational_authority = (
-        identity["ScenarioLabel"] == "ProductionCandidate"
-        and identity["MappingConfidence"] == "ProductionAccepted"
-        and all(
-            row.get("ProductionAuthorityStatus") == "Accepted"
-            for row in refs
-            if row.get("Applicability") == "Applicable"
-        )
-    )
-    gates = [
-        DdmrpGate(
-            "DLT_TARGET_SEMANTICS_INSUFFICIENT",
-            "The accepted contract does not define target-calendar/business-time semantics for DLT.",
-        ),
-        DdmrpGate(
-            "PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED",
-            "No Contract Agent-accepted ERP/MRP replenishment advice consumer is available.",
-        ),
-        DdmrpGate(
-            "PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED",
-            "No accepted Plan BOM/material/CCR feasibility authority bundle is available.",
-        ),
-    ]
-    if not accepted_operational_authority:
-        gates.append(
-            DdmrpGate(
-                "OPERATIONAL_AUTHORITY_NOT_ACCEPTED",
-                "The current scenario, mapping, and evidence authority do not permit operational reservation writes.",
-            )
-        )
-    return signature, tuple(sorted(gates, key=lambda gate: gate.code))
 ```
 
-The body must re-check package/config IDs and canonical configuration fingerprint, hash the accepted package payload and parameter evidence, hash sorted active local capacity/material rows, and construct the full signature. It sets all target/advice/BOM/material-authority/capacity-authority fields to `None` because no accepted consumer can populate them today. Compute `signature_fingerprint` over all other fields, then return these exact gates in sorted-code order:
+Re-check the package/config IDs and `canonical_operating_model_fingerprint(...)` exactly as in the prior revision. Hash the accepted package payload and parameter evidence. Construct `base` with all target policy/calendar, advice, BOM, material-authority, and capacity-authority fields set to `None`, and copy these three local values without consulting the store revision:
 
 ```python
-(
-    DdmrpGate(
-        "DLT_TARGET_SEMANTICS_INSUFFICIENT",
-        "The accepted contract does not define target-calendar/business-time semantics for DLT.",
-    ),
-    DdmrpGate(
-        "PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED",
-        "No Contract Agent-accepted ERP/MRP replenishment advice consumer is available.",
-    ),
-    DdmrpGate(
-        "PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED",
-        "No accepted Plan BOM/material/CCR feasibility authority bundle is available.",
-    ),
-    DdmrpGate(
-        "OPERATIONAL_AUTHORITY_NOT_ACCEPTED",
-        "The current scenario, mapping, and evidence authority do not permit operational reservation writes.",
-    ),
-)
+"local_planning_ledger_schema_version": relevant_planning_ledger.schema_version,
+"local_planning_ledger_identity": relevant_planning_ledger.identity,
+"local_planning_ledger_fingerprint": relevant_planning_ledger.fingerprint,
 ```
 
-The last gate is mandatory unless package `ScenarioLabel`, `MappingConfidence`, and every applicable parameter evidence row meet the accepted production classification defined by the current schema. Public demo/reviewed rows always receive it.
+Set `signature_fingerprint=canonical_fingerprint(base)`. Return the same four sorted gates from the prior revision: `DLT_TARGET_SEMANTICS_INSUFFICIENT`, `OPERATIONAL_AUTHORITY_NOT_ACCEPTED` when production classification is not accepted, `PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED`, and `PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED`. `StandardTargetReceiptAt` remains absent/null. Public-demo/reviewed rows always receive the operational-authority gate.
 
-- [ ] **Step 4: Add a structured spike-input gate**
+- [ ] **Step 6: Add the structured spike-input gate**
 
-Add `DdmrpRuntimeAuthorityError(ValueError)` with `code` and `status="DdmrpRuntimeAuthorityError"`. In `evaluate_ddmrp_runtime_signals_from_package`, raise it with code `SPIKE_QUALIFICATION_INPUT_INSUFFICIENT` when the validated row says `RequiresSDBRQualification`/`CalculatedBySDBR` but the accepted configuration provides no threshold authority. Add a schema-valid test that passes through `process_runtime_planning_input_message(...)`; do not mutate a stored accepted record.
+Add `DdmrpRuntimeAuthorityError(ValueError)` with `code` and `status="DdmrpRuntimeAuthorityError"`. In `evaluate_ddmrp_runtime_signals_from_package`, raise it with code `SPIKE_QUALIFICATION_INPUT_INSUFFICIENT` when a schema-valid row says `RequiresSDBRQualification`/`CalculatedBySDBR` but the accepted configuration provides no threshold authority. The test passes through `process_runtime_planning_input_message(...)`; it never mutates a stored accepted record.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [ ] **Step 7: Run the matching GREEN selection and commit**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment.py tests/test_ddsop_runtime_planning_input.py -q -k "signature or target_semantics or public_demo or spike_qualification" --basetemp .tmp/pytest-ddmrp-signature-green -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_signature_freezes_runtime_config_and_all_current_authority_slots',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_public_demo_signature_is_read_only',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_missing_target_semantics_returns_named_gate_and_null_target',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_signature_fingerprint_changes_for_runtime_or_relevant_ledger_drift',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_rejects_runtime_configuration_reference_mismatch',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_relevant_ledger_identity_ignores_global_revision_and_unrelated_facts',
+  'tests/test_ddsop_runtime_planning_input.py::test_be_ddmrp_007_rejects_runtime_spike_without_accepted_threshold_authority'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-signature-green -p no:cacheprovider
+```
+
+Expected GREEN: 7 selected, 7 passed, 0 failed. Record the actual count, then commit:
+
+```powershell
 git add sdbr/ddmrp_replenishment.py sdbr/ddsop_runtime_planning_input.py tests/test_ddmrp_replenishment.py tests/test_ddsop_runtime_planning_input.py
 git commit -m "feat: freeze DDMRP authority signatures"
 ```
 
 ---
 
-### Task 4: Immutable Evaluation Builder And Stable Replenishment Chains
+### Task 4: Exact Immutable Evaluation Records, Folds, And Canonical Replenishment Identity
 
 **Files:**
 - Modify: `sdbr/ddmrp_replenishment.py`
 - Modify: `tests/test_ddmrp_replenishment.py`
 
 **Interfaces:**
-- Produces `DdmrpEvaluationWriteSet` and `prepare_ddmrp_evaluation(...)`.
-- Stable chain identity is independent of evaluation ID; recommendation versions are bidirectional.
+- Produces `DdmrpEvaluationWriteSet`, `prepare_ddmrp_evaluation(...)`, `canonical_stable_id(...)`, and the exact field/fold constants below.
+- Stable chain identity is independent of evaluation ID and is derived from canonical structured JSON, never delimiter concatenation.
+- The request result is immutable and becomes the only processed-action authority in Task 5; there is no parallel bare processed-key set.
 
-- [ ] **Step 1: Write focused failing tests**
+- [ ] **Step 1: Write every focused failing test**
 
-Add exact names:
+Add exactly:
 
 ```text
 test_be_ddmrp_007_red_yellow_create_blocked_versions_green_above_remain_monitor_rows
@@ -694,31 +674,174 @@ test_be_ddmrp_007_recommendation_predecessor_and_supersession_links_are_bidirect
 test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_second_actionable_version
 test_be_ddmrp_007_terminal_chain_starts_next_cycle_with_new_logical_identity
 test_be_ddmrp_007_same_authority_inputs_produce_deterministic_ids_and_fingerprint
+test_be_ddmrp_007_logical_identity_uses_canonical_json_for_adversarial_identifiers
+test_be_ddmrp_007_immutable_record_field_sets_and_nested_fingerprints_are_exact
+test_be_ddmrp_007_event_fold_rejects_gaps_duplicates_and_illegal_status_transitions
 ```
 
-Assert NOW recommendations have `AdviceType is None`, `StandardTargetReceiptAt is None`, `InitialStatus == "Blocked"`, and all four gate codes. Assert Green/AboveGreen appear only in evaluation rows.
+The adversarial test compares at least `("A|B", "C", 1)` with `("A", "B|C", 1)`, plus JSON-looking identifiers such as `('{"x":1}', '[x]', 2)`, and proves every structured identity and ID differs. NOW recommendations assert `AdviceType is None`, `StandardTargetReceiptAt is None`, `InitialStatus == "Blocked"`, and all four gate codes. Green/AboveGreen appear only as zero-quantity monitor rows.
 
-- [ ] **Step 2: Run RED**
+- [ ] **Step 2: Run exact RED**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment.py -q -k "chain or recommendation or adjustment_required" --basetemp .tmp/pytest-ddmrp-evaluation-builder-red -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_red_yellow_create_blocked_versions_green_above_remain_monitor_rows',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_reevaluation_reuses_logical_chain_and_increments_version',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_recommendation_predecessor_and_supersession_links_are_bidirectional',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_second_actionable_version',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_terminal_chain_starts_next_cycle_with_new_logical_identity',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_same_authority_inputs_produce_deterministic_ids_and_fingerprint',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_logical_identity_uses_canonical_json_for_adversarial_identifiers',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_immutable_record_field_sets_and_nested_fingerprints_are_exact',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_event_fold_rejects_gaps_duplicates_and_illegal_status_transitions'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-evaluation-builder-red -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Add exact records and signature**
+Expected RED: 9 selected, 0 passed, 9 failed because the builder, exact schemas, canonical identity, and fold helpers do not exist. Record actual counts.
+
+- [ ] **Step 3: Define every immutable outer and nested field set exactly once**
 
 ```python
+EVALUATION_SUMMARY_FIELDS = (
+    "RedCount", "YellowCount", "GreenCount", "AboveGreenCount",
+    "BlockedRecommendationCount", "AdjustmentRequiredCount", "IssueCount",
+)
+DEMAND_COMPONENT_FIELDS = (
+    "DemandID", "DemandType", "DemandQty", "DemandDueAt", "IsQualifiedSpike", "Uom",
+)
+SUPPLY_COMPONENT_FIELDS = (
+    "SupplyID", "SupplyQty", "ExpectedAt", "Status", "Uom", "SourceType",
+)
+GATE_FIELDS = ("Code", "Message", "BlocksOperationalAction")
+EVALUATION_RUN_FIELDS = (
+    "EvaluationID", "EvaluationRequestID", "EvaluationAt", "RecordedAt", "RecordedBy",
+    "EvaluationMode", "RuntimePlanningInputPackageID",
+    "RuntimePlanningInputPackageVersion", "RuntimeSnapshotID",
+    "OperatingModelConfigurationID", "OperatingModelFingerprint",
+    "DDMRPConfigurationID", "AuthoritySignature", "AuthoritySignatureFingerprint",
+    "RelevantPlanningLedgerIdentity", "RelevantPlanningLedgerFingerprint",
+    "Summary", "IssueCodes", "OperationalActionAllowed", "EvaluationFingerprint",
+)
+EVALUATION_ROW_FIELDS = (
+    "EvaluationRowID", "EvaluationID", "RowKey", "ItemID", "LocationID", "Uom",
+    "BufferProfileID", "DLTMinutes", "QualifiedOnHandQty", "PhysicalOnHandQty",
+    "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualityState",
+    "QualifiedOpenSupplyQty", "QualifiedDemandQty", "NetFlowPosition", "TopOfRed",
+    "TopOfYellow", "TopOfGreen", "PlanningStatus", "ExecutionStatus",
+    "SuggestedReplenishmentQty", "RecommendedAction", "StandardTargetReceiptAt",
+    "TargetStatusCode", "RecommendationID", "DemandComponents", "SupplyComponents",
+    "GateCodes", "OperationalActionAllowed", "AuthoritySignatureFingerprint",
+    "EvaluationRowFingerprint",
+)
+REPLENISHMENT_CHAIN_FIELDS = (
+    "LogicalReplenishmentID", "ItemID", "LocationID", "CycleNumber",
+    "OpenedAt", "OpenedByEvaluationID", "InitialStatus", "IdentityFingerprint",
+    "TraceID", "ChainFingerprint",
+)
+RECOMMENDATION_FIELDS = (
+    "RecommendationID", "LogicalReplenishmentID", "RecommendationVersion",
+    "EvaluationID", "EvaluationRowID", "ItemID", "LocationID", "Uom",
+    "PlanningStatus", "ExecutionStatus", "SuggestedReplenishmentQty",
+    "StandardTargetReceiptAt", "AdviceType", "InitialStatus", "GateCodes",
+    "PredecessorRecommendationID", "AdjustmentOfRecommendationID", "CreatedAt",
+    "CreatedBy", "AuthoritySignature", "AuthoritySignatureFingerprint",
+    "RelevantPlanningLedgerIdentity", "RelevantPlanningLedgerFingerprint",
+    "TraceID", "RecommendationFingerprint",
+)
+EVENT_FIELDS = (
+    "EventID", "EventType", "AggregateType", "AggregateID", "AggregateVersion",
+    "EvaluationID", "LogicalReplenishmentID", "RecommendationID",
+    "RelatedRecommendationID", "StatusBefore", "StatusAfter", "OccurredAt",
+    "ActorID", "CausationID", "CorrelationID", "IdempotencyKey", "TraceID",
+    "EventPayload", "PayloadFingerprint",
+)
+REQUEST_RESULT_FIELDS = (
+    "EvaluationRequestID", "RequestFingerprint", "RuntimePlanningInputPackageID",
+    "EvaluationID", "EvaluationRowIDs", "LogicalReplenishmentIDs",
+    "RecommendationIDs", "EventIDs", "EvaluationPayloadFingerprint",
+    "ResponseData", "ResponseFingerprint", "RecordedAt", "RecordedBy",
+    "RequestResultFingerprint",
+)
+RESPONSE_DATA_FIELDS = (
+    "Status", "EvaluationID", "RecommendationIDs", "OperationalActionAllowed",
+)
+```
+
+`AuthoritySignature` must have exactly Task 3's key set. `Summary`, demand/supply components, gates, `ResponseData`, and each event type's payload must have exactly their named allowlists. Reject missing or extra keys before fingerprinting. No record contains `Payload`, a package/config body, evidence refs, raw authority rows, or a mutable nested object borrowed from a caller.
+
+- [ ] **Step 4: Define fingerprints, canonical IDs, and the write set**
+
+```python
+def canonical_stable_id(prefix: str, identity: Mapping[str, object]) -> str:
+    digest = canonical_fingerprint(dict(identity)).removeprefix("sha256:")
+    return f"{prefix}-{digest[:20]}"
+
+
 @dataclass(frozen=True, slots=True)
 class DdmrpEvaluationWriteSet:
-    idempotency_key: str
+    evaluation_request_id: str
+    request_fingerprint: str
     payload_fingerprint: str
     evaluation_run: dict[str, object]
     evaluation_rows: tuple[dict[str, object], ...]
     chain_records: tuple[dict[str, object], ...]
     recommendation_versions: tuple[dict[str, object], ...]
     events: tuple[dict[str, object], ...]
+    request_result: dict[str, object]
 ```
 
-Public signature:
+Construct IDs only from these canonical objects:
+
+```python
+request_identity = {
+    "EvaluationRequestID": evaluation_request_id,
+    "RuntimePlanningInputPackageID": authority_signature.runtime_package_id,
+}
+evaluation_identity = {
+    "AuthoritySignatureFingerprint": authority_signature.signature_fingerprint,
+    "EvaluationAt": runtime_result["EvaluatedAt"],
+}
+chain_identity = {
+    "ItemID": item_id,
+    "LocationID": location_id,
+    "CycleNumber": cycle_number,
+}
+recommendation_identity = {
+    "LogicalReplenishmentID": logical_replenishment_id,
+    "RecommendationVersion": recommendation_version,
+}
+```
+
+Use prefixes `DDE`, `DER`, `DRL`, `DDR`, and `DRE` for evaluation, row, chain, recommendation, and event IDs. `RowKey` is canonical JSON for `{ItemID, LocationID}`. Every record fingerprint is `canonical_fingerprint` over its exact fields excluding only its own `*Fingerprint` field. Event `PayloadFingerprint` covers the exact `EventPayload`. The write-set `payload_fingerprint` covers sorted `EvaluationRun`, `EvaluationRows`, `ChainRecords`, `RecommendationVersions`, and `Events`; it deliberately excludes `request_result` to avoid a cycle. `RequestResultFingerprint` covers all request-result fields except itself, and `ResponseFingerprint` covers exact `ResponseData`. `EvaluationPayloadFingerprint` in the result equals the write-set fingerprint.
+
+- [ ] **Step 5: Implement the exact status fold and chain selection**
+
+```python
+RECOMMENDATION_ACTIVE_STATUSES = frozenset({
+    "Blocked", "PendingReview", "Confirmed", "AdjustmentRequired", "Issued",
+    "OutputFailed", "ERPAccepted", "InExecution",
+})
+RECOMMENDATION_TERMINAL_STATUSES = frozenset({
+    "Rejected", "Superseded", "Released", "Cancelled", "Completed",
+})
+CHAIN_ACTIVE_STATUSES = frozenset({"Open", "ActiveGraph", "AdjustmentRequired"})
+CHAIN_TERMINAL_STATUSES = frozenset({"Released", "Cancelled", "Completed"})
+RECOMMENDATION_TRANSITIONS = {
+    "Blocked": frozenset({"PendingReview", "Superseded"}),
+    "PendingReview": frozenset({"Confirmed", "Rejected", "Superseded"}),
+    "Confirmed": frozenset({"AdjustmentRequired", "Issued", "Released", "Cancelled"}),
+    "Issued": frozenset({"ERPAccepted", "OutputFailed", "AdjustmentRequired", "Cancelled"}),
+    "OutputFailed": frozenset({"Issued", "AdjustmentRequired", "Cancelled"}),
+    "ERPAccepted": frozenset({"InExecution", "AdjustmentRequired", "Cancelled"}),
+    "InExecution": frozenset({"Completed", "AdjustmentRequired", "Cancelled"}),
+    "AdjustmentRequired": frozenset({"Released", "Cancelled"}),
+}
+```
+
+`fold_recommendation_status(...)` groups events by `AggregateID`, sorts by positive integer `AggregateVersion`, requires versions `1..N` without gaps or duplicates, requires event `StatusBefore` to equal the current fold, and applies only `RECOMMENDATION_TRANSITIONS`. `fold_chain_status(...)` applies the same rules to `Open -> ActiveGraph | AdjustmentRequired | Released | Cancelled | Completed`, `ActiveGraph -> AdjustmentRequired | Released | Cancelled | Completed`, and `AdjustmentRequired -> Released | Cancelled | Completed`. Terminal states accept no later transition. For latest-version selection, reject duplicate versions, predecessor gaps, multiple successors, a missing reverse supersession event, multiple non-terminal chains for one item/location, an active graph attached to a terminal chain, or a graph whose mapping key differs from `LogicalReplenishmentID`.
+
+- [ ] **Step 6: Implement the exact builder**
 
 ```text
 def prepare_ddmrp_evaluation(
@@ -736,51 +859,102 @@ def prepare_ddmrp_evaluation(
 ) -> DdmrpEvaluationWriteSet
 ```
 
-The implementation is complete only when every canonical rule below is represented by a named helper and its public-behavior test; no unlisted fallback branch is allowed:
+Require timezone-aware `recorded_at`, non-empty actor/request ID, `runtime_result["EvaluatedAt"] == authority_signature.runtime_snapshot_at`, and exact runtime line/component schemas. Reuse the sole non-terminal chain; otherwise use `max(prior CycleNumber)+1`. Increment the recommendation version, name its predecessor, and emit reciprocal `RecommendationSuperseded`/`RecommendationVersionCreated` events without mutating old records. If the active-graph registry contains the chain, create only `InitialStatus="AdjustmentRequired"` with `AdjustmentOfRecommendationID`; otherwise NOW Red/Yellow is `Blocked`. Freeze deep copies of the complete signature on the run and each recommendation. Produce one immutable request result with `ResponseData.Status="Created"`. Never create a recommendation for Green/AboveGreen.
 
-- `EvaluationAt` equals the authoritative runtime `SnapshotAt`; `RecordedAt` is server time.
-- `EvaluationID = "DDE-" + sha256(authority_signature.signature_fingerprint + "|" + local_planning_ledger_fingerprint)[:20]`.
-- `LogicalReplenishmentID = "DRL-" + sha256(f"{ItemID}|{LocationID}|{CycleNumber}")[:20]`.
-- Reuse the only non-terminal chain for item/location; reject duplicate open chains. If none exists, `CycleNumber = max(prior cycles)+1`.
-- `RecommendationVersion = max(version in chain)+1` and `RecommendationID = "DDR-" + sha256(f"{LogicalReplenishmentID}|{RecommendationVersion}")[:20]`.
-- New versions name `PredecessorRecommendationID`; supersession events name both old and new recommendation IDs.
-- Unconfirmed prior versions receive immutable `RecommendationSuperseded` events; their records are never edited.
-- If `active_replenishment_graphs` contains the logical chain, create an immutable version with `InitialStatus="AdjustmentRequired"`, `AdjustmentOfRecommendationID`, and no confirmable action.
-- Freeze the complete authority signature dictionary/fingerprint on both evaluation and recommendation.
-- Never store raw package/config payloads in the evaluation ledger.
-
-- [ ] **Step 4: Run GREEN and commit**
+- [ ] **Step 7: Run matching GREEN and commit**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment.py -q -k "chain or recommendation or adjustment_required" --basetemp .tmp/pytest-ddmrp-evaluation-builder-green -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_red_yellow_create_blocked_versions_green_above_remain_monitor_rows',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_reevaluation_reuses_logical_chain_and_increments_version',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_recommendation_predecessor_and_supersession_links_are_bidirectional',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_second_actionable_version',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_terminal_chain_starts_next_cycle_with_new_logical_identity',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_same_authority_inputs_produce_deterministic_ids_and_fingerprint',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_logical_identity_uses_canonical_json_for_adversarial_identifiers',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_immutable_record_field_sets_and_nested_fingerprints_are_exact',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_event_fold_rejects_gaps_duplicates_and_illegal_status_transitions'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-evaluation-builder-green -p no:cacheprovider
+```
+
+Expected GREEN: 9 selected, 9 passed, 0 failed. Record the count, then:
+
+```powershell
 git add sdbr/ddmrp_replenishment.py tests/test_ddmrp_replenishment.py
 git commit -m "feat: build immutable DDMRP evaluations"
 ```
 
 ---
 
-### Task 5: Evaluation Replay, Staging, And Immutable Apply
+### Task 5: Immutable Request-Result Replay, Orphan Rejection, Staging, And Apply
 
 **Files:**
 - Modify: `sdbr/ddmrp_replenishment.py`
 - Modify: `tests/test_ddmrp_replenishment.py`
 
 **Interfaces:**
-- Produces `DdmrpEvaluationStagedState`, `stage_ddmrp_evaluation(...)`, and `apply_staged_ddmrp_evaluation(...)`.
+- Produces `lookup_ddmrp_evaluation_request_result(...)`, `DdmrpEvaluationStagedState`, `stage_ddmrp_evaluation(...)`, and `apply_staged_ddmrp_evaluation(...)`.
+- Replaces the prior bare `processed_ddmrp_action_keys` set with `ddmrp_evaluation_request_results: dict[str, dict[str, object]]`. One immutable result record is both the processed marker and replay proof.
 
-- [ ] **Step 1: Write failing replay/atomicity tests**
-
-Add exact names:
+- [ ] **Step 1: Write every replay/atomicity RED test**
 
 ```text
-test_be_ddmrp_007_exact_evaluation_replay_is_duplicate
-test_be_ddmrp_007_request_id_reuse_with_changed_fingerprint_conflicts
+test_be_ddmrp_007_exact_evaluation_replay_validates_result_graph_and_is_duplicate
+test_be_ddmrp_007_request_id_reuse_with_changed_request_fingerprint_conflicts
 test_be_ddmrp_007_event_or_child_drift_fails_closed
 test_be_ddmrp_007_failure_after_staging_leaves_every_live_ledger_unchanged
 test_be_ddmrp_007_duplicate_open_chain_preflight_leaves_no_partial_records
+test_be_ddmrp_007_duplicate_ids_inside_write_set_fail_before_any_insert
+test_be_ddmrp_007_orphan_children_without_request_result_are_never_adopted
+test_be_ddmrp_007_request_result_with_missing_or_extra_child_fails_closed
 ```
 
-- [ ] **Step 2: Add the complete staging boundary**
+- [ ] **Step 2: Run exact RED**
+
+```powershell
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_exact_evaluation_replay_validates_result_graph_and_is_duplicate',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_request_id_reuse_with_changed_request_fingerprint_conflicts',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_event_or_child_drift_fails_closed',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_failure_after_staging_leaves_every_live_ledger_unchanged',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_duplicate_open_chain_preflight_leaves_no_partial_records',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_duplicate_ids_inside_write_set_fail_before_any_insert',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_orphan_children_without_request_result_are_never_adopted',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_request_result_with_missing_or_extra_child_fails_closed'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-evaluation-apply-red -p no:cacheprovider
+```
+
+Expected RED: 8 selected, 0 passed, 8 failed because lookup/staging/orphan contracts are absent. Record actual counts.
+
+- [ ] **Step 3: Implement immutable lookup before any rebuild**
+
+```text
+def lookup_ddmrp_evaluation_request_result(
+    *,
+    evaluation_request_id: str,
+    request_fingerprint: str,
+    request_results: Mapping[str, Mapping[str, object]],
+    evaluation_runs: Mapping[str, Mapping[str, object]],
+    evaluation_rows: Mapping[str, Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+    recommendations: Mapping[str, Mapping[str, object]],
+    events: tuple[Mapping[str, object], ...],
+) -> dict[str, object] | None
+```
+
+If no mapping exists, return `None` without reading current authority or building an evaluation. If a mapping exists, require its mapping key and exact `REQUEST_RESULT_FIELDS`, recompute `RequestResultFingerprint`, compare `request_fingerprint` first, and return 409 conflict on changed request reuse. Then `_validate_persisted_evaluation_result_graph(...)` must prove:
+
+- the exact evaluation, row, chain, recommendation, and event ID sets equal the result record lists, with no missing or extra child;
+- every mapping key equals the child's canonical ID and every child/nested fingerprint recomputes;
+- each child points back to the result's evaluation/request/chain as applicable;
+- the write-set payload reconstructed from persisted children equals `EvaluationPayloadFingerprint`;
+- exact `ResponseData` and `ResponseFingerprint` match those IDs and `OperationalActionAllowed=False`.
+
+Only after all checks return a deep-copied response with `Status="Duplicate"`. Persisted `ResponseData` remains `Status="Created"`; replay never rewrites history. Any drift is a conflict, not a repair.
+
+- [ ] **Step 4: Add the complete staging contract**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -790,179 +964,38 @@ class DdmrpEvaluationStagedState:
     chains: dict[str, dict[str, object]]
     recommendations: dict[str, dict[str, object]]
     events: tuple[dict[str, object], ...]
-    processed_action_keys: frozenset[str]
+    request_results: dict[str, dict[str, object]]
     result_status: Literal["Created", "Duplicate"]
-
-
-def stage_ddmrp_evaluation(
-    *,
-    write_set: DdmrpEvaluationWriteSet,
-    evaluation_runs: Mapping[str, dict[str, object]],
-    evaluation_rows: Mapping[str, dict[str, object]],
-    chains: Mapping[str, dict[str, object]],
-    recommendations: Mapping[str, dict[str, object]],
-    events: tuple[dict[str, object], ...],
-    processed_action_keys: frozenset[str],
-) -> DdmrpEvaluationStagedState:
-    runs_copy = deepcopy(dict(evaluation_runs))
-    rows_copy = deepcopy(dict(evaluation_rows))
-    chains_copy = deepcopy(dict(chains))
-    recommendations_copy = deepcopy(dict(recommendations))
-    events_copy = [deepcopy(event) for event in events]
-    keys_copy = set(processed_action_keys)
-
-    business_payload = {
-        "EvaluationRun": write_set.evaluation_run,
-        "EvaluationRows": list(write_set.evaluation_rows),
-        "ChainRecords": list(write_set.chain_records),
-        "RecommendationVersions": list(write_set.recommendation_versions),
-        "Events": list(write_set.events),
-    }
-    if canonical_fingerprint(business_payload) != write_set.payload_fingerprint:
-        raise DdmrpReplenishmentConflict(
-            "Evaluation write-set fingerprint does not match its immutable content."
-        )
-
-    targets = (
-        (runs_copy, "EvaluationID", (write_set.evaluation_run,)),
-        (rows_copy, "EvaluationRowID", write_set.evaluation_rows),
-        (chains_copy, "LogicalReplenishmentID", write_set.chain_records),
-        (
-            recommendations_copy,
-            "RecommendationID",
-            write_set.recommendation_versions,
-        ),
-    )
-    event_by_id = {str(event["EventID"]): event for event in events_copy}
-    if len(event_by_id) != len(events_copy):
-        raise DdmrpReplenishmentConflict(
-            "Persisted DDMRP event IDs are not unique."
-        )
-
-    if write_set.idempotency_key in keys_copy:
-        replay_events = [
-            event
-            for event in events_copy
-            if event.get("IdempotencyKey") == write_set.idempotency_key
-        ]
-        if len(replay_events) != 1 or replay_events[0].get(
-            "PayloadFingerprint"
-        ) != write_set.payload_fingerprint:
-            raise DdmrpReplenishmentConflict(
-                "Processed evaluation key has no unique matching replay event."
-            )
-        for target, id_field, records in targets:
-            for record in records:
-                record_id = str(record[id_field])
-                if target.get(record_id) != record:
-                    raise DdmrpReplenishmentConflict(
-                        f"Persisted evaluation replay child {record_id} drifted."
-                    )
-        for event in write_set.events:
-            if event_by_id.get(str(event["EventID"])) != event:
-                raise DdmrpReplenishmentConflict(
-                    "Persisted evaluation replay event drifted."
-                )
-        return DdmrpEvaluationStagedState(
-            evaluation_runs=runs_copy,
-            evaluation_rows=rows_copy,
-            chains=chains_copy,
-            recommendations=recommendations_copy,
-            events=tuple(events_copy),
-            processed_action_keys=frozenset(keys_copy),
-            result_status="Duplicate",
-        )
-
-    for target, id_field, records in targets:
-        for record in records:
-            record_id = str(record[id_field])
-            existing = target.get(record_id)
-            if existing is not None and existing != record:
-                raise DdmrpReplenishmentConflict(
-                    f"Evaluation target {record_id} already has different content."
-                )
-    for event in write_set.events:
-        event_id = str(event["EventID"])
-        existing = event_by_id.get(event_id)
-        if existing is not None and existing != event:
-            raise DdmrpReplenishmentConflict(
-                f"Evaluation event {event_id} already has different content."
-            )
-
-    for target, id_field, records in targets:
-        for record in records:
-            target.setdefault(str(record[id_field]), deepcopy(record))
-    for event in write_set.events:
-        event_id = str(event["EventID"])
-        if event_id not in event_by_id:
-            events_copy.append(deepcopy(event))
-            event_by_id[event_id] = event
-    keys_copy.add(write_set.idempotency_key)
-    return DdmrpEvaluationStagedState(
-        evaluation_runs=runs_copy,
-        evaluation_rows=rows_copy,
-        chains=chains_copy,
-        recommendations=recommendations_copy,
-        events=tuple(events_copy),
-        processed_action_keys=frozenset(keys_copy),
-        result_status="Created",
-    )
-
-
-def apply_staged_ddmrp_evaluation(
-    *,
-    staged: DdmrpEvaluationStagedState,
-    evaluation_runs: MutableMapping[str, dict[str, object]],
-    evaluation_rows: MutableMapping[str, dict[str, object]],
-    chains: MutableMapping[str, dict[str, object]],
-    recommendations: MutableMapping[str, dict[str, object]],
-    events: MutableSequence[dict[str, object]],
-    processed_action_keys: MutableSet[str],
-) -> Literal["Created", "Duplicate"]:
-    snapshots = (
-        deepcopy(dict(evaluation_runs)),
-        deepcopy(dict(evaluation_rows)),
-        deepcopy(dict(chains)),
-        deepcopy(dict(recommendations)),
-        deepcopy(list(events)),
-        deepcopy(set(processed_action_keys)),
-    )
-    try:
-        evaluation_runs.clear()
-        evaluation_runs.update(deepcopy(staged.evaluation_runs))
-        evaluation_rows.clear()
-        evaluation_rows.update(deepcopy(staged.evaluation_rows))
-        chains.clear()
-        chains.update(deepcopy(staged.chains))
-        recommendations.clear()
-        recommendations.update(deepcopy(staged.recommendations))
-        events.clear()
-        events.extend(deepcopy(staged.events))
-        processed_action_keys.clear()
-        processed_action_keys.update(staged.processed_action_keys)
-    except BaseException:
-        evaluation_runs.clear()
-        evaluation_runs.update(snapshots[0])
-        evaluation_rows.clear()
-        evaluation_rows.update(snapshots[1])
-        chains.clear()
-        chains.update(snapshots[2])
-        recommendations.clear()
-        recommendations.update(snapshots[3])
-        events.clear()
-        events.extend(snapshots[4])
-        processed_action_keys.clear()
-        processed_action_keys.update(snapshots[5])
-        raise
-    return staged.result_status
+    response_data: dict[str, object]
 ```
 
-`stage_ddmrp_evaluation` deep-copies inputs, validates all target IDs/events/fingerprints, performs exact replay verification, and adds the processed key last on copies. `apply_staged_ddmrp_evaluation` snapshots all live collections, replaces them from staged copies, and restores every snapshot on any exception. No business validation occurs after live replacement begins.
+`stage_ddmrp_evaluation(...)` accepts the five existing immutable collections plus `request_results`. It deep-copies all six. Before inspecting persisted state, `_assert_unique_write_set_ids(...)` rejects duplicate row, chain, recommendation, or event IDs even when duplicate content is equal; `_assert_write_set_fingerprints(...)` validates every exact field/nested field/record fingerprint, the child payload fingerprint, request result, and response.
 
-- [ ] **Step 3: Run tests and commit**
+Next call `lookup_ddmrp_evaluation_request_result(...)` against the copies. Exact replay returns a `Duplicate` staged state unchanged. Changed reuse conflicts. For an unprocessed request, **any** pre-existing target child/event ID, equal or different, is `ORPHAN_DDMRP_EVALUATION_CHILD` and fails closed; no `setdefault` adoption is allowed. Validate chain uniqueness/folds against the combined prospective copies, insert all children/events, and insert the immutable request result last. There is no independent processed key that can drift away from its result.
+
+- [ ] **Step 5: Apply six live collections with rollback**
+
+`apply_staged_ddmrp_evaluation(...)` accepts the staged state and mutable runs, rows, chains, recommendations, events, and request-results collections. Snapshot all six first, then `clear/update` or `clear/extend` from staged deep copies. A single `except BaseException` restores all six before re-raising. No validation or fingerprinting occurs after replacement starts. Return a deep copy of `(result_status, response_data)`.
+
+- [ ] **Step 6: Run matching GREEN and commit**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment.py -q -k "replay or staging or partial_records" --basetemp .tmp/pytest-ddmrp-evaluation-apply -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_exact_evaluation_replay_validates_result_graph_and_is_duplicate',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_request_id_reuse_with_changed_request_fingerprint_conflicts',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_event_or_child_drift_fails_closed',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_failure_after_staging_leaves_every_live_ledger_unchanged',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_duplicate_open_chain_preflight_leaves_no_partial_records',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_duplicate_ids_inside_write_set_fail_before_any_insert',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_orphan_children_without_request_result_are_never_adopted',
+  'tests/test_ddmrp_replenishment.py::test_be_ddmrp_007_request_result_with_missing_or_extra_child_fails_closed'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-evaluation-apply-green -p no:cacheprovider
+```
+
+Expected GREEN: 8 selected, 8 passed, 0 failed. Record the count, then:
+
+```powershell
 git add sdbr/ddmrp_replenishment.py tests/test_ddmrp_replenishment.py
 git commit -m "feat: apply DDMRP evaluations atomically"
 ```
@@ -989,7 +1022,7 @@ ddmrp_replenishment_chains
 ddmrp_replenishment_recommendations
 ddmrp_replenishment_events
 ddmrp_active_replenishment_graphs
-processed_ddmrp_action_keys
+ddmrp_evaluation_request_results
 ```
 
 Verify save failure restores all seven and the revision.
@@ -997,8 +1030,10 @@ Verify save failure restores all seven and the revision.
 - [ ] **Step 2: Run RED**
 
 ```powershell
-pytest tests/test_state_store.py -q -k "be_ddmrp_007" --basetemp .tmp/pytest-ddmrp-store-red -p no:cacheprovider
+pytest tests/test_state_store.py::test_be_ddmrp_007_sqlite_round_trip_clear_health_and_complete_rollback -q --basetemp .tmp/pytest-ddmrp-store-red -p no:cacheprovider
 ```
+
+Expected RED: 1 selected, 0 passed, 1 failed because the seven DDMRP store fields/boundaries do not exist. Record the count.
 
 - [ ] **Step 3: Add exact store fields and boundaries**
 
@@ -1011,22 +1046,25 @@ ddmrp_replenishment_chains: dict[str, dict[str, object]] = field(default_factory
 ddmrp_replenishment_recommendations: dict[str, dict[str, object]] = field(default_factory=dict)
 ddmrp_replenishment_events: list[dict[str, object]] = field(default_factory=list)
 ddmrp_active_replenishment_graphs: dict[str, dict[str, object]] = field(default_factory=dict)
-processed_ddmrp_action_keys: set[str] = field(default_factory=set)
+ddmrp_evaluation_request_results: dict[str, dict[str, object]] = field(default_factory=dict)
 ```
 
-Add them to `_state_payloads`, `_apply_payloads`, `_clear`, and `_state_counts`; serialize the set sorted. Keep `SCHEMA_VERSION = 1` because state keys remain JSON rows and absent keys load empty.
+Add all seven to `_state_payloads`, `_apply_payloads`, `_clear`, `_state_counts`, complete in-memory snapshots, and restore. Validate every loaded request-result mapping key against `EvaluationRequestID`; malformed persisted identity fails load instead of being normalized. Keep `SCHEMA_VERSION = 1` because state keys remain JSON rows and absent keys load empty.
 
 - [ ] **Step 4: Run GREEN and commit**
 
 ```powershell
-pytest tests/test_state_store.py -q -k "be_ddmrp_007 or complete_state" --basetemp .tmp/pytest-ddmrp-store-green -p no:cacheprovider
+pytest tests/test_state_store.py::test_be_ddmrp_007_sqlite_round_trip_clear_health_and_complete_rollback -q --basetemp .tmp/pytest-ddmrp-store-green -p no:cacheprovider
+pytest tests/test_state_store.py -q -k "complete_state" --basetemp .tmp/pytest-ddmrp-store-regression -p no:cacheprovider
 git add sdbr/state_store.py tests/test_state_store.py
 git commit -m "feat: persist DDMRP evaluation history"
 ```
 
+Expected GREEN: the exact focused selection reports 1 passed; the separate complete-state regression reports a non-zero passing count. Record both.
+
 ---
 
-### Task 7: Safe Workbench Projection With Active/History Visibility
+### Task 7: Safe Workbench Projection With Exact Nested Allowlists
 
 **Files:**
 - Create: `sdbr/ddmrp_replenishment_view.py`
@@ -1034,16 +1072,11 @@ git commit -m "feat: persist DDMRP evaluation history"
 
 **Interfaces:**
 - Produces `build_ddmrp_replenishment_workbench(...) -> dict[str, object]`.
+- Imports the Task 4 field/fold validators; it never passes ledger dictionaries through to the API.
 
 - [ ] **Step 1: Write exact projection tests**
 
-Use module docstring:
-
-```python
-"""Acceptance evidence for BE-DDMRP-007 and UI-DDMRP-003."""
-```
-
-Add exact names:
+Use module docstring `"""Acceptance evidence for BE-DDMRP-007 and UI-DDMRP-003."""` and add:
 
 ```text
 test_be_ddmrp_007_view_returns_latest_rows_plus_older_active_or_adjustment_chains
@@ -1052,9 +1085,27 @@ test_be_ddmrp_007_view_never_exposes_frozen_payload_or_evidence_rows
 test_be_ddmrp_007_view_rejects_duplicate_chain_or_orphan_recommendation
 test_be_ddmrp_007_view_is_deterministic_and_deep_copied
 test_be_ddmrp_007_view_empty_state_shape_is_stable
+test_be_ddmrp_007_view_nested_projection_allowlists_are_exact
 ```
 
-- [ ] **Step 2: Implement the exact signature and response shape**
+- [ ] **Step 2: Run exact RED**
+
+```powershell
+$tests = @(
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_returns_latest_rows_plus_older_active_or_adjustment_chains',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_exposes_null_target_and_business_gate_codes',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_never_exposes_frozen_payload_or_evidence_rows',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_rejects_duplicate_chain_or_orphan_recommendation',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_is_deterministic_and_deep_copied',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_empty_state_shape_is_stable',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_nested_projection_allowlists_are_exact'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-view-red -p no:cacheprovider
+```
+
+Expected RED: 7 selected, 0 passed, 7 failed because the view module/allowlists do not exist. Record actual counts.
+
+- [ ] **Step 3: Implement the exact signature**
 
 ```text
 def build_ddmrp_replenishment_workbench(
@@ -1068,99 +1119,291 @@ def build_ddmrp_replenishment_workbench(
 ) -> dict[str, object]
 ```
 
-Return exactly these top-level keys and types:
+Validate all Task 4 immutable fields/fingerprints/folds before projection. Reject duplicate canonical IDs, mapping-key mismatches, orphan recommendations/events/graphs, multiple current versions, and active graphs on terminal chains. Return a deep copy with exactly these top-level keys:
 
-| Key | Exact type/content |
-| --- | --- |
-| `Evaluation` | `None` for empty state; otherwise an object with exactly `EvaluationID`, `EvaluationAt`, `RecordedAt`, `RuntimePlanningInputPackageID`, `RuntimePlanningInputPackageVersion`, `OperatingModelConfigurationID`, `OperatingModelFingerprint`, `DDMRPConfigurationID`, `AuthoritySignatureFingerprint`, and `OperationalActionAllowed=False`. |
-| `Summary` | Object with exactly `RedCount`, `YellowCount`, `GreenCount`, `AboveGreenCount`, `BlockedRecommendationCount`, `PendingReviewCount=0`, `AdjustmentRequiredCount`, and `ActiveGraphCount`. |
-| `Rows` | Deterministically sorted copied business-row list for the latest evaluation. |
-| `ActiveGraphs` | Deterministically sorted copied active-graph summaries, including older confirmed/adjustment chains. |
-| `History` | Deterministically sorted copied recommendation version/event summaries. |
-| `Issues` | Copied structured issue/gate list. |
-| `Boundary` | Exact string `Read-only SDBR planning evaluation; no ERP order, inventory authority, or operational reservation write.` |
+```python
+WORKBENCH_FIELDS = (
+    "Evaluation", "Summary", "Rows", "ActiveGraphs", "History", "Issues",
+    "Boundary", "TechnicalDetails",
+)
+EVALUATION_VIEW_FIELDS = (
+    "EvaluationID", "EvaluationAt", "RecordedAt", "RuntimePlanningInputPackageID",
+    "RuntimePlanningInputPackageVersion", "OperatingModelConfigurationID",
+    "DDMRPConfigurationID", "OperationalActionAllowed",
+)
+SUMMARY_VIEW_FIELDS = (
+    "RedCount", "YellowCount", "GreenCount", "AboveGreenCount",
+    "BlockedRecommendationCount", "PendingReviewCount",
+    "AdjustmentRequiredCount", "ActiveGraphCount",
+)
+ROW_VIEW_FIELDS = (
+    "RowKey", "ItemID", "LocationID", "Uom", "PlanningStatus", "ExecutionStatus",
+    "BufferPercent", "QualifiedOnHandQty", "PhysicalOnHandQty",
+    "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualifiedOpenSupplyQty",
+    "QualifiedDemandQty", "NetFlowPosition", "TopOfRed", "TopOfYellow",
+    "TopOfGreen", "SuggestedReplenishmentQty", "StandardTargetReceiptAt",
+    "TargetStatusCode", "RecommendedAction", "RecommendationID",
+    "RecommendationVersion", "RecommendationStatus", "GateCodes",
+    "DemandComponents", "SupplyComponents", "OperationalActionAllowed",
+)
+ACTIVE_GRAPH_VIEW_FIELDS = (
+    "LogicalReplenishmentID", "RecommendationID", "RecommendationVersion",
+    "ItemID", "LocationID", "Uom", "GraphStatus", "CandidateStatus",
+    "PlannedSupplyQty", "PlanningRunID", "FormalOrderRef",
+    "AdjustmentRequired", "LastEventAt",
+)
+HISTORY_VIEW_FIELDS = (
+    "LogicalReplenishmentID", "RecommendationID", "RecommendationVersion",
+    "PredecessorRecommendationID", "SupersededByRecommendationID",
+    "AdjustmentOfRecommendationID", "InitialStatus", "CurrentStatus",
+    "SuggestedReplenishmentQty", "StandardTargetReceiptAt", "EvaluationID",
+    "EvaluationAt", "LastEventAt", "Events",
+)
+HISTORY_EVENT_FIELDS = (
+    "EventID", "EventType", "OccurredAt", "ActorID",
+    "RelatedRecommendationID", "StatusBefore", "StatusAfter",
+)
+ISSUE_VIEW_FIELDS = (
+    "Severity", "Code", "Message", "ItemID", "LocationID",
+    "BlocksOperationalAction",
+)
+TECHNICAL_DETAILS_FIELDS = (
+    "EvaluationID", "EvaluationFingerprint", "AuthoritySignatureFingerprint",
+    "RelevantPlanningLedgerIdentity", "RelevantPlanningLedgerFingerprint",
+    "RuntimeSnapshotID", "ParameterAuthorityFingerprint",
+    "RecommendationFingerprints",
+)
+RECOMMENDATION_FINGERPRINT_FIELDS = (
+    "RecommendationID", "RecommendationFingerprint",
+)
+```
 
-Rows expose business quantities, `StandardTargetReceiptAt=None`, source type, statuses, and gate messages. IDs/fingerprints live only under `TechnicalDetails`. Reject malformed graph identities rather than undercounting. Never return package/config payloads, evidence refs, capacity/material rows, or a generic `Payload` key.
+`DemandComponents`, `SupplyComponents`, and gate dictionaries use Task 4's exact nested fields. `Rows` sort by `(PlanningStatus rank, BufferPercent, ItemID, LocationID)`; `ActiveGraphs` by `(ItemID, LocationID, LogicalReplenishmentID)`; `History` by `(ItemID, LocationID, RecommendationVersion, RecommendationID)`; nested events by `(AggregateVersion, EventID)`; issues by `(Severity, Code, ItemID or "", LocationID or "")`. Empty state returns the same eight top-level keys, `Evaluation=None`, zeroed exact summary, empty lists, the exact boundary, and an empty exact technical object.
 
-- [ ] **Step 3: Run and commit**
+The boundary is exactly `Read-only SDBR planning evaluation; no ERP order, inventory authority, or operational reservation write.` No projection may contain `Payload`, `AuthoritySignature`, evidence refs, capacity/material ledger rows, request results, event payloads, or an unallowlisted nested key. IDs/fingerprints appear only in the named business links or `TechnicalDetails`.
+
+- [ ] **Step 4: Run matching GREEN and commit**
 
 ```powershell
-pytest tests/test_ddmrp_replenishment_view.py -q --basetemp .tmp/pytest-ddmrp-view -p no:cacheprovider
+$tests = @(
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_returns_latest_rows_plus_older_active_or_adjustment_chains',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_exposes_null_target_and_business_gate_codes',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_never_exposes_frozen_payload_or_evidence_rows',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_rejects_duplicate_chain_or_orphan_recommendation',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_is_deterministic_and_deep_copied',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_empty_state_shape_is_stable',
+  'tests/test_ddmrp_replenishment_view.py::test_be_ddmrp_007_view_nested_projection_allowlists_are_exact'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-view-green -p no:cacheprovider
+```
+
+Expected GREEN: 7 selected, 7 passed, 0 failed. Record the count, then:
+
+```powershell
 git add sdbr/ddmrp_replenishment_view.py tests/test_ddmrp_replenishment_view.py
 git commit -m "feat: project safe DDMRP workbench rows"
 ```
 
 ---
 
-### Task 8: Server-Built Evaluation And Read API
+### Task 8: Strict Server-Built Evaluation API, Snapshot Time, And Replay-First Orchestration
 
 **Files:**
-- Modify: `sdbr/api.py` near current DDMRP payloads/routes and `persist_successful_writes`
+- Modify: `sdbr/api.py` near imports, DDMRP payloads/routes, authorization, `create_app`, and `persist_successful_writes`
 - Modify: `tests/test_api.py`
 
 **Interfaces:**
 - Produces `POST /planner/workbench/ddmrp/evaluations` and `GET /planner/workbench/ddmrp/workbench`.
-- Uses the existing response wrapper `{Endpoint, StatusCode, Data}` and `X-Workbench-Revision`.
-- Accepts no advice type, target, BOM, capacity, material, actor, or timestamp override.
+- Uses `{Endpoint, StatusCode, Data}` and `X-Workbench-Revision` exactly.
+- Accepts only request ID and stored package ID; no advice, target, BOM, capacity, material, actor, or timestamp override.
 
-- [ ] **Step 1: Add exact API models**
+- [ ] **Step 1: Add the strict model and aware-datetime adapter**
+
+Change the Pydantic import and define the model exactly:
 
 ```python
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+
+_AWARE_DATETIME_ADAPTER = TypeAdapter(AwareDatetime)
+
+
 class DdmrpEvaluationCreatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     EvaluationRequestID: str = Field(min_length=1)
     RuntimePlanningInputPackageID: str = Field(min_length=1)
 ```
 
-There are no mutable list defaults and no client actor/time fields.
+There are no mutable defaults or client actor/time fields. Extra `AdviceType`, `TargetReceiptAt`, `CapacityRequests`, `MaterialRequests`, package rows, or evidence fields fail FastAPI/Pydantic validation with 422 before route code runs.
 
-- [ ] **Step 2: Write RED API/RBAC/rollback tests**
+- [ ] **Step 2: Write all exact API RED tests and traceability comments**
 
-Extend the module traceability comment for each test and use exact names:
+Add `# BE-DDMRP-007` to each test, add `# UI-DDMRP-003 / BE-DDMRP-007` to the workbench shape test, and add `# BE-DDMRP-007 / BE-OPS-001` to the RBAC test:
 
 ```text
 test_be_ddmrp_007_evaluation_api_references_stored_validated_package_only
-test_be_ddmrp_007_evaluation_api_rejects_raw_authority_fields
+test_be_ddmrp_007_evaluation_api_rejects_raw_authority_fields_with_422
 test_be_ddmrp_007_evaluation_api_uses_server_actor_and_server_time
-test_be_ddmrp_007_evaluation_api_exact_retry_and_changed_request_conflict
+test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save
+test_be_ddmrp_007_evaluation_api_request_id_reuse_with_different_package_returns_409
+test_be_ddmrp_007_evaluation_api_uses_snapshot_at_for_calculation_and_evaluation_record
+test_be_ddmrp_007_evaluation_api_rejects_naive_or_invalid_snapshot_at
 test_be_ddmrp_007_evaluation_api_public_demo_is_read_only
 test_be_ddmrp_007_workbench_api_uses_standard_wrapper_and_safe_shape
 test_be_ddmrp_007_write_revision_and_save_failure_restore_every_ledger
 test_be_ddmrp_007_ddmrp_routes_enforce_viewer_planner_admin_rbac
+test_be_ddmrp_007_unrelated_workbench_write_does_not_change_relevant_ledger_identity
 ```
 
-The raw-authority test posts extra fields such as `AdviceType`, `TargetReceiptAt`, `CapacityRequests`, or `MaterialRequests` and expects Pydantic `422` because the model is strict (`model_config = ConfigDict(extra="forbid")`). RBAC expectations: Viewer may GET but not POST; Planner/Admin may GET/POST; Worker may not access this planner page; missing identity is 401 when auth is enabled.
+The lost-response test performs a successful POST, discards that response, proves the store saved once, then repeats the identical body after that mutation and expects `Data.Status == "Duplicate"`, the same IDs/result, and unchanged DDMRP child/request-result counts. It must not reuse a stale `If-Match`; the separate revision test owns stale-revision behavior. The changed-package test reuses the same request ID and expects 409 before any package calculation.
 
-- [ ] **Step 3: Extend auth and bind ledgers**
+- [ ] **Step 3: Run exact RED**
 
-Add the `/planner/workbench/ddmrp` prefix to middleware authorization. Add a DDMRP-specific branch to `_planning_run_authorization_error`: GET permits `Viewer`, `Planner`, `Admin`; writes permit `Planner`, `Admin`. Keep existing Planning Run/reservation behavior unchanged.
+```powershell
+$tests = @(
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_references_stored_validated_package_only',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_rejects_raw_authority_fields_with_422',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_uses_server_actor_and_server_time',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_request_id_reuse_with_different_package_returns_409',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_uses_snapshot_at_for_calculation_and_evaluation_record',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_rejects_naive_or_invalid_snapshot_at',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_public_demo_is_read_only',
+  'tests/test_api.py::test_be_ddmrp_007_workbench_api_uses_standard_wrapper_and_safe_shape',
+  'tests/test_api.py::test_be_ddmrp_007_write_revision_and_save_failure_restore_every_ledger',
+  'tests/test_api.py::test_be_ddmrp_007_ddmrp_routes_enforce_viewer_planner_admin_rbac',
+  'tests/test_api.py::test_be_ddmrp_007_unrelated_workbench_write_does_not_change_relevant_ledger_identity'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-api-red -p no:cacheprovider
+```
 
-Bind the seven new store collections in `create_app`.
+Expected RED: 12 selected, 0 passed, 12 failed because routes/model/bindings do not exist. Record actual counts.
 
-- [ ] **Step 4: Implement thin server-owned orchestration**
+- [ ] **Step 4: Extend authorization and bind all seven NOW ledgers**
 
-The POST route must:
+Add `/planner/workbench/ddmrp` to the authenticated middleware prefix. In `_planning_run_authorization_error`, a DDMRP GET permits `Viewer`, `Planner`, `Admin`; DDMRP writes permit `Planner`, `Admin`; Worker is denied. Missing identity is 401. Existing Planning Run/reservation role behavior is unchanged. Bind runs, rows, chains, recommendations, events, active graphs, and evaluation request results from `active_store` in `create_app`.
 
-1. Look up `RuntimePlanningInputPackageID` in `ddsop_runtime_planning_input_packages` and its referenced configuration in `operating_model_configurations`.
-2. Require stored `ProcessingStatus="Accepted"`; never process request-body runtime rows.
-3. Use `actor_id = _effective_actor_id(request, "local-planner")` and `recorded_at = server_utc_now()`.
-4. Call `evaluate_ddmrp_runtime_signals_from_package`, `build_read_only_authority_signature`, `prepare_ddmrp_evaluation`, `stage_ddmrp_evaluation`, and `apply_staged_ddmrp_evaluation`.
-5. Return the wrapper below; let middleware own revision admission, save, and complete rollback.
+- [ ] **Step 5: Perform immutable request-result lookup before authority rebuild**
+
+The POST route starts with only the strict body and persisted DDMRP ledgers:
 
 ```python
-{
-    "Endpoint": "/planner/workbench/ddmrp/evaluations",
-    "StatusCode": 200,
-    "Data": {
-        "Status": "Created" | "Duplicate",
-        "EvaluationID": evaluation_id,
-        "RecommendationIDs": recommendation_ids,
-        "OperationalActionAllowed": False,
-        "Workbench": workbench,
-    },
-}
+request_fingerprint = canonical_fingerprint(
+    {
+        "EvaluationRequestID": payload.EvaluationRequestID,
+        "RuntimePlanningInputPackageID": payload.RuntimePlanningInputPackageID,
+    }
+)
+replayed = lookup_ddmrp_evaluation_request_result(
+    evaluation_request_id=payload.EvaluationRequestID,
+    request_fingerprint=request_fingerprint,
+    request_results=ddmrp_evaluation_request_results,
+    evaluation_runs=ddmrp_evaluation_runs,
+    evaluation_rows=ddmrp_evaluation_rows,
+    chains=ddmrp_replenishment_chains,
+    recommendations=ddmrp_replenishment_recommendations,
+    events=tuple(ddmrp_replenishment_events),
+)
+if replayed is not None:
+    return {
+        "Endpoint": endpoint,
+        "StatusCode": 200,
+        "Data": {
+            **replayed,
+            "Workbench": build_ddmrp_replenishment_workbench(...),
+        },
+    }
 ```
 
-The GET route returns:
+The actual call supplies the same six view arguments shown in Step 7; the ellipsis above is only to avoid duplicating that already exact call. This branch does not look up/re-hash the runtime package, configuration, relevant planning ledger, or server time. Persisted graph/result validation occurs inside lookup. Changed request reuse conflicts. This ordering is mandatory for lost-response correctness.
+
+- [ ] **Step 6: Parse authoritative `SnapshotAt` once and show every route argument**
+
+For an unprocessed request, look up `payload.RuntimePlanningInputPackageID` in `ddsop_runtime_planning_input_packages`, require stored `ProcessingStatus == "Accepted"`, resolve `package_record["OperatingModelConfigurationID"]` in `operating_model_configurations`, and reject missing references with 404. Do not process request-body rows.
+
+Parse the stored nested timestamp exactly once:
+
+```python
+package_payload = package_record.get("Payload")
+runtime_snapshot = (
+    package_payload.get("RuntimeEvidenceSnapshot")
+    if isinstance(package_payload, Mapping)
+    else None
+)
+try:
+    evaluated_at = _AWARE_DATETIME_ADAPTER.validate_python(
+        runtime_snapshot["SnapshotAt"]
+    )
+except (KeyError, TypeError, ValidationError) as error:
+    raise DdmrpReplenishmentConflict(
+        "RUNTIME_SNAPSHOT_AT_INVALID: stored SnapshotAt must be timezone-aware."
+    ) from error
+```
+
+Then call every domain interface with these exact arguments and sources:
+
+```python
+scope_item_locations = ddmrp_evaluation_scope_item_locations(
+    package_record=package_record,
+    operating_model_configuration=operating_model_configuration,
+)
+relevant_ledger = build_relevant_planning_ledger_identity(
+    scope_item_locations=scope_item_locations,
+    planning_demand_commitments=planning_demand_commitments,
+    planning_reservation_batches=planning_reservation_batches,
+    ccr_capacity_reservations=ccr_capacity_reservations,
+    material_planning_allocations=material_planning_allocations,
+    active_replenishment_graphs=ddmrp_active_replenishment_graphs,
+)
+runtime_result = evaluate_ddmrp_runtime_signals_from_package(
+    package_record,
+    operating_model_configuration,
+    evaluated_at=evaluated_at,
+)
+authority_signature, gates = build_read_only_authority_signature(
+    package_record=package_record,
+    operating_model_configuration=operating_model_configuration,
+    relevant_planning_ledger=relevant_ledger,
+)
+recorded_at = server_utc_now()
+actor_id = _effective_actor_id(request, "local-planner")
+write_set = prepare_ddmrp_evaluation(
+    evaluation_request_id=payload.EvaluationRequestID,
+    recorded_at=recorded_at,
+    actor_id=actor_id,
+    runtime_result=runtime_result,
+    authority_signature=authority_signature,
+    gates=gates,
+    existing_chains=ddmrp_replenishment_chains,
+    existing_recommendations=ddmrp_replenishment_recommendations,
+    existing_events=tuple(ddmrp_replenishment_events),
+    active_replenishment_graphs=ddmrp_active_replenishment_graphs,
+)
+staged = stage_ddmrp_evaluation(
+    write_set=write_set,
+    evaluation_runs=ddmrp_evaluation_runs,
+    evaluation_rows=ddmrp_evaluation_rows,
+    chains=ddmrp_replenishment_chains,
+    recommendations=ddmrp_replenishment_recommendations,
+    events=tuple(ddmrp_replenishment_events),
+    request_results=ddmrp_evaluation_request_results,
+)
+status, response_data = apply_staged_ddmrp_evaluation(
+    staged=staged,
+    evaluation_runs=ddmrp_evaluation_runs,
+    evaluation_rows=ddmrp_evaluation_rows,
+    chains=ddmrp_replenishment_chains,
+    recommendations=ddmrp_replenishment_recommendations,
+    events=ddmrp_replenishment_events,
+    request_results=ddmrp_evaluation_request_results,
+)
+```
+
+Assert `runtime_result["EvaluatedAt"]`, `authority_signature.runtime_snapshot_at`, evaluation `EvaluationAt`, and every row's evaluation time all equal `evaluated_at.isoformat()`; only `RecordedAt` uses server time. The route never uses server time for overdue/today/spike/open-supply qualification. Let middleware own admission, save, and complete state rollback.
+
+- [ ] **Step 7: Return exact wrappers and errors**
+
+POST `Data` is exactly `Status`, `EvaluationID`, `RecommendationIDs`, `OperationalActionAllowed=False`, and `Workbench`. GET is exactly:
 
 ```python
 {
@@ -1177,13 +1420,33 @@ The GET route returns:
 }
 ```
 
-Map unknown package/config to 404, contract/signature/domain conflicts to structured 409, and schema extras to 422.
+Unknown package/config is 404; invalid stored snapshot, authority/signature/domain, changed request reuse, orphan, or graph drift is structured 409; request extras are 422; RBAC is 401/403. Every response retains `X-Workbench-Revision`.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [ ] **Step 8: Run matching GREEN, regressions, and commit**
 
 ```powershell
-pytest tests/test_api.py tests/test_ddmrp_replenishment.py tests/test_ddmrp_replenishment_view.py tests/test_state_store.py -q -k "be_ddmrp_007" --basetemp .tmp/pytest-ddmrp-api-green -p no:cacheprovider
+$tests = @(
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_references_stored_validated_package_only',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_rejects_raw_authority_fields_with_422',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_uses_server_actor_and_server_time',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_request_id_reuse_with_different_package_returns_409',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_uses_snapshot_at_for_calculation_and_evaluation_record',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_rejects_naive_or_invalid_snapshot_at',
+  'tests/test_api.py::test_be_ddmrp_007_evaluation_api_public_demo_is_read_only',
+  'tests/test_api.py::test_be_ddmrp_007_workbench_api_uses_standard_wrapper_and_safe_shape',
+  'tests/test_api.py::test_be_ddmrp_007_write_revision_and_save_failure_restore_every_ledger',
+  'tests/test_api.py::test_be_ddmrp_007_ddmrp_routes_enforce_viewer_planner_admin_rbac',
+  'tests/test_api.py::test_be_ddmrp_007_unrelated_workbench_write_does_not_change_relevant_ledger_identity'
+)
+pytest @tests -q --basetemp .tmp/pytest-ddmrp-api-green -p no:cacheprovider
+pytest tests/test_api.py tests/test_ddmrp_replenishment.py tests/test_ddmrp_replenishment_view.py tests/test_state_store.py -q -k "be_ddmrp_007" --basetemp .tmp/pytest-ddmrp-api-regression -p no:cacheprovider
 python -m compileall -q sdbr
+```
+
+Expected GREEN: exact selection 12 passed; regression selection has a non-zero recorded passing count; compile exits 0. Then:
+
+```powershell
 git add sdbr/api.py tests/test_api.py
 git commit -m "feat: expose read-only DDMRP evaluations"
 ```

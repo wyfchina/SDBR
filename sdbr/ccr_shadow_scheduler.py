@@ -497,3 +497,123 @@ def _requested_candidate(
         ),
         "ConsideredWindowKeys": sorted(considered),
     }
+
+
+def _earliest_safe_candidate(
+    *,
+    order_id: str,
+    all_route_operations: list[dict[str, object]],
+    source_states: Mapping[
+        tuple[str, datetime, datetime], dict[str, object]
+    ],
+    capacity_assessment_cutoff_at: datetime,
+    downstream_protection_minutes: int,
+    protection_threshold_percent: float,
+) -> dict[str, object] | None:
+    states = deepcopy(dict(source_states))
+    cursor = capacity_assessment_cutoff_at
+    assessments: list[dict[str, object]] = []
+    requests: list[dict[str, object]] = []
+    considered: set[tuple[str, str, str]] = set()
+    for operation in sorted(
+        all_route_operations,
+        key=lambda row: int(row["RouteSequence"]),
+    ):
+        duration = int(operation["DurationMinutes"])
+        if not bool(operation["IsPrimaryCcr"]):
+            cursor += timedelta(minutes=duration)
+            continue
+        resource_id = str(operation["ResourceID"])
+        fitting: list[tuple[dict[str, object], dict[str, object]]] = []
+        for key, state in states.items():
+            if key[0] != resource_id or key[2] <= cursor:
+                continue
+            considered.add((key[0], _utc_iso(key[1]), _utc_iso(key[2])))
+            metrics = _window_metrics(
+                state,
+                usable_start=cursor,
+                deadline=key[2],
+                candidate_minutes=duration,
+            )
+            if metrics["Fits"]:
+                fitting.append((state, metrics))
+        selected = min(
+            fitting,
+            key=lambda item: (
+                item[0]["WindowEnd"], item[0]["WindowStart"]
+            ),
+            default=None,
+        )
+        if selected is None:
+            return None
+        state, metrics = selected
+        completion_at = state["WindowEnd"]
+        assert isinstance(completion_at, datetime)
+        _commit_candidate(
+            state,
+            minutes=duration,
+            latest_allowed_completion_at=completion_at,
+        )
+        assessments.append(
+            {
+                **metrics,
+                "RouteSequence": operation["RouteSequence"],
+                "OperationID": operation["OperationID"],
+                "ResourceID": resource_id,
+                "LoadStatus": classify_ccr_load(
+                    load_percent=float(metrics["LoadAfterPercent"]),
+                    protective_capacity_target_percent=(
+                        protection_threshold_percent
+                    ),
+                ),
+                "ThresholdExceeded": (
+                    float(metrics["LoadAfterPercent"])
+                    > protection_threshold_percent
+                ),
+            }
+        )
+        requests.append(
+            _reservation_request(
+                order_id=order_id,
+                operation=operation,
+                state=state,
+                operation_deadline=completion_at,
+            )
+        )
+        cursor = completion_at
+    return {
+        "Feasible": True,
+        "PromiseAt": _utc_iso(
+            cursor + timedelta(minutes=downstream_protection_minutes)
+        ),
+        "WindowAssessments": assessments,
+        "ReservationRequests": requests,
+        "ConsideredWindowKeys": sorted(considered),
+    }
+
+
+def _not_assessable_result(
+    *,
+    requested_due_at: datetime,
+    capacity_assessment_cutoff_at: datetime,
+    issues: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "Algorithm": deepcopy(SHADOW_ALGORITHM),
+        "Status": "NotAssessable",
+        "CapacityAssessmentCutoffAt": _utc_iso(
+            capacity_assessment_cutoff_at
+        ),
+        "RequestedDueAt": _utc_iso(requested_due_at),
+        "LatestCcrCompletionAt": None,
+        "RequestedDateAssessment": {"Feasible": False},
+        "EarliestSafeAssessment": None,
+        "SelectedAssessment": None,
+        "RelevantCapacityWindowKeys": [],
+        "Issues": deepcopy(issues),
+        "Summary": {
+            "CcrOperationCount": 0,
+            "SelectedWindowCount": 0,
+            "MaximumLoadAfterPercent": None,
+        },
+    }

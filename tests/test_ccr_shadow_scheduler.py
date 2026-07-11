@@ -5,9 +5,12 @@ import pytest
 from sdbr.ccr_shadow_scheduler import (
     _build_window_states,
     _commit_candidate,
+    _earliest_safe_candidate,
     _extract_route_operations,
+    _not_assessable_result,
     _requested_candidate,
     _reservation_request,
+    _route_deadlines,
     _validate_shadow_request,
     _window_metrics,
 )
@@ -522,3 +525,144 @@ class TestCcrShadowPromiseSelection:
         assert result["ConsideredWindowKeys"] == [
             ("CCR-1", start.isoformat(), end.isoformat())
         ]
+
+    def test_late_requested_candidate_returns_earliest_safe_promise(self):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        requested_due_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        start = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        operation = {
+            "RouteSequence": 10,
+            "OperationID": "SO-1:10:CUT",
+            "SourceOperationID": "CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 120,
+            "IsPrimaryCcr": True,
+        }
+        states = {
+            ("CCR-1", start, end): self._state(
+                "CCR-1", start, end, 240
+            )
+        }
+        requested = _requested_candidate(
+            order_id="SO-1:10",
+            requested_due_at=requested_due_at,
+            capacity_assessment_cutoff_at=cutoff,
+            ccr_operations=[operation],
+            deadlines={"CUT": requested_due_at},
+            source_states=states,
+            protection_threshold_percent=80.0,
+        )
+
+        earliest = _earliest_safe_candidate(
+            order_id="SO-1:10",
+            all_route_operations=[operation],
+            source_states=states,
+            capacity_assessment_cutoff_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        assert requested["Feasible"] is False
+        assert earliest["PromiseAt"] == (
+            end + timedelta(minutes=60)
+        ).isoformat()
+        assert len(earliest["ReservationRequests"]) == 1
+
+    def test_multi_ccr_route_uses_per_operation_deadlines_and_route_order(self):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        first_end = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        second_end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        due = datetime(2026, 7, 20, 18, tzinfo=UTC)
+        operations = [
+            {
+                "RouteSequence": 10,
+                "OperationID": "SO-1:10:CUT",
+                "SourceOperationID": "CUT",
+                "ResourceID": "CCR-A",
+                "DurationMinutes": 60,
+                "IsPrimaryCcr": True,
+            },
+            {
+                "RouteSequence": 20,
+                "OperationID": "SO-1:10:MOVE",
+                "SourceOperationID": "MOVE",
+                "ResourceID": "NCR-1",
+                "DurationMinutes": 30,
+                "IsPrimaryCcr": False,
+            },
+            {
+                "RouteSequence": 30,
+                "OperationID": "SO-1:10:PACK",
+                "SourceOperationID": "PACK",
+                "ResourceID": "CCR-B",
+                "DurationMinutes": 60,
+                "IsPrimaryCcr": True,
+            },
+        ]
+
+        deadlines = _route_deadlines(
+            all_route_operations=operations,
+            requested_due_at=due,
+            downstream_protection_minutes=60,
+        )
+        earliest = _earliest_safe_candidate(
+            order_id="SO-1:10",
+            all_route_operations=operations,
+            source_states={
+                ("CCR-A", cutoff, first_end): self._state(
+                    "CCR-A", cutoff, first_end, 240
+                ),
+                ("CCR-B", first_end, second_end): self._state(
+                    "CCR-B", first_end, second_end, 240
+                ),
+            },
+            capacity_assessment_cutoff_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        assert deadlines == {
+            "PACK": datetime(2026, 7, 20, 17, tzinfo=UTC),
+            "MOVE": datetime(2026, 7, 20, 16, tzinfo=UTC),
+            "CUT": datetime(2026, 7, 20, 15, 30, tzinfo=UTC),
+        }
+        assert [
+            row["RouteSequence"] for row in earliest["WindowAssessments"]
+        ] == [10, 30]
+        assert earliest["PromiseAt"] == datetime(
+            2026, 7, 20, 17, tzinfo=UTC
+        ).isoformat()
+
+    def test_no_later_window_returns_not_assessable_without_reservation_requests(
+        self,
+    ):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        requested_due_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        operation = {
+            "RouteSequence": 10,
+            "OperationID": "SO-1:10:CUT",
+            "SourceOperationID": "CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 120,
+            "IsPrimaryCcr": True,
+        }
+
+        earliest = _earliest_safe_candidate(
+            order_id="SO-1:10",
+            all_route_operations=[operation],
+            source_states={},
+            capacity_assessment_cutoff_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+        result = _not_assessable_result(
+            requested_due_at=requested_due_at,
+            capacity_assessment_cutoff_at=cutoff,
+            issues=[{"Code": "NO_SAFE_CCR_WINDOW", "EntityIDs": []}],
+        )
+
+        assert earliest is None
+        assert result["Status"] == "NotAssessable"
+        assert result["SelectedAssessment"] is None
+        assert result["Summary"]["SelectedWindowCount"] == 0

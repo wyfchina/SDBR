@@ -259,6 +259,462 @@ def test_be_ddmrp_007_signature_uses_canonical_snapshot_datetime_not_raw_package
         )
 
 
+def test_be_ddmrp_007_red_yellow_create_blocked_versions_green_above_remain_monitor_rows() -> None:
+    write_set = _prepare_evaluation()
+
+    assert len(write_set.evaluation_rows) == 4
+    assert [row["PlanningStatus"] for row in write_set.evaluation_rows] == [
+        "AboveGreen", "Green", "Red", "Yellow"
+    ]
+    assert len(write_set.chain_records) == 2
+    assert len(write_set.recommendation_versions) == 2
+    assert {row["PlanningStatus"] for row in write_set.recommendation_versions} == {
+        "Red", "Yellow"
+    }
+    assert all(
+        recommendation["AdviceType"] is None
+        and recommendation["StandardTargetReceiptAt"] is None
+        and recommendation["InitialStatus"] == "Blocked"
+        and [gate["Code"] for gate in recommendation["GateCodes"]] == _gate_codes()
+        for recommendation in write_set.recommendation_versions
+    )
+    monitor_rows = [
+        row for row in write_set.evaluation_rows
+        if row["PlanningStatus"] in {"Green", "AboveGreen"}
+    ]
+    assert all(
+        row["SuggestedReplenishmentQty"] == 0
+        and row["RecommendedAction"] == "Monitor"
+        and row["RecommendationID"] is None
+        for row in monitor_rows
+    )
+
+
+def test_be_ddmrp_007_reevaluation_reuses_logical_chain_and_increments_version() -> None:
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    second = _prepare_evaluation(
+        request_id="REQ-2",
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 60)],
+        existing=_existing_from(first),
+    )
+
+    assert second.chain_records == ()
+    assert second.request_result["CreatedLogicalReplenishmentIDs"] == []
+    assert second.request_result["ReusedLogicalReplenishmentIDs"] == [
+        first.chain_records[0]["LogicalReplenishmentID"]
+    ]
+    assert second.recommendation_versions[0]["RecommendationVersion"] == 2
+    assert second.recommendation_versions[0]["LogicalReplenishmentID"] == (
+        first.recommendation_versions[0]["LogicalReplenishmentID"]
+    )
+
+
+def test_be_ddmrp_007_recommendation_predecessor_and_supersession_links_are_bidirectional() -> None:
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    second = _prepare_evaluation(
+        request_id="REQ-2",
+        lines=[_runtime_line("ITEM-RED", "LOC", "Yellow", 50)],
+        existing=_existing_from(first),
+    )
+    predecessor = first.recommendation_versions[0]
+    successor = second.recommendation_versions[0]
+    superseded = next(
+        event for event in second.events if event["EventType"] == "RecommendationSuperseded"
+    )
+
+    assert successor["PredecessorRecommendationID"] == predecessor["RecommendationID"]
+    assert superseded["AggregateID"] == predecessor["RecommendationID"]
+    assert superseded["RelatedRecommendationID"] == successor["RecommendationID"]
+    assert superseded["EventPayload"] == {
+        "SupersededByRecommendationID": successor["RecommendationID"],
+        "SupersedingEvaluationID": successor["EvaluationID"],
+    }
+
+
+def test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_second_actionable_version() -> None:
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    existing = _existing_from(first)
+    recommendation = first.recommendation_versions[0]
+    chain = first.chain_records[0]
+    existing["events"] += _confirmation_events(recommendation, chain)
+    existing["active_graphs"] = {
+        chain["LogicalReplenishmentID"]: _active_graph(chain, recommendation)
+    }
+    second = _prepare_evaluation(
+        request_id="REQ-2",
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 90)],
+        existing=existing,
+    )
+
+    adjustment = second.recommendation_versions[0]
+    assert adjustment["InitialStatus"] == "AdjustmentRequired"
+    assert adjustment["AdjustmentOfRecommendationID"] == recommendation["RecommendationID"]
+    assert adjustment["PredecessorRecommendationID"] == recommendation["RecommendationID"]
+    assert not any(
+        event["EventType"] in {"RecommendationPendingReview", "RecommendationConfirmed"}
+        for event in second.events
+    )
+
+
+def test_be_ddmrp_007_terminal_chain_starts_next_cycle_with_new_logical_identity() -> None:
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    existing = _existing_from(first)
+    chain = first.chain_records[0]
+    existing["events"] += (
+        _event(
+            "ReplenishmentChainReleased", "ReplenishmentChain", chain["LogicalReplenishmentID"],
+            2, "Open", "Released", {"DecisionID": "DEC-1", "Reason": "Closed cycle"},
+            chain["OpenedByEvaluationID"], chain["LogicalReplenishmentID"], None,
+        ),
+    )
+    second = _prepare_evaluation(
+        request_id="REQ-2",
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)],
+        existing=existing,
+    )
+
+    assert second.chain_records[0]["CycleNumber"] == 2
+    assert second.chain_records[0]["LogicalReplenishmentID"] != chain["LogicalReplenishmentID"]
+    assert second.recommendation_versions[0]["RecommendationVersion"] == 1
+
+
+def test_be_ddmrp_007_same_authority_inputs_produce_deterministic_ids_and_fingerprint() -> None:
+    first = _prepare_evaluation()
+    second = _prepare_evaluation()
+
+    assert first == second
+    assert first.payload_fingerprint == second.payload_fingerprint
+    assert first.request_result["EvaluationPayloadFingerprint"] == first.payload_fingerprint
+    assert first.evaluation_run["EvaluationAt"] == EVALUATED_AT.isoformat()
+    assert all(
+        row["EvaluationAt"] == EVALUATED_AT.isoformat()
+        for row in first.evaluation_rows
+    )
+
+
+def test_be_ddmrp_007_logical_identity_uses_canonical_json_for_adversarial_identifiers() -> None:
+    import json
+
+    from sdbr.ddmrp_replenishment import canonical_stable_id
+
+    identities = [
+        {"ItemID": "A|B", "LocationID": "C", "CycleNumber": 1},
+        {"ItemID": "A", "LocationID": "B|C", "CycleNumber": 1},
+        {"ItemID": '{"x":1}', "LocationID": "[x]", "CycleNumber": 2},
+    ]
+    canonical = [json.dumps(value, sort_keys=True, separators=(",", ":")) for value in identities]
+    ids = [canonical_stable_id("DRL", value) for value in identities]
+    row_keys = [
+        json.dumps(
+            {"ItemID": value["ItemID"], "LocationID": value["LocationID"]},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for value in identities
+    ]
+
+    assert len(set(canonical)) == len(identities)
+    assert len(set(row_keys)) == len(identities)
+    assert len(set(ids)) == len(identities)
+
+
+def test_be_ddmrp_007_immutable_record_field_sets_and_nested_fingerprints_are_exact() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DEMAND_COMPONENT_FIELDS, EVALUATION_ROW_FIELDS, EVALUATION_RUN_FIELDS,
+        EVALUATION_SUMMARY_FIELDS, GATE_FIELDS, ISSUE_RECORD_FIELDS,
+        RECOMMENDATION_FIELDS, REPLENISHMENT_CHAIN_FIELDS, REQUEST_RESULT_FIELDS,
+        RESPONSE_DATA_FIELDS, SUPPLY_COMPONENT_FIELDS, canonical_fingerprint,
+    )
+
+    write_set = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    run = write_set.evaluation_run
+    row = write_set.evaluation_rows[0]
+    chain = write_set.chain_records[0]
+    recommendation = write_set.recommendation_versions[0]
+    result = write_set.request_result
+    assert set(run) == set(EVALUATION_RUN_FIELDS)
+    assert set(run["Summary"]) == set(EVALUATION_SUMMARY_FIELDS)
+    assert all(set(issue) == set(ISSUE_RECORD_FIELDS) for issue in run["Issues"])
+    assert set(row) == set(EVALUATION_ROW_FIELDS)
+    assert set(row["DemandComponents"][0]) == set(DEMAND_COMPONENT_FIELDS)
+    assert set(row["SupplyComponents"][0]) == set(SUPPLY_COMPONENT_FIELDS)
+    assert set(row["GateCodes"][0]) == set(GATE_FIELDS)
+    assert set(chain) == set(REPLENISHMENT_CHAIN_FIELDS)
+    assert set(recommendation) == set(RECOMMENDATION_FIELDS)
+    assert set(result) == set(REQUEST_RESULT_FIELDS)
+    assert set(result["ResponseData"]) == set(RESPONSE_DATA_FIELDS)
+    forbidden = {
+        "Payload", "CandidateID", "ReservationBatchID", "CapacityReservationIDs",
+        "MaterialAllocationIDs",
+    }
+    assert all(
+        not (forbidden & set(record))
+        for record in (run, row, chain, recommendation, result)
+    )
+    for record, fingerprint in (
+        (run, "EvaluationFingerprint"), (row, "EvaluationRowFingerprint"),
+        (chain, "ChainFingerprint"), (recommendation, "RecommendationFingerprint"),
+        (result, "RequestResultFingerprint"),
+    ):
+        assert record[fingerprint] == canonical_fingerprint(
+            {key: value for key, value in record.items() if key != fingerprint}
+        )
+
+
+def test_be_ddmrp_007_event_types_payloads_creation_versions_and_folds_are_exact() -> None:
+    from sdbr.ddmrp_replenishment import (
+        EVENT_FIELDS, EVENT_PAYLOAD_FIELDS_BY_TYPE, canonical_fingerprint,
+        fold_chain_status, fold_recommendation_status,
+    )
+
+    write_set = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    chain = write_set.chain_records[0]
+    recommendation = write_set.recommendation_versions[0]
+    for event in write_set.events:
+        assert set(event) == set(EVENT_FIELDS)
+        assert set(event["EventPayload"]) == set(
+            EVENT_PAYLOAD_FIELDS_BY_TYPE[event["EventType"]]
+        )
+        assert event["PayloadFingerprint"] == canonical_fingerprint(event["EventPayload"])
+        assert event["AggregateVersion"] == 1
+    assert fold_chain_status(chain, write_set.events) == "Open"
+    assert fold_recommendation_status(recommendation, write_set.events) == "Blocked"
+
+
+def test_be_ddmrp_007_event_fold_rejects_gaps_duplicates_illegal_creation_and_status_transitions() -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, fold_chain_status, fold_recommendation_status,
+    )
+
+    write_set = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    chain = write_set.chain_records[0]
+    recommendation = write_set.recommendation_versions[0]
+    chain_event, recommendation_event = write_set.events
+    gap = replace_event(chain_event, AggregateVersion=2)
+    duplicate = (chain_event, replace_event(chain_event, EventType="ReplenishmentChainCancelled"))
+    illegal_creation = replace_event(chain_event, EventType="ReplenishmentChainCompleted")
+    illegal_transition = (
+        recommendation_event,
+        _event(
+            "RecommendationIssued", "Recommendation", recommendation["RecommendationID"],
+            2, "Blocked", "Issued", {"OutputRequestID": "OUT-1"},
+            recommendation["EvaluationID"], recommendation["LogicalReplenishmentID"],
+            recommendation["RecommendationID"],
+        ),
+    )
+    with pytest.raises(DdmrpReplenishmentConflict):
+        fold_chain_status(chain, (gap,))
+    with pytest.raises(DdmrpReplenishmentConflict):
+        fold_chain_status(chain, duplicate)
+    with pytest.raises(DdmrpReplenishmentConflict):
+        fold_chain_status(chain, (illegal_creation,))
+    with pytest.raises(DdmrpReplenishmentConflict):
+        fold_recommendation_status(recommendation, illegal_transition)
+
+
+def test_be_ddmrp_007_issue_records_persist_full_gate_context() -> None:
+    from sdbr.ddmrp_replenishment import canonical_fingerprint
+
+    write_set = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    issues = write_set.evaluation_run["Issues"]
+    assert [issue["Code"] for issue in issues] == _gate_codes()
+    for issue in issues:
+        gate = next(gate for gate in _evaluation_inputs()[1] if gate.code == issue["Code"])
+        assert issue["Severity"] == "Blocking"
+        assert issue["Message"] == gate.message
+        assert issue["ItemID"] is None and issue["LocationID"] is None
+        assert issue["BlocksOperationalAction"] is True
+        assert issue["IssueFingerprint"] == canonical_fingerprint(
+            {key: value for key, value in issue.items() if key != "IssueFingerprint"}
+        )
+
+
+def test_be_ddmrp_007_supply_components_use_only_authoritative_contract_fields() -> None:
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict, SUPPLY_COMPONENT_FIELDS
+
+    line = _runtime_line("ITEM-RED", "LOC", "Red", 70)
+    write_set = _prepare_evaluation(lines=[line])
+    assert set(write_set.evaluation_rows[0]["SupplyComponents"][0]) == set(
+        SUPPLY_COMPONENT_FIELDS
+    )
+    invalid = deepcopy(line)
+    invalid["SupplyComponents"][0]["SourceType"] = "PurchaseOrder"
+    with pytest.raises(DdmrpReplenishmentConflict, match="extra"):
+        _prepare_evaluation(lines=[invalid])
+
+
+def _prepare_evaluation(
+    *,
+    request_id: str = "REQ-1",
+    lines: list[dict[str, object]] | None = None,
+    existing: dict[str, object] | None = None,
+):
+    from sdbr.ddmrp_replenishment import prepare_ddmrp_evaluation
+
+    signature, gates, runtime_result = _evaluation_inputs(lines=lines)
+    existing = existing or {}
+    return prepare_ddmrp_evaluation(
+        evaluation_request_id=request_id,
+        recorded_at=EVALUATED_AT,
+        actor_id="planner-1",
+        runtime_result=runtime_result,
+        authority_signature=signature,
+        gates=gates,
+        existing_chains=existing.get("chains", {}),
+        existing_recommendations=existing.get("recommendations", {}),
+        existing_events=existing.get("events", ()),
+        active_replenishment_graphs=existing.get("active_graphs", {}),
+    )
+
+
+def _evaluation_inputs(*, lines: list[dict[str, object]] | None = None):
+    from sdbr.ddmrp_replenishment import build_read_only_authority_signature
+
+    package = _package_record(production_accepted=False)
+    signature, gates = build_read_only_authority_signature(
+        package_record=package,
+        operating_model_configuration=_operating_model_configuration(package),
+        relevant_planning_ledger=_ledger_identity(),
+        evaluated_at=EVALUATED_AT,
+    )
+    rows = lines or [
+        _runtime_line("ITEM-ABOVE", "LOC", "AboveGreen", 0),
+        _runtime_line("ITEM-GREEN", "LOC", "Green", 0),
+        _runtime_line("ITEM-RED", "LOC", "Red", 70),
+        _runtime_line("ITEM-YELLOW", "LOC", "Yellow", 40),
+    ]
+    return signature, gates, {
+        "EvaluationMode": "DDMRPNetFlowV1",
+        "Boundary": "read-only",
+        "EvaluatedAt": EVALUATED_AT.isoformat(),
+        "Summary": {},
+        "Lines": rows,
+        "Issues": [],
+    }
+
+
+def _runtime_line(
+    item_id: str, location_id: str, status: str, suggested_qty: float
+) -> dict[str, object]:
+    return {
+        "ItemID": item_id, "LocationID": location_id, "BufferProfileID": "BP-1",
+        "DLTMinutes": 1440, "OnHandQty": 10.0, "QualifiedOnHandQty": 10.0,
+        "QualifiedOpenSupplyQty": 5.0, "QualifiedDemandQty": 15.0,
+        "NetFlowPosition": 0.0, "TopOfRed": 20.0, "TopOfYellow": 50.0,
+        "TopOfGreen": 100.0, "PlanningStatus": status, "ExecutionStatus": "Red",
+        "SuggestedReplenishmentQty": suggested_qty,
+        "RecommendedAction": "Replenish" if suggested_qty else "Monitor",
+        "DemandComponents": [{
+            "DemandID": f"D-{item_id}", "DemandType": "CustomerOrder",
+            "DemandQty": 15.0, "DemandDueAt": EVALUATED_AT.isoformat(),
+            "IsQualifiedSpike": False, "Uom": "EA",
+        }],
+        "SupplyComponents": [{
+            "SupplyID": f"S-{item_id}", "SupplyQty": 5.0,
+            "ExpectedAt": EVALUATED_AT.isoformat(), "Status": "Open", "Uom": "EA",
+        }],
+        "PhysicalOnHandQty": 12.0, "AuthorityAllocatedQty": 2.0,
+        "AuthorityAvailableQty": 10.0, "QualityState": "Unrestricted", "Uom": "EA",
+    }
+
+
+def _existing_from(write_set) -> dict[str, object]:
+    return {
+        "chains": {row["LogicalReplenishmentID"]: deepcopy(row) for row in write_set.chain_records},
+        "recommendations": {
+            row["RecommendationID"]: deepcopy(row) for row in write_set.recommendation_versions
+        },
+        "events": tuple(deepcopy(write_set.events)),
+        "active_graphs": {},
+    }
+
+
+def _gate_codes() -> list[str]:
+    return [
+        "DLT_TARGET_SEMANTICS_INSUFFICIENT",
+        "OPERATIONAL_AUTHORITY_NOT_ACCEPTED",
+        "PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED",
+        "PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED",
+    ]
+
+
+def _event(
+    event_type: str, aggregate_type: str, aggregate_id: str, version: int,
+    status_before: str | None, status_after: str, payload: dict[str, object],
+    evaluation_id: str, logical_id: str, recommendation_id: str | None,
+    *, related_id: str | None = None,
+) -> dict[str, object]:
+    from sdbr.ddmrp_replenishment import canonical_fingerprint, canonical_stable_id
+
+    return {
+        "EventID": canonical_stable_id("DRE", {
+            "AggregateType": aggregate_type, "AggregateID": aggregate_id,
+            "AggregateVersion": version, "EventType": event_type,
+        }),
+        "EventType": event_type, "AggregateType": aggregate_type,
+        "AggregateID": aggregate_id, "AggregateVersion": version,
+        "EvaluationID": evaluation_id, "LogicalReplenishmentID": logical_id,
+        "RecommendationID": recommendation_id, "RelatedRecommendationID": related_id,
+        "StatusBefore": status_before, "StatusAfter": status_after,
+        "OccurredAt": EVALUATED_AT.isoformat(), "ActorID": "planner-1",
+        "CausationID": "REQ-LIFECYCLE", "CorrelationID": evaluation_id,
+        "IdempotencyKey": f"IDEM-{event_type}-{version}", "TraceID": logical_id,
+        "EventPayload": deepcopy(payload), "PayloadFingerprint": canonical_fingerprint(payload),
+    }
+
+
+def replace_event(event: dict[str, object], **changes: object) -> dict[str, object]:
+    from sdbr.ddmrp_replenishment import canonical_fingerprint, canonical_stable_id
+
+    changed = deepcopy(event)
+    changed.update(changes)
+    changed["EventID"] = canonical_stable_id("DRE", {
+        "AggregateType": changed["AggregateType"], "AggregateID": changed["AggregateID"],
+        "AggregateVersion": changed["AggregateVersion"], "EventType": changed["EventType"],
+    })
+    payload = changed["EventPayload"]
+    changed["PayloadFingerprint"] = canonical_fingerprint(payload)
+    return changed
+
+
+def _confirmation_events(recommendation, chain) -> tuple[dict[str, object], ...]:
+    logical_id = chain["LogicalReplenishmentID"]
+    recommendation_id = recommendation["RecommendationID"]
+    evaluation_id = recommendation["EvaluationID"]
+    return (
+        _event(
+            "RecommendationPendingReview", "Recommendation", recommendation_id, 2,
+            "Blocked", "PendingReview", {
+                "AdviceType": "Buy",
+                "AuthoritySignatureFingerprint": recommendation["AuthoritySignatureFingerprint"],
+            }, evaluation_id, logical_id, recommendation_id,
+        ),
+        _event(
+            "RecommendationConfirmed", "Recommendation", recommendation_id, 3,
+            "PendingReview", "Confirmed", {
+                "DecisionID": "DEC-1", "AdviceType": "Buy", "Reason": "Approved",
+            }, evaluation_id, logical_id, recommendation_id,
+        ),
+        _event(
+            "ReplenishmentChainActivated", "ReplenishmentChain", logical_id, 2,
+            "Open", "ActiveGraph", {
+                "DecisionID": "DEC-1", "AdviceType": "Buy", "ActiveGraphID": logical_id,
+            }, evaluation_id, logical_id, recommendation_id,
+        ),
+    )
+
+
+def _active_graph(chain, recommendation) -> dict[str, object]:
+    return {
+        "LogicalReplenishmentID": chain["LogicalReplenishmentID"],
+        "RecommendationID": recommendation["RecommendationID"],
+        "ItemID": chain["ItemID"], "LocationID": chain["LocationID"], "Uom": "EA",
+        "GraphStatus": "ActivePlanReservation", "DemandCommitmentID": "D-1",
+        "ReservationBatchID": "B-1", "PlannedManufacturingCandidateID": None,
+        "FormalSupplyID": None, "RecordVersion": 1,
+    }
+
+
 def _ledger_identity(*, quantity: int = 5):
     from sdbr.ddmrp_replenishment import build_relevant_planning_ledger_identity
 

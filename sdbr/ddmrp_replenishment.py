@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
@@ -73,6 +73,201 @@ def canonical_fingerprint(value: object) -> str:
             "DDMRP authority input contains a non-canonical JSON value."
         ) from error
     return f"sha256:{sha256(encoded).hexdigest()}"
+
+
+def canonical_stable_id(prefix: str, identity: Mapping[str, object]) -> str:
+    digest = canonical_fingerprint(dict(identity)).removeprefix("sha256:")
+    return f"{prefix}-{digest[:20]}"
+
+
+EVALUATION_SUMMARY_FIELDS = (
+    "RedCount", "YellowCount", "GreenCount", "AboveGreenCount",
+    "BlockedRecommendationCount", "AdjustmentRequiredCount", "IssueCount",
+)
+DEMAND_COMPONENT_FIELDS = (
+    "DemandID", "DemandType", "DemandQty", "DemandDueAt", "IsQualifiedSpike", "Uom",
+)
+SUPPLY_COMPONENT_FIELDS = (
+    "SupplyID", "SupplyQty", "ExpectedAt", "Status", "Uom",
+)
+GATE_FIELDS = ("Code", "Message", "BlocksOperationalAction")
+ISSUE_RECORD_FIELDS = (
+    "IssueID", "EvaluationID", "Code", "Severity", "Message", "ItemID",
+    "LocationID", "BlocksOperationalAction", "IssueFingerprint",
+)
+ISSUE_SEVERITIES = frozenset({"Blocking", "Warning", "Information"})
+EVALUATION_RUN_FIELDS = (
+    "EvaluationID", "EvaluationRequestID", "EvaluationAt", "RecordedAt", "RecordedBy",
+    "EvaluationMode", "RuntimePlanningInputPackageID",
+    "RuntimePlanningInputPackageVersion", "RuntimeSnapshotID",
+    "OperatingModelConfigurationID", "OperatingModelFingerprint",
+    "DDMRPConfigurationID", "AuthoritySignature", "AuthoritySignatureFingerprint",
+    "RelevantPlanningLedgerIdentity", "RelevantPlanningLedgerFingerprint",
+    "Summary", "Issues", "OperationalActionAllowed", "EvaluationFingerprint",
+)
+EVALUATION_ROW_FIELDS = (
+    "EvaluationRowID", "EvaluationID", "EvaluationAt", "RowKey", "ItemID", "LocationID", "Uom",
+    "BufferProfileID", "DLTMinutes", "QualifiedOnHandQty", "PhysicalOnHandQty",
+    "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualityState",
+    "QualifiedOpenSupplyQty", "QualifiedDemandQty", "NetFlowPosition", "TopOfRed",
+    "TopOfYellow", "TopOfGreen", "PlanningStatus", "ExecutionStatus",
+    "SuggestedReplenishmentQty", "RecommendedAction", "StandardTargetReceiptAt",
+    "TargetStatusCode", "RecommendationID", "DemandComponents", "SupplyComponents",
+    "GateCodes", "OperationalActionAllowed", "AuthoritySignatureFingerprint",
+    "EvaluationRowFingerprint",
+)
+REPLENISHMENT_CHAIN_FIELDS = (
+    "LogicalReplenishmentID", "ItemID", "LocationID", "CycleNumber",
+    "OpenedAt", "OpenedByEvaluationID", "InitialStatus", "IdentityFingerprint",
+    "TraceID", "ChainFingerprint",
+)
+RECOMMENDATION_FIELDS = (
+    "RecommendationID", "LogicalReplenishmentID", "RecommendationVersion",
+    "EvaluationID", "EvaluationRowID", "ItemID", "LocationID", "Uom",
+    "PlanningStatus", "ExecutionStatus", "SuggestedReplenishmentQty",
+    "StandardTargetReceiptAt", "AdviceType", "InitialStatus", "GateCodes",
+    "PredecessorRecommendationID", "AdjustmentOfRecommendationID", "CreatedAt",
+    "CreatedBy", "AuthoritySignature", "AuthoritySignatureFingerprint",
+    "RelevantPlanningLedgerIdentity", "RelevantPlanningLedgerFingerprint",
+    "TraceID", "RecommendationFingerprint",
+)
+EVENT_FIELDS = (
+    "EventID", "EventType", "AggregateType", "AggregateID", "AggregateVersion",
+    "EvaluationID", "LogicalReplenishmentID", "RecommendationID",
+    "RelatedRecommendationID", "StatusBefore", "StatusAfter", "OccurredAt",
+    "ActorID", "CausationID", "CorrelationID", "IdempotencyKey", "TraceID",
+    "EventPayload", "PayloadFingerprint",
+)
+REQUEST_RESULT_FIELDS = (
+    "EvaluationRequestID", "RequestFingerprint", "RuntimePlanningInputPackageID",
+    "EvaluationID", "EvaluationRowIDs", "LogicalReplenishmentIDs",
+    "CreatedLogicalReplenishmentIDs", "ReusedLogicalReplenishmentIDs",
+    "RecommendationIDs", "EventIDs", "EvaluationPayloadFingerprint",
+    "ResponseData", "ResponseFingerprint", "RecordedAt", "RecordedBy",
+    "RequestResultFingerprint",
+)
+RESPONSE_DATA_FIELDS = (
+    "Status", "EvaluationID", "RecommendationIDs", "OperationalActionAllowed",
+)
+
+EVENT_PAYLOAD_FIELDS_BY_TYPE = {
+    "ReplenishmentChainOpened": (
+        "CycleNumber", "ItemID", "LocationID", "OpenedByEvaluationID",
+    ),
+    "ReplenishmentChainActivated": ("DecisionID", "AdviceType", "ActiveGraphID"),
+    "ReplenishmentChainAdjustmentRequired": (
+        "AdjustmentRecommendationID", "AdjustmentDeltaQty", "ReasonCode",
+    ),
+    "ReplenishmentChainReleased": ("DecisionID", "Reason"),
+    "ReplenishmentChainCancelled": ("DecisionID", "Reason"),
+    "ReplenishmentChainCompleted": ("FormalSupplyID",),
+    "RecommendationVersionCreated": (
+        "RecommendationVersion", "SuggestedReplenishmentQty", "GateCodes",
+        "PredecessorRecommendationID", "AdjustmentOfRecommendationID",
+    ),
+    "RecommendationSuperseded": (
+        "SupersededByRecommendationID", "SupersedingEvaluationID",
+    ),
+    "RecommendationPendingReview": (
+        "AdviceType", "AuthoritySignatureFingerprint",
+    ),
+    "RecommendationConfirmed": ("DecisionID", "AdviceType", "Reason"),
+    "RecommendationRejected": ("DecisionID", "Reason"),
+    "RecommendationIssued": ("OutputRequestID",),
+    "RecommendationOutputFailed": ("OutputRequestID", "FailureCode"),
+    "RecommendationERPAccepted": ("ExternalOrderRef", "FormalSupplyID"),
+    "RecommendationInExecution": ("FormalSupplyID",),
+    "RecommendationAdjustmentRequired": (
+        "AdjustmentRecommendationID", "AdjustmentDeltaQty", "ReasonCode",
+    ),
+    "RecommendationReleased": ("DecisionID", "Reason"),
+    "RecommendationCancelled": ("DecisionID", "Reason"),
+    "RecommendationCompleted": ("FormalSupplyID", "CompletedQty"),
+}
+EVENT_AGGREGATE_TYPE_BY_EVENT = {
+    **{
+        event_type: "ReplenishmentChain"
+        for event_type in EVENT_PAYLOAD_FIELDS_BY_TYPE
+        if event_type.startswith("ReplenishmentChain")
+    },
+    **{
+        event_type: "Recommendation"
+        for event_type in EVENT_PAYLOAD_FIELDS_BY_TYPE
+        if event_type.startswith("Recommendation")
+    },
+}
+EVENT_TRANSITION_BY_TYPE = {
+    "ReplenishmentChainActivated": (frozenset({"Open"}), "ActiveGraph"),
+    "ReplenishmentChainAdjustmentRequired": (
+        frozenset({"Open", "ActiveGraph"}), "AdjustmentRequired",
+    ),
+    "ReplenishmentChainReleased": (
+        frozenset({"Open", "ActiveGraph", "AdjustmentRequired"}), "Released",
+    ),
+    "ReplenishmentChainCancelled": (
+        frozenset({"Open", "ActiveGraph", "AdjustmentRequired"}), "Cancelled",
+    ),
+    "ReplenishmentChainCompleted": (
+        frozenset({"Open", "ActiveGraph", "AdjustmentRequired"}), "Completed",
+    ),
+    "RecommendationSuperseded": (
+        frozenset({"Blocked", "PendingReview", "AdjustmentRequired"}), "Superseded",
+    ),
+    "RecommendationPendingReview": (frozenset({"Blocked"}), "PendingReview"),
+    "RecommendationConfirmed": (frozenset({"PendingReview"}), "Confirmed"),
+    "RecommendationRejected": (frozenset({"PendingReview"}), "Rejected"),
+    "RecommendationIssued": (frozenset({"Confirmed", "OutputFailed"}), "Issued"),
+    "RecommendationOutputFailed": (frozenset({"Issued"}), "OutputFailed"),
+    "RecommendationERPAccepted": (frozenset({"Issued"}), "ERPAccepted"),
+    "RecommendationInExecution": (frozenset({"ERPAccepted"}), "InExecution"),
+    "RecommendationAdjustmentRequired": (
+        frozenset({"Confirmed", "Issued", "OutputFailed", "ERPAccepted", "InExecution"}),
+        "AdjustmentRequired",
+    ),
+    "RecommendationReleased": (
+        frozenset({"Confirmed", "AdjustmentRequired"}), "Released",
+    ),
+    "RecommendationCancelled": (
+        frozenset({"Confirmed", "Issued", "OutputFailed", "ERPAccepted", "InExecution", "AdjustmentRequired"}),
+        "Cancelled",
+    ),
+    "RecommendationCompleted": (frozenset({"InExecution"}), "Completed"),
+}
+
+RECOMMENDATION_ACTIVE_STATUSES = frozenset({
+    "Blocked", "PendingReview", "Confirmed", "AdjustmentRequired", "Issued",
+    "OutputFailed", "ERPAccepted", "InExecution",
+})
+RECOMMENDATION_TERMINAL_STATUSES = frozenset({
+    "Rejected", "Superseded", "Released", "Cancelled", "Completed",
+})
+CHAIN_ACTIVE_STATUSES = frozenset({"Open", "ActiveGraph", "AdjustmentRequired"})
+CHAIN_TERMINAL_STATUSES = frozenset({"Released", "Cancelled", "Completed"})
+
+_RUNTIME_RESULT_FIELDS = (
+    "EvaluationMode", "Boundary", "EvaluatedAt", "Summary", "Lines", "Issues",
+)
+_RUNTIME_LINE_FIELDS = (
+    "ItemID", "LocationID", "BufferProfileID", "DLTMinutes", "OnHandQty",
+    "QualifiedOnHandQty", "QualifiedOpenSupplyQty", "QualifiedDemandQty",
+    "NetFlowPosition", "TopOfRed", "TopOfYellow", "TopOfGreen", "PlanningStatus",
+    "ExecutionStatus", "SuggestedReplenishmentQty", "RecommendedAction",
+    "DemandComponents", "SupplyComponents", "PhysicalOnHandQty",
+    "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualityState", "Uom",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DdmrpEvaluationWriteSet:
+    evaluation_request_id: str
+    request_fingerprint: str
+    payload_fingerprint: str
+    evaluation_run: dict[str, object]
+    evaluation_rows: tuple[dict[str, object], ...]
+    chain_records: tuple[dict[str, object], ...]
+    recommendation_versions: tuple[dict[str, object], ...]
+    events: tuple[dict[str, object], ...]
+    request_result: dict[str, object]
 
 
 RELEVANT_DEMAND_FIELDS = (
@@ -325,6 +520,982 @@ def build_read_only_authority_signature(
             )
         )
     return signature, tuple(sorted(gates, key=lambda gate: gate.code))
+
+
+def _require_exact_fields(
+    value: Mapping[str, object],
+    fields: tuple[str, ...],
+    *,
+    context: str,
+) -> None:
+    actual = frozenset(value)
+    expected = frozenset(fields)
+    if actual != expected:
+        raise DdmrpReplenishmentConflict(
+            f"{context} fields differ: missing={sorted(expected - actual)}, "
+            f"extra={sorted(actual - expected)}"
+        )
+
+
+def _validate_event_contract(event: Mapping[str, object]) -> None:
+    _require_exact_fields(event, EVENT_FIELDS, context="DDMRP event")
+    event_type = str(event["EventType"])
+    payload_fields = EVENT_PAYLOAD_FIELDS_BY_TYPE.get(event_type)
+    if payload_fields is None:
+        raise DdmrpReplenishmentConflict(f"Unsupported DDMRP event type: {event_type}")
+    if event["AggregateType"] != EVENT_AGGREGATE_TYPE_BY_EVENT[event_type]:
+        raise DdmrpReplenishmentConflict("DDMRP event aggregate type mismatch.")
+    payload = event["EventPayload"]
+    if not isinstance(payload, Mapping):
+        raise DdmrpReplenishmentConflict("DDMRP event payload must be a mapping.")
+    _require_exact_fields(payload, payload_fields, context=f"{event_type} payload")
+    if event["PayloadFingerprint"] != canonical_fingerprint(dict(payload)):
+        raise DdmrpReplenishmentConflict("DDMRP event payload fingerprint mismatch.")
+    version = event["AggregateVersion"]
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP aggregate versions must be positive integers."
+        )
+    expected_id = canonical_stable_id(
+        "DRE",
+        {
+            "AggregateType": event["AggregateType"],
+            "AggregateID": event["AggregateID"],
+            "AggregateVersion": version,
+            "EventType": event_type,
+        },
+    )
+    if event["EventID"] != expected_id:
+        raise DdmrpReplenishmentConflict("DDMRP event canonical ID mismatch.")
+
+
+def _fold_status(
+    *,
+    aggregate_type: str,
+    aggregate_id: str,
+    creation_event_type: str,
+    creation_status: str,
+    events: Iterable[Mapping[str, object]],
+    terminal_statuses: frozenset[str],
+) -> str:
+    selected = [
+        event for event in events
+        if event.get("AggregateType") == aggregate_type
+        and event.get("AggregateID") == aggregate_id
+    ]
+    if not selected:
+        raise DdmrpReplenishmentConflict("DDMRP aggregate has no creation event.")
+    versions: set[int] = set()
+    for event in selected:
+        _validate_event_contract(event)
+        version = event["AggregateVersion"]
+        if version in versions:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP aggregate versions must be unique contiguous integers starting at 1."
+            )
+        versions.add(version)
+    selected.sort(key=lambda event: (event["AggregateVersion"], str(event["EventID"])))
+    current: str | None = None
+    for expected_version, event in enumerate(selected, start=1):
+        if event["AggregateVersion"] != expected_version:
+            raise DdmrpReplenishmentConflict(
+                "DDMRP aggregate versions must be unique contiguous integers starting at 1."
+            )
+        if event["StatusBefore"] != current:
+            raise DdmrpReplenishmentConflict("DDMRP event StatusBefore does not match fold.")
+        event_type = str(event["EventType"])
+        status_after = str(event["StatusAfter"])
+        if expected_version == 1:
+            if event_type != creation_event_type or status_after != creation_status:
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP aggregate must start with its exact version-1 creation event."
+                )
+        else:
+            if current in terminal_statuses:
+                raise DdmrpReplenishmentConflict("Terminal DDMRP aggregate has a later event.")
+            transition = EVENT_TRANSITION_BY_TYPE.get(event_type)
+            if transition is None:
+                raise DdmrpReplenishmentConflict("Creation event cannot appear after version 1.")
+            allowed_before, required_after = transition
+            if current not in allowed_before or status_after != required_after:
+                raise DdmrpReplenishmentConflict("Illegal DDMRP event status transition.")
+        current = status_after
+    assert current is not None
+    return current
+
+
+def fold_recommendation_status(
+    recommendation: Mapping[str, object],
+    events: Iterable[Mapping[str, object]],
+) -> str:
+    frozen_events = tuple(events)
+    status = _fold_status(
+        aggregate_type="Recommendation",
+        aggregate_id=str(recommendation["RecommendationID"]),
+        creation_event_type="RecommendationVersionCreated",
+        creation_status=str(recommendation["InitialStatus"]),
+        events=frozen_events,
+        terminal_statuses=RECOMMENDATION_TERMINAL_STATUSES,
+    )
+    creation = _aggregate_events(
+        frozen_events, "Recommendation", str(recommendation["RecommendationID"])
+    )[0]
+    payload = creation["EventPayload"]
+    if (
+        payload["RecommendationVersion"] != recommendation["RecommendationVersion"]
+        or payload["SuggestedReplenishmentQty"]
+        != recommendation["SuggestedReplenishmentQty"]
+        or payload["GateCodes"] != recommendation["GateCodes"]
+        or payload["PredecessorRecommendationID"]
+        != recommendation["PredecessorRecommendationID"]
+        or payload["AdjustmentOfRecommendationID"]
+        != recommendation["AdjustmentOfRecommendationID"]
+    ):
+        raise DdmrpReplenishmentConflict(
+            "Recommendation creation payload does not match immutable record."
+        )
+    return status
+
+
+def fold_chain_status(
+    chain: Mapping[str, object],
+    events: Iterable[Mapping[str, object]],
+) -> str:
+    frozen_events = tuple(events)
+    status = _fold_status(
+        aggregate_type="ReplenishmentChain",
+        aggregate_id=str(chain["LogicalReplenishmentID"]),
+        creation_event_type="ReplenishmentChainOpened",
+        creation_status="Open",
+        events=frozen_events,
+        terminal_statuses=CHAIN_TERMINAL_STATUSES,
+    )
+    creation = _aggregate_events(
+        frozen_events, "ReplenishmentChain", str(chain["LogicalReplenishmentID"])
+    )[0]
+    payload = creation["EventPayload"]
+    if payload != {
+        "CycleNumber": chain["CycleNumber"],
+        "ItemID": chain["ItemID"],
+        "LocationID": chain["LocationID"],
+        "OpenedByEvaluationID": chain["OpenedByEvaluationID"],
+    }:
+        raise DdmrpReplenishmentConflict(
+            "Replenishment chain creation payload does not match immutable record."
+        )
+    return status
+
+
+def prepare_ddmrp_evaluation(
+    *,
+    evaluation_request_id: str,
+    recorded_at: datetime,
+    actor_id: str,
+    runtime_result: Mapping[str, object],
+    authority_signature: DdmrpAuthoritySignature,
+    gates: tuple[DdmrpGate, ...],
+    existing_chains: Mapping[str, Mapping[str, object]],
+    existing_recommendations: Mapping[str, Mapping[str, object]],
+    existing_events: tuple[Mapping[str, object], ...],
+    active_replenishment_graphs: Mapping[str, Mapping[str, object]],
+) -> DdmrpEvaluationWriteSet:
+    request_id = _required_text(evaluation_request_id, "evaluation request ID")
+    actor = _required_text(actor_id, "actor ID")
+    if recorded_at.tzinfo is None or recorded_at.utcoffset() is None:
+        raise DdmrpReplenishmentConflict("recorded_at must be timezone-aware.")
+    recorded_text = recorded_at.isoformat()
+    _require_exact_fields(runtime_result, _RUNTIME_RESULT_FIELDS, context="DDMRP runtime result")
+    evaluated_at = _required_text(runtime_result.get("EvaluatedAt"), "EvaluatedAt")
+    if (
+        evaluated_at != authority_signature.runtime_snapshot_at
+        or not evaluated_at.endswith("+00:00")
+    ):
+        raise DdmrpReplenishmentConflict(
+            "Runtime evaluation time must equal the canonical authority snapshot time."
+        )
+    lines = runtime_result.get("Lines")
+    if not isinstance(lines, list):
+        raise DdmrpReplenishmentConflict("DDMRP runtime Lines must be a list.")
+    if not all(isinstance(line, Mapping) for line in lines):
+        raise DdmrpReplenishmentConflict("DDMRP runtime line must be a mapping.")
+    signature = asdict(authority_signature)
+    if set(signature) != set(DdmrpAuthoritySignature.__dataclass_fields__):
+        raise DdmrpReplenishmentConflict("DDMRP authority signature fields differ.")
+    if canonical_fingerprint(
+        {key: value for key, value in signature.items() if key != "signature_fingerprint"}
+    ) != authority_signature.signature_fingerprint:
+        raise DdmrpReplenishmentConflict("DDMRP authority signature fingerprint mismatch.")
+
+    gate_records = _freeze_gates(gates)
+    operational_allowed = not any(
+        gate["BlocksOperationalAction"] for gate in gate_records
+    )
+    request_fingerprint = canonical_fingerprint({
+        "EvaluationRequestID": request_id,
+        "RuntimePlanningInputPackageID": authority_signature.runtime_package_id,
+    })
+    evaluation_id = canonical_stable_id("DDE", {
+        "AuthoritySignatureFingerprint": authority_signature.signature_fingerprint,
+        "EvaluationAt": evaluated_at,
+    })
+
+    existing_chain_rows, chain_statuses = _validate_existing_chains(
+        existing_chains, existing_events, active_replenishment_graphs
+    )
+    existing_recommendation_rows, recommendation_statuses = (
+        _validate_existing_recommendations(
+            existing_recommendations, existing_events, existing_chain_rows
+        )
+    )
+    _validate_event_references(
+        existing_events, existing_chain_rows, existing_recommendation_rows,
+        active_replenishment_graphs,
+    )
+
+    issues = _build_issues(evaluation_id, gate_records)
+    evaluation_rows: list[dict[str, object]] = []
+    chain_records: list[dict[str, object]] = []
+    recommendations: list[dict[str, object]] = []
+    new_events: list[dict[str, object]] = []
+    created_logical_ids: set[str] = set()
+    reused_logical_ids: set[str] = set()
+
+    seen_row_keys: set[str] = set()
+    for source_line in sorted(
+        lines, key=lambda row: (str(row.get("ItemID")), str(row.get("LocationID")))
+    ):
+        line = deepcopy(dict(source_line))
+        _require_exact_fields(line, _RUNTIME_LINE_FIELDS, context="DDMRP runtime line")
+        demand_components = _freeze_components(
+            line["DemandComponents"], DEMAND_COMPONENT_FIELDS, "demand component"
+        )
+        supply_components = _freeze_components(
+            line["SupplyComponents"], SUPPLY_COMPONENT_FIELDS, "supply component"
+        )
+        item_id = _required_text(line["ItemID"], "ItemID")
+        location_id = _required_text(line["LocationID"], "LocationID")
+        row_key = _canonical_json({"ItemID": item_id, "LocationID": location_id})
+        if row_key in seen_row_keys:
+            raise DdmrpReplenishmentConflict("Duplicate DDMRP runtime item/location row.")
+        seen_row_keys.add(row_key)
+        evaluation_row_id = canonical_stable_id(
+            "DER", {"EvaluationID": evaluation_id, "RowKey": row_key}
+        )
+        planning_status = _required_text(line["PlanningStatus"], "PlanningStatus")
+        suggested_qty = line["SuggestedReplenishmentQty"]
+        actionable = planning_status in {"Red", "Yellow"} and suggested_qty > 0
+        recommendation_id: str | None = None
+        if actionable:
+            chain, created = _select_or_create_chain(
+                item_id=item_id,
+                location_id=location_id,
+                evaluation_id=evaluation_id,
+                evaluated_at=evaluated_at,
+                existing_chains=existing_chain_rows,
+                chain_statuses=chain_statuses,
+            )
+            logical_id = str(chain["LogicalReplenishmentID"])
+            if created:
+                chain_records.append(chain)
+                existing_chain_rows[logical_id] = chain
+                chain_statuses[logical_id] = "Open"
+                created_logical_ids.add(logical_id)
+                new_events.append(_new_event(
+                    event_type="ReplenishmentChainOpened",
+                    aggregate_type="ReplenishmentChain",
+                    aggregate_id=logical_id,
+                    aggregate_version=1,
+                    evaluation_id=evaluation_id,
+                    logical_id=logical_id,
+                    recommendation_id=None,
+                    related_recommendation_id=None,
+                    status_before=None,
+                    status_after="Open",
+                    occurred_at=recorded_text,
+                    actor_id=actor,
+                    causation_id=request_id,
+                    correlation_id=evaluation_id,
+                    payload={
+                        "CycleNumber": chain["CycleNumber"],
+                        "ItemID": item_id,
+                        "LocationID": location_id,
+                        "OpenedByEvaluationID": evaluation_id,
+                    },
+                ))
+            else:
+                reused_logical_ids.add(logical_id)
+
+            prior = sorted(
+                (
+                    recommendation for recommendation in existing_recommendation_rows.values()
+                    if recommendation["LogicalReplenishmentID"] == logical_id
+                ),
+                key=lambda recommendation: recommendation["RecommendationVersion"],
+            )
+            predecessor = prior[-1] if prior else None
+            version = len(prior) + 1
+            recommendation_id = canonical_stable_id("DDR", {
+                "LogicalReplenishmentID": logical_id,
+                "RecommendationVersion": version,
+            })
+            graph = active_replenishment_graphs.get(logical_id)
+            adjustment_of = None
+            initial_status = "Blocked"
+            if graph is not None:
+                adjustment_of = _required_text(
+                    graph.get("RecommendationID"), "active graph RecommendationID"
+                )
+                if adjustment_of not in existing_recommendation_rows:
+                    raise DdmrpReplenishmentConflict(
+                        "Active replenishment graph recommendation is missing."
+                    )
+                initial_status = "AdjustmentRequired"
+            recommendation = {
+                "RecommendationID": recommendation_id,
+                "LogicalReplenishmentID": logical_id,
+                "RecommendationVersion": version,
+                "EvaluationID": evaluation_id,
+                "EvaluationRowID": evaluation_row_id,
+                "ItemID": item_id,
+                "LocationID": location_id,
+                "Uom": deepcopy(line["Uom"]),
+                "PlanningStatus": planning_status,
+                "ExecutionStatus": deepcopy(line["ExecutionStatus"]),
+                "SuggestedReplenishmentQty": deepcopy(suggested_qty),
+                "StandardTargetReceiptAt": None,
+                "AdviceType": None,
+                "InitialStatus": initial_status,
+                "GateCodes": deepcopy(gate_records),
+                "PredecessorRecommendationID": (
+                    predecessor["RecommendationID"] if predecessor else None
+                ),
+                "AdjustmentOfRecommendationID": adjustment_of,
+                "CreatedAt": recorded_text,
+                "CreatedBy": actor,
+                "AuthoritySignature": deepcopy(signature),
+                "AuthoritySignatureFingerprint": authority_signature.signature_fingerprint,
+                "RelevantPlanningLedgerIdentity": authority_signature.local_planning_ledger_identity,
+                "RelevantPlanningLedgerFingerprint": authority_signature.local_planning_ledger_fingerprint,
+                "TraceID": logical_id,
+            }
+            recommendation["RecommendationFingerprint"] = canonical_fingerprint(recommendation)
+            recommendations.append(recommendation)
+            existing_recommendation_rows[recommendation_id] = recommendation
+            recommendation_statuses[recommendation_id] = initial_status
+            new_events.append(_new_event(
+                event_type="RecommendationVersionCreated",
+                aggregate_type="Recommendation",
+                aggregate_id=recommendation_id,
+                aggregate_version=1,
+                evaluation_id=evaluation_id,
+                logical_id=logical_id,
+                recommendation_id=recommendation_id,
+                related_recommendation_id=(
+                    predecessor["RecommendationID"] if predecessor else None
+                ),
+                status_before=None,
+                status_after=initial_status,
+                occurred_at=recorded_text,
+                actor_id=actor,
+                causation_id=request_id,
+                correlation_id=evaluation_id,
+                payload={
+                    "RecommendationVersion": version,
+                    "SuggestedReplenishmentQty": deepcopy(suggested_qty),
+                    "GateCodes": deepcopy(gate_records),
+                    "PredecessorRecommendationID": (
+                        predecessor["RecommendationID"] if predecessor else None
+                    ),
+                    "AdjustmentOfRecommendationID": adjustment_of,
+                },
+            ))
+            if predecessor is not None:
+                predecessor_id = str(predecessor["RecommendationID"])
+                predecessor_status = recommendation_statuses[predecessor_id]
+                if predecessor_status in {"Blocked", "PendingReview", "AdjustmentRequired"}:
+                    aggregate_version = 1 + max(
+                        event["AggregateVersion"] for event in (*existing_events, *new_events)
+                        if event["AggregateType"] == "Recommendation"
+                        and event["AggregateID"] == predecessor_id
+                    )
+                    new_events.append(_new_event(
+                        event_type="RecommendationSuperseded",
+                        aggregate_type="Recommendation",
+                        aggregate_id=predecessor_id,
+                        aggregate_version=aggregate_version,
+                        evaluation_id=evaluation_id,
+                        logical_id=logical_id,
+                        recommendation_id=predecessor_id,
+                        related_recommendation_id=recommendation_id,
+                        status_before=predecessor_status,
+                        status_after="Superseded",
+                        occurred_at=recorded_text,
+                        actor_id=actor,
+                        causation_id=request_id,
+                        correlation_id=evaluation_id,
+                        payload={
+                            "SupersededByRecommendationID": recommendation_id,
+                            "SupersedingEvaluationID": evaluation_id,
+                        },
+                    ))
+                    recommendation_statuses[predecessor_id] = "Superseded"
+
+        row = {
+            "EvaluationRowID": evaluation_row_id,
+            "EvaluationID": evaluation_id,
+            "EvaluationAt": evaluated_at,
+            "RowKey": row_key,
+            "ItemID": item_id,
+            "LocationID": location_id,
+            "Uom": deepcopy(line["Uom"]),
+            "BufferProfileID": deepcopy(line["BufferProfileID"]),
+            "DLTMinutes": deepcopy(line["DLTMinutes"]),
+            "QualifiedOnHandQty": deepcopy(line["QualifiedOnHandQty"]),
+            "PhysicalOnHandQty": deepcopy(line["PhysicalOnHandQty"]),
+            "AuthorityAllocatedQty": deepcopy(line["AuthorityAllocatedQty"]),
+            "AuthorityAvailableQty": deepcopy(line["AuthorityAvailableQty"]),
+            "QualityState": deepcopy(line["QualityState"]),
+            "QualifiedOpenSupplyQty": deepcopy(line["QualifiedOpenSupplyQty"]),
+            "QualifiedDemandQty": deepcopy(line["QualifiedDemandQty"]),
+            "NetFlowPosition": deepcopy(line["NetFlowPosition"]),
+            "TopOfRed": deepcopy(line["TopOfRed"]),
+            "TopOfYellow": deepcopy(line["TopOfYellow"]),
+            "TopOfGreen": deepcopy(line["TopOfGreen"]),
+            "PlanningStatus": planning_status,
+            "ExecutionStatus": deepcopy(line["ExecutionStatus"]),
+            "SuggestedReplenishmentQty": deepcopy(suggested_qty),
+            "RecommendedAction": deepcopy(line["RecommendedAction"]),
+            "StandardTargetReceiptAt": None,
+            "TargetStatusCode": "DLT_TARGET_SEMANTICS_INSUFFICIENT",
+            "RecommendationID": recommendation_id,
+            "DemandComponents": demand_components,
+            "SupplyComponents": supply_components,
+            "GateCodes": deepcopy(gate_records),
+            "OperationalActionAllowed": operational_allowed,
+            "AuthoritySignatureFingerprint": authority_signature.signature_fingerprint,
+        }
+        row["EvaluationRowFingerprint"] = canonical_fingerprint(row)
+        evaluation_rows.append(row)
+
+    summary = {
+        "RedCount": sum(row["PlanningStatus"] == "Red" for row in evaluation_rows),
+        "YellowCount": sum(row["PlanningStatus"] == "Yellow" for row in evaluation_rows),
+        "GreenCount": sum(row["PlanningStatus"] == "Green" for row in evaluation_rows),
+        "AboveGreenCount": sum(
+            row["PlanningStatus"] == "AboveGreen" for row in evaluation_rows
+        ),
+        "BlockedRecommendationCount": sum(
+            row["InitialStatus"] == "Blocked" for row in recommendations
+        ),
+        "AdjustmentRequiredCount": sum(
+            row["InitialStatus"] == "AdjustmentRequired" for row in recommendations
+        ),
+        "IssueCount": len(issues),
+    }
+    evaluation_run = {
+        "EvaluationID": evaluation_id,
+        "EvaluationRequestID": request_id,
+        "EvaluationAt": evaluated_at,
+        "RecordedAt": recorded_text,
+        "RecordedBy": actor,
+        "EvaluationMode": deepcopy(runtime_result["EvaluationMode"]),
+        "RuntimePlanningInputPackageID": authority_signature.runtime_package_id,
+        "RuntimePlanningInputPackageVersion": authority_signature.runtime_package_version,
+        "RuntimeSnapshotID": authority_signature.runtime_snapshot_id,
+        "OperatingModelConfigurationID": authority_signature.operating_model_configuration_id,
+        "OperatingModelFingerprint": authority_signature.operating_model_fingerprint,
+        "DDMRPConfigurationID": authority_signature.ddmrp_configuration_id,
+        "AuthoritySignature": deepcopy(signature),
+        "AuthoritySignatureFingerprint": authority_signature.signature_fingerprint,
+        "RelevantPlanningLedgerIdentity": authority_signature.local_planning_ledger_identity,
+        "RelevantPlanningLedgerFingerprint": authority_signature.local_planning_ledger_fingerprint,
+        "Summary": summary,
+        "Issues": issues,
+        "OperationalActionAllowed": operational_allowed,
+    }
+    evaluation_run["EvaluationFingerprint"] = canonical_fingerprint(evaluation_run)
+
+    all_events = (*existing_events, *new_events)
+    _validate_event_references(
+        all_events, existing_chain_rows, existing_recommendation_rows,
+        active_replenishment_graphs,
+    )
+    for chain in existing_chain_rows.values():
+        fold_chain_status(chain, all_events)
+    for recommendation in existing_recommendation_rows.values():
+        fold_recommendation_status(recommendation, all_events)
+
+    evaluation_rows.sort(key=lambda row: (row["ItemID"], row["LocationID"]))
+    chain_records.sort(key=lambda row: row["LogicalReplenishmentID"])
+    recommendations.sort(key=lambda row: row["RecommendationID"])
+    new_events.sort(key=lambda row: (row["AggregateType"], row["AggregateID"], row["AggregateVersion"]))
+    payload = {
+        "EvaluationRun": evaluation_run,
+        "EvaluationRows": evaluation_rows,
+        "ChainRecords": chain_records,
+        "RecommendationVersions": recommendations,
+        "Events": new_events,
+    }
+    payload_fingerprint = canonical_fingerprint(payload)
+    created_ids = sorted(created_logical_ids)
+    reused_ids = sorted(reused_logical_ids)
+    if set(created_ids) & set(reused_ids):
+        raise DdmrpReplenishmentConflict(
+            "Created and reused logical replenishment memberships overlap."
+        )
+    logical_ids = sorted((*created_ids, *reused_ids))
+    recommendation_ids = sorted(
+        recommendation["RecommendationID"] for recommendation in recommendations
+    )
+    response_data = {
+        "Status": "Created",
+        "EvaluationID": evaluation_id,
+        "RecommendationIDs": recommendation_ids,
+        "OperationalActionAllowed": operational_allowed,
+    }
+    request_result = {
+        "EvaluationRequestID": request_id,
+        "RequestFingerprint": request_fingerprint,
+        "RuntimePlanningInputPackageID": authority_signature.runtime_package_id,
+        "EvaluationID": evaluation_id,
+        "EvaluationRowIDs": sorted(row["EvaluationRowID"] for row in evaluation_rows),
+        "LogicalReplenishmentIDs": logical_ids,
+        "CreatedLogicalReplenishmentIDs": created_ids,
+        "ReusedLogicalReplenishmentIDs": reused_ids,
+        "RecommendationIDs": recommendation_ids,
+        "EventIDs": sorted(event["EventID"] for event in new_events),
+        "EvaluationPayloadFingerprint": payload_fingerprint,
+        "ResponseData": response_data,
+        "ResponseFingerprint": canonical_fingerprint(response_data),
+        "RecordedAt": recorded_text,
+        "RecordedBy": actor,
+    }
+    request_result["RequestResultFingerprint"] = canonical_fingerprint(request_result)
+    _validate_request_result(request_result)
+    return DdmrpEvaluationWriteSet(
+        evaluation_request_id=request_id,
+        request_fingerprint=request_fingerprint,
+        payload_fingerprint=payload_fingerprint,
+        evaluation_run=deepcopy(evaluation_run),
+        evaluation_rows=tuple(deepcopy(evaluation_rows)),
+        chain_records=tuple(deepcopy(chain_records)),
+        recommendation_versions=tuple(deepcopy(recommendations)),
+        events=tuple(deepcopy(new_events)),
+        request_result=deepcopy(request_result),
+    )
+
+
+def _freeze_gates(gates: tuple[DdmrpGate, ...]) -> list[dict[str, object]]:
+    by_code: dict[str, dict[str, object]] = {}
+    for gate in gates:
+        record = {
+            "Code": _required_text(gate.code, "gate code"),
+            "Message": _required_text(gate.message, "gate message"),
+            "BlocksOperationalAction": gate.blocks_operational_action,
+        }
+        _require_exact_fields(record, GATE_FIELDS, context="DDMRP gate")
+        prior = by_code.get(gate.code)
+        if prior is not None and prior != record:
+            raise DdmrpReplenishmentConflict("Duplicate DDMRP gate code differs.")
+        by_code[gate.code] = record
+    return [deepcopy(by_code[code]) for code in sorted(by_code)]
+
+
+def _freeze_components(
+    value: object, fields: tuple[str, ...], context: str
+) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise DdmrpReplenishmentConflict(f"DDMRP {context}s must be a list.")
+    result: list[dict[str, object]] = []
+    for component in value:
+        if not isinstance(component, Mapping):
+            raise DdmrpReplenishmentConflict(f"DDMRP {context} must be a mapping.")
+        _require_exact_fields(component, fields, context=f"DDMRP {context}")
+        frozen = deepcopy(dict(component))
+        canonical_fingerprint(frozen)
+        result.append(frozen)
+    return sorted(result, key=_canonical_json)
+
+
+def _build_issues(
+    evaluation_id: str, gates: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    for gate in gates:
+        issue = {
+            "IssueID": canonical_stable_id("DRI", {
+                "EvaluationID": evaluation_id,
+                "Code": gate["Code"],
+                "ItemID": None,
+                "LocationID": None,
+            }),
+            "EvaluationID": evaluation_id,
+            "Code": gate["Code"],
+            "Severity": (
+                "Blocking" if gate["BlocksOperationalAction"] else "Warning"
+            ),
+            "Message": gate["Message"],
+            "ItemID": None,
+            "LocationID": None,
+            "BlocksOperationalAction": gate["BlocksOperationalAction"],
+        }
+        issue["IssueFingerprint"] = canonical_fingerprint(issue)
+        _validate_issue(issue)
+        issues.append(issue)
+    return sorted(issues, key=lambda issue: issue["Code"])
+
+
+def _validate_issue(issue: Mapping[str, object]) -> None:
+    _require_exact_fields(issue, ISSUE_RECORD_FIELDS, context="DDMRP issue")
+    if issue["Severity"] not in ISSUE_SEVERITIES:
+        raise DdmrpReplenishmentConflict("Unsupported DDMRP issue severity.")
+    expected = canonical_fingerprint({
+        key: value for key, value in issue.items() if key != "IssueFingerprint"
+    })
+    if issue["IssueFingerprint"] != expected:
+        raise DdmrpReplenishmentConflict("DDMRP issue fingerprint mismatch.")
+
+
+def _select_or_create_chain(
+    *,
+    item_id: str,
+    location_id: str,
+    evaluation_id: str,
+    evaluated_at: str,
+    existing_chains: Mapping[str, Mapping[str, object]],
+    chain_statuses: Mapping[str, str],
+) -> tuple[dict[str, object], bool]:
+    scoped = [
+        chain for chain in existing_chains.values()
+        if chain["ItemID"] == item_id and chain["LocationID"] == location_id
+    ]
+    active = [
+        chain for chain in scoped
+        if chain_statuses[str(chain["LogicalReplenishmentID"])] in CHAIN_ACTIVE_STATUSES
+    ]
+    if len(active) > 1:
+        raise DdmrpReplenishmentConflict(
+            "Multiple non-terminal replenishment chains exist for item/location."
+        )
+    if active:
+        return deepcopy(active[0]), False
+    cycle_number = max((int(chain["CycleNumber"]) for chain in scoped), default=0) + 1
+    identity = {
+        "ItemID": item_id,
+        "LocationID": location_id,
+        "CycleNumber": cycle_number,
+    }
+    logical_id = canonical_stable_id("DRL", identity)
+    chain = {
+        "LogicalReplenishmentID": logical_id,
+        "ItemID": item_id,
+        "LocationID": location_id,
+        "CycleNumber": cycle_number,
+        "OpenedAt": evaluated_at,
+        "OpenedByEvaluationID": evaluation_id,
+        "InitialStatus": "Open",
+        "IdentityFingerprint": canonical_fingerprint(identity),
+        "TraceID": logical_id,
+    }
+    chain["ChainFingerprint"] = canonical_fingerprint(chain)
+    return chain, True
+
+
+def _validate_existing_chains(
+    chains: Mapping[str, Mapping[str, object]],
+    events: Iterable[Mapping[str, object]],
+    active_graphs: Mapping[str, Mapping[str, object]],
+) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
+    result: dict[str, dict[str, object]] = {}
+    statuses: dict[str, str] = {}
+    active_by_scope: set[tuple[str, str]] = set()
+    for key, source in chains.items():
+        if not isinstance(source, Mapping):
+            raise DdmrpReplenishmentConflict("DDMRP chain must be a mapping.")
+        _require_exact_fields(source, REPLENISHMENT_CHAIN_FIELDS, context="DDMRP chain")
+        chain = deepcopy(dict(source))
+        logical_id = _required_text(chain["LogicalReplenishmentID"], "LogicalReplenishmentID")
+        if key != logical_id or logical_id in result:
+            raise DdmrpReplenishmentConflict("DDMRP chain mapping identity mismatch.")
+        identity = {
+            "ItemID": chain["ItemID"], "LocationID": chain["LocationID"],
+            "CycleNumber": chain["CycleNumber"],
+        }
+        if chain["IdentityFingerprint"] != canonical_fingerprint(identity):
+            raise DdmrpReplenishmentConflict("DDMRP chain identity fingerprint mismatch.")
+        if logical_id != canonical_stable_id("DRL", identity):
+            raise DdmrpReplenishmentConflict("DDMRP chain canonical ID mismatch.")
+        if chain["ChainFingerprint"] != canonical_fingerprint({
+            field: value for field, value in chain.items() if field != "ChainFingerprint"
+        }):
+            raise DdmrpReplenishmentConflict("DDMRP chain fingerprint mismatch.")
+        status = fold_chain_status(chain, events)
+        scope = (str(chain["ItemID"]), str(chain["LocationID"]))
+        if status in CHAIN_ACTIVE_STATUSES:
+            if scope in active_by_scope:
+                raise DdmrpReplenishmentConflict(
+                    "Multiple non-terminal replenishment chains exist for item/location."
+                )
+            active_by_scope.add(scope)
+        result[logical_id] = chain
+        statuses[logical_id] = status
+    for key, graph in active_graphs.items():
+        if not isinstance(graph, Mapping) or key != graph.get("LogicalReplenishmentID"):
+            raise DdmrpReplenishmentConflict("Active graph mapping identity mismatch.")
+        if key not in result:
+            raise DdmrpReplenishmentConflict("Active graph replenishment chain is missing.")
+        if statuses[key] in CHAIN_TERMINAL_STATUSES:
+            raise DdmrpReplenishmentConflict("Active graph is attached to terminal chain.")
+    return result, statuses
+
+
+def _validate_existing_recommendations(
+    recommendations: Mapping[str, Mapping[str, object]],
+    events: Iterable[Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
+    result: dict[str, dict[str, object]] = {}
+    statuses: dict[str, str] = {}
+    by_chain: dict[str, list[dict[str, object]]] = {}
+    for key, source in recommendations.items():
+        if not isinstance(source, Mapping):
+            raise DdmrpReplenishmentConflict("DDMRP recommendation must be a mapping.")
+        _require_exact_fields(source, RECOMMENDATION_FIELDS, context="DDMRP recommendation")
+        recommendation = deepcopy(dict(source))
+        recommendation_id = _required_text(
+            recommendation["RecommendationID"], "RecommendationID"
+        )
+        logical_id = _required_text(
+            recommendation["LogicalReplenishmentID"], "LogicalReplenishmentID"
+        )
+        if key != recommendation_id or recommendation_id in result:
+            raise DdmrpReplenishmentConflict("DDMRP recommendation mapping identity mismatch.")
+        if logical_id not in chains:
+            raise DdmrpReplenishmentConflict("DDMRP recommendation chain is missing.")
+        version = recommendation["RecommendationVersion"]
+        if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+            raise DdmrpReplenishmentConflict("Recommendation version must be positive integer.")
+        if recommendation_id != canonical_stable_id("DDR", {
+            "LogicalReplenishmentID": logical_id,
+            "RecommendationVersion": version,
+        }):
+            raise DdmrpReplenishmentConflict("DDMRP recommendation canonical ID mismatch.")
+        if recommendation["RecommendationFingerprint"] != canonical_fingerprint({
+            field: value for field, value in recommendation.items()
+            if field != "RecommendationFingerprint"
+        }):
+            raise DdmrpReplenishmentConflict("DDMRP recommendation fingerprint mismatch.")
+        status = fold_recommendation_status(recommendation, events)
+        result[recommendation_id] = recommendation
+        statuses[recommendation_id] = status
+        by_chain.setdefault(logical_id, []).append(recommendation)
+    for chain_recommendations in by_chain.values():
+        ordered = sorted(
+            chain_recommendations, key=lambda row: row["RecommendationVersion"]
+        )
+        if [row["RecommendationVersion"] for row in ordered] != list(
+            range(1, len(ordered) + 1)
+        ):
+            raise DdmrpReplenishmentConflict("Recommendation version sequence has a gap.")
+        successors: set[str] = set()
+        for index, recommendation in enumerate(ordered):
+            expected_predecessor = (
+                None if index == 0 else ordered[index - 1]["RecommendationID"]
+            )
+            if recommendation["PredecessorRecommendationID"] != expected_predecessor:
+                raise DdmrpReplenishmentConflict("Recommendation predecessor sequence differs.")
+            if expected_predecessor is not None:
+                if expected_predecessor in successors:
+                    raise DdmrpReplenishmentConflict("Recommendation has multiple successors.")
+                successors.add(expected_predecessor)
+                if recommendation["AdjustmentOfRecommendationID"] is None:
+                    reverse = [
+                        event for event in events
+                        if event.get("EventType") == "RecommendationSuperseded"
+                        and event.get("AggregateID") == expected_predecessor
+                        and event.get("RelatedRecommendationID")
+                        == recommendation["RecommendationID"]
+                    ]
+                    if len(reverse) != 1:
+                        raise DdmrpReplenishmentConflict(
+                            "Recommendation supersession reverse event is missing."
+                        )
+    return result, statuses
+
+
+def _validate_event_references(
+    events: Iterable[Mapping[str, object]],
+    chains: Mapping[str, Mapping[str, object]],
+    recommendations: Mapping[str, Mapping[str, object]],
+    active_graphs: Mapping[str, Mapping[str, object]],
+) -> None:
+    seen_versions: set[tuple[object, object, object]] = set()
+    for event in events:
+        _validate_event_contract(event)
+        version_key = (
+            event["AggregateType"], event["AggregateID"], event["AggregateVersion"]
+        )
+        if version_key in seen_versions:
+            raise DdmrpReplenishmentConflict("Duplicate DDMRP aggregate version.")
+        seen_versions.add(version_key)
+        logical_id = event["LogicalReplenishmentID"]
+        if logical_id not in chains:
+            raise DdmrpReplenishmentConflict("DDMRP event chain reference is missing.")
+        if event["AggregateType"] == "ReplenishmentChain":
+            if event["AggregateID"] != logical_id:
+                raise DdmrpReplenishmentConflict("DDMRP chain event aggregate differs.")
+            recommendation_id = event["RecommendationID"]
+            if recommendation_id is not None and (
+                recommendation_id not in recommendations
+                or recommendations[recommendation_id]["LogicalReplenishmentID"]
+                != logical_id
+            ):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP chain event recommendation reference differs."
+                )
+        else:
+            recommendation_id = event["RecommendationID"]
+            if recommendation_id not in recommendations:
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP event recommendation reference is missing."
+                )
+            if event["AggregateID"] != recommendation_id:
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP recommendation event aggregate differs."
+                )
+            if recommendations[recommendation_id]["LogicalReplenishmentID"] != logical_id:
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP recommendation event chain reference differs."
+                )
+        event_type = event["EventType"]
+        payload = event["EventPayload"]
+        if event_type == "RecommendationVersionCreated":
+            predecessor_id = payload["PredecessorRecommendationID"]
+            if event["RelatedRecommendationID"] != predecessor_id:
+                raise DdmrpReplenishmentConflict(
+                    "Recommendation creation predecessor reference differs."
+                )
+        if event_type == "RecommendationSuperseded":
+            related = payload["SupersededByRecommendationID"]
+            if related not in recommendations or event["RelatedRecommendationID"] != related:
+                raise DdmrpReplenishmentConflict(
+                    "Recommendation supersession reference differs."
+                )
+            if payload["SupersedingEvaluationID"] != recommendations[related]["EvaluationID"]:
+                raise DdmrpReplenishmentConflict(
+                    "Recommendation superseding evaluation reference differs."
+                )
+        if event_type == "RecommendationPendingReview" and (
+            payload["AuthoritySignatureFingerprint"]
+            != recommendations[event["RecommendationID"]]["AuthoritySignatureFingerprint"]
+        ):
+            raise DdmrpReplenishmentConflict(
+                "Recommendation authority signature reference differs."
+            )
+        if event_type in {
+            "RecommendationAdjustmentRequired", "ReplenishmentChainAdjustmentRequired"
+        } and payload["AdjustmentRecommendationID"] not in recommendations:
+            raise DdmrpReplenishmentConflict("Adjustment recommendation is missing.")
+        if event_type == "ReplenishmentChainActivated":
+            graph_id = payload["ActiveGraphID"]
+            if graph_id not in active_graphs:
+                raise DdmrpReplenishmentConflict("Activated replenishment graph is missing.")
+
+
+def _new_event(
+    *,
+    event_type: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    aggregate_version: int,
+    evaluation_id: str,
+    logical_id: str,
+    recommendation_id: str | None,
+    related_recommendation_id: str | None,
+    status_before: str | None,
+    status_after: str,
+    occurred_at: str,
+    actor_id: str,
+    causation_id: str,
+    correlation_id: str,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    identity = {
+        "AggregateType": aggregate_type,
+        "AggregateID": aggregate_id,
+        "AggregateVersion": aggregate_version,
+        "EventType": event_type,
+    }
+    frozen_payload = deepcopy(dict(payload))
+    event_id = canonical_stable_id("DRE", identity)
+    event = {
+        "EventID": event_id,
+        "EventType": event_type,
+        "AggregateType": aggregate_type,
+        "AggregateID": aggregate_id,
+        "AggregateVersion": aggregate_version,
+        "EvaluationID": evaluation_id,
+        "LogicalReplenishmentID": logical_id,
+        "RecommendationID": recommendation_id,
+        "RelatedRecommendationID": related_recommendation_id,
+        "StatusBefore": status_before,
+        "StatusAfter": status_after,
+        "OccurredAt": occurred_at,
+        "ActorID": actor_id,
+        "CausationID": causation_id,
+        "CorrelationID": correlation_id,
+        "IdempotencyKey": event_id,
+        "TraceID": logical_id,
+        "EventPayload": frozen_payload,
+        "PayloadFingerprint": canonical_fingerprint(frozen_payload),
+    }
+    _validate_event_contract(event)
+    return event
+
+
+def _aggregate_events(
+    events: Iterable[Mapping[str, object]], aggregate_type: str, aggregate_id: str
+) -> list[Mapping[str, object]]:
+    return sorted(
+        (
+            event for event in events
+            if event.get("AggregateType") == aggregate_type
+            and event.get("AggregateID") == aggregate_id
+        ),
+        key=lambda event: event["AggregateVersion"],
+    )
+
+
+def _validate_request_result(result: Mapping[str, object]) -> None:
+    _require_exact_fields(result, REQUEST_RESULT_FIELDS, context="DDMRP request result")
+    response = result["ResponseData"]
+    if not isinstance(response, Mapping):
+        raise DdmrpReplenishmentConflict("DDMRP response data must be a mapping.")
+    _require_exact_fields(response, RESPONSE_DATA_FIELDS, context="DDMRP response data")
+    if result["ResponseFingerprint"] != canonical_fingerprint(dict(response)):
+        raise DdmrpReplenishmentConflict("DDMRP response fingerprint mismatch.")
+    created = result["CreatedLogicalReplenishmentIDs"]
+    reused = result["ReusedLogicalReplenishmentIDs"]
+    if set(created) & set(reused) or result["LogicalReplenishmentIDs"] != sorted(
+        (*created, *reused)
+    ):
+        raise DdmrpReplenishmentConflict("DDMRP request result chain partition differs.")
+    expected = canonical_fingerprint({
+        key: value for key, value in result.items() if key != "RequestResultFingerprint"
+    })
+    if result["RequestResultFingerprint"] != expected:
+        raise DdmrpReplenishmentConflict("DDMRP request result fingerprint mismatch.")
+
+
+def _canonical_json(value: object) -> str:
+    try:
+        return json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError) as error:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP authority input contains a non-canonical JSON value."
+        ) from error
 
 
 def _normalize_scope(

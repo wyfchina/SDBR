@@ -750,6 +750,107 @@ class TestCcrShadowPromiseSelection:
             datetime(2026, 7, 20, 10, tzinfo=UTC).isoformat(),
         ]
 
+    def test_repeated_ccr_visits_use_remaining_forward_capacity(self):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        requested_due_at = end
+        resource = Resource("CCR-1", "CCR", True, {})
+        routing = Routing(
+            product_id="FG-1",
+            operations=[
+                Operation("CUT", "CCR-1", 60, 10),
+                Operation("PACK", "CCR-1", 60, 20),
+            ],
+        )
+
+        result = evaluate_ccr_shadow_schedule(
+            order_id="SO-1:10",
+            quantity=1.0,
+            routing=routing,
+            resources=[resource],
+            capacity_buckets=[
+                CapacityBucket("CCR-1", cutoff, end, 120),
+            ],
+            setup_transitions=[],
+            gantt_rows=[],
+            active_capacity_reservations=[],
+            requested_due_at=requested_due_at,
+            evaluated_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        exact_key = ("CCR-1", cutoff.isoformat(), end.isoformat())
+        earliest = result["EarliestSafeAssessment"]
+        assert result["Status"] == "LaterSafeDate"
+        assert result["Issues"] == []
+        assert result["RelevantCapacityWindowKeys"] == [exact_key]
+        assert result["RequestedDateAssessment"]["Feasible"] is False
+        assert earliest["Feasible"] is True
+        assert earliest["PromiseAt"] == datetime(
+            2026, 7, 20, 11, tzinfo=UTC
+        ).isoformat()
+        assert earliest["ConsideredWindowKeys"] == [exact_key]
+        assert [
+            (
+                row["OperationID"],
+                row["UsableWindowStartAt"],
+                row["LatestAllowedCompletionAt"],
+                row["LoadBeforeMinutes"],
+                row["LoadAfterMinutes"],
+                row["AggregateRemainingMinutes"],
+                row["TemporalRemainingMinutes"],
+            )
+            for row in earliest["WindowAssessments"]
+        ] == [
+            (
+                "SO-1:10:CUT",
+                cutoff.isoformat(),
+                datetime(2026, 7, 20, 9, tzinfo=UTC).isoformat(),
+                0,
+                60,
+                120,
+                60,
+            ),
+            (
+                "SO-1:10:PACK",
+                datetime(2026, 7, 20, 9, tzinfo=UTC).isoformat(),
+                end.isoformat(),
+                60,
+                120,
+                60,
+                60,
+            ),
+        ]
+        assert earliest["ReservationRequests"] == [
+            {
+                "ReservationLineID": (
+                    f"SO-1:10:CUT:{cutoff.isoformat()}"
+                ),
+                "OrderID": "SO-1:10",
+                "OperationID": "SO-1:10:CUT",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": cutoff.isoformat(),
+                "WindowEndAt": end.isoformat(),
+                "ReservedMinutes": 60,
+                "LatestAllowedCompletionAt": datetime(
+                    2026, 7, 20, 9, tzinfo=UTC
+                ).isoformat(),
+            },
+            {
+                "ReservationLineID": (
+                    f"SO-1:10:PACK:{cutoff.isoformat()}"
+                ),
+                "OrderID": "SO-1:10",
+                "OperationID": "SO-1:10:PACK",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": cutoff.isoformat(),
+                "WindowEndAt": end.isoformat(),
+                "ReservedMinutes": 60,
+                "LatestAllowedCompletionAt": end.isoformat(),
+            },
+        ]
+
     def test_no_later_window_returns_not_assessable_without_reservation_requests(
         self,
     ):

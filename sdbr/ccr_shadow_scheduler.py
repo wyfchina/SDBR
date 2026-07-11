@@ -185,17 +185,19 @@ def _window_metrics(
         return {"Fits": False, "Reason": "NO_USABLE_WINDOW"}
     assignments = list(state["CandidateAssignments"])
     candidate_full = sum(int(row["Minutes"]) for row in assignments)
-    candidate_before_deadline = sum(
+    candidate_in_usable_slice = sum(
         int(row["Minutes"])
         for row in assignments
-        if row["LatestAllowedCompletionAt"] <= usable_end
+        if usable_start
+        < row["LatestAllowedCompletionAt"]
+        <= usable_end
     )
     scheduled_full = int(state["ScheduledFullMinutes"])
     existing = state["ExistingReservationMinutes"]
     aggregate_before = scheduled_full + existing + candidate_full
     intervals = list(state["ProcessingIntervals"])
     scheduled_usable = _overlap_minutes(intervals, usable_start, usable_end)
-    temporal_before = scheduled_usable + existing + candidate_before_deadline
+    temporal_before = scheduled_usable + existing + candidate_in_usable_slice
     capacity_minutes = int(state["CapacityMinutes"])
     single_unit_minutes = _floor_minutes(usable_end - usable_start)
     temporal_capacity = (

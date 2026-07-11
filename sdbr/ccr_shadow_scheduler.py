@@ -513,7 +513,7 @@ def _earliest_safe_candidate(
     capacity_assessment_cutoff_at: datetime,
     downstream_protection_minutes: int,
     protection_threshold_percent: float,
-) -> dict[str, object] | None:
+) -> dict[str, object]:
     states = deepcopy(dict(source_states))
     cursor = capacity_assessment_cutoff_at
     assessments: list[dict[str, object]] = []
@@ -528,31 +528,37 @@ def _earliest_safe_candidate(
             cursor += timedelta(minutes=duration)
             continue
         resource_id = str(operation["ResourceID"])
-        fitting: list[tuple[dict[str, object], dict[str, object]]] = []
+        fitting: list[
+            tuple[dict[str, object], dict[str, object], datetime]
+        ] = []
         for key, state in states.items():
             if key[0] != resource_id or key[2] <= cursor:
                 continue
             considered.add((key[0], _utc_iso(key[1]), _utc_iso(key[2])))
-            metrics = _window_metrics(
+            forward = _forward_window_metrics(
                 state,
-                usable_start=cursor,
-                deadline=key[2],
+                cursor=cursor,
                 candidate_minutes=duration,
             )
-            if metrics["Fits"]:
-                fitting.append((state, metrics))
+            if forward is not None:
+                metrics, completion_at = forward
+                fitting.append((state, metrics, completion_at))
         selected = min(
             fitting,
             key=lambda item: (
-                item[0]["WindowEnd"], item[0]["WindowStart"]
+                item[2], item[0]["WindowEnd"], item[0]["WindowStart"]
             ),
             default=None,
         )
         if selected is None:
-            return None
-        state, metrics = selected
-        completion_at = state["WindowEnd"]
-        assert isinstance(completion_at, datetime)
+            return {
+                "Feasible": False,
+                "PromiseAt": None,
+                "WindowAssessments": [],
+                "ReservationRequests": [],
+                "ConsideredWindowKeys": sorted(considered),
+            }
+        state, metrics, completion_at = selected
         _commit_candidate(
             state,
             minutes=duration,
@@ -596,11 +602,54 @@ def _earliest_safe_candidate(
     }
 
 
+def _forward_window_metrics(
+    state: Mapping[str, object],
+    *,
+    cursor: datetime,
+    candidate_minutes: int,
+) -> tuple[dict[str, object], datetime] | None:
+    window_start = state["WindowStart"]
+    window_end = state["WindowEnd"]
+    assert isinstance(window_start, datetime)
+    assert isinstance(window_end, datetime)
+    usable_start = max(window_start, cursor)
+    first_completion = usable_start + timedelta(minutes=candidate_minutes)
+    if first_completion > window_end:
+        return None
+    span_minutes = _floor_minutes(window_end - first_completion)
+    completion_candidates = (
+        first_completion + timedelta(minutes=offset)
+        for offset in range(span_minutes + 1)
+    )
+    for completion_at in completion_candidates:
+        metrics = _window_metrics(
+            state,
+            usable_start=usable_start,
+            deadline=completion_at,
+            candidate_minutes=candidate_minutes,
+        )
+        if metrics["Fits"]:
+            return metrics, completion_at
+    if first_completion + timedelta(minutes=span_minutes) < window_end:
+        metrics = _window_metrics(
+            state,
+            usable_start=usable_start,
+            deadline=window_end,
+            candidate_minutes=candidate_minutes,
+        )
+        if metrics["Fits"]:
+            return metrics, window_end
+    return None
+
+
 def _not_assessable_result(
     *,
     requested_due_at: datetime,
     capacity_assessment_cutoff_at: datetime,
     issues: list[dict[str, object]],
+    requested_date_assessment: Mapping[str, object] | None = None,
+    earliest_safe_assessment: Mapping[str, object] | None = None,
+    relevant_capacity_window_keys: list[tuple[str, str, str]] | None = None,
 ) -> dict[str, object]:
     return {
         "Algorithm": deepcopy(SHADOW_ALGORITHM),
@@ -610,10 +659,14 @@ def _not_assessable_result(
         ),
         "RequestedDueAt": _utc_iso(requested_due_at),
         "LatestCcrCompletionAt": None,
-        "RequestedDateAssessment": {"Feasible": False},
-        "EarliestSafeAssessment": None,
+        "RequestedDateAssessment": deepcopy(
+            requested_date_assessment or {"Feasible": False}
+        ),
+        "EarliestSafeAssessment": deepcopy(earliest_safe_assessment),
         "SelectedAssessment": None,
-        "RelevantCapacityWindowKeys": [],
+        "RelevantCapacityWindowKeys": sorted(
+            relevant_capacity_window_keys or []
+        ),
         "Issues": deepcopy(issues),
         "Summary": {
             "CcrOperationCount": 0,
@@ -703,11 +756,19 @@ def evaluate_ccr_shadow_schedule(
             downstream_protection_minutes=downstream_protection_minutes,
             protection_threshold_percent=protection_threshold_percent,
         )
-        if earliest_safe is None:
+        if not bool(earliest_safe["Feasible"]):
+            considered = {
+                tuple(row)
+                for assessment in (requested, earliest_safe)
+                for row in assessment.get("ConsideredWindowKeys", [])
+            }
             return _not_assessable_result(
                 requested_due_at=requested_due_at,
                 capacity_assessment_cutoff_at=cutoff,
                 issues=[_issue("NO_SAFE_CCR_WINDOW")],
+                requested_date_assessment=requested,
+                earliest_safe_assessment=earliest_safe,
+                relevant_capacity_window_keys=sorted(considered),
             )
         status = "LaterSafeDate"
         selected = earliest_safe

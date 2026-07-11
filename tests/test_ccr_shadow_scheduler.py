@@ -632,7 +632,7 @@ class TestCcrShadowPromiseSelection:
 
         assert requested["Feasible"] is False
         assert earliest["PromiseAt"] == (
-            end + timedelta(minutes=60)
+            start + timedelta(minutes=180)
         ).isoformat()
         assert len(earliest["ReservationRequests"]) == 1
 
@@ -698,8 +698,57 @@ class TestCcrShadowPromiseSelection:
             row["RouteSequence"] for row in earliest["WindowAssessments"]
         ] == [10, 30]
         assert earliest["PromiseAt"] == datetime(
-            2026, 7, 20, 17, tzinfo=UTC
+            2026, 7, 20, 14, tzinfo=UTC
         ).isoformat()
+
+    def test_forward_selection_sequences_ccrs_in_identical_windows(self):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        operations = [
+            {
+                "RouteSequence": 10,
+                "OperationID": "SO-1:10:CUT",
+                "SourceOperationID": "CUT",
+                "ResourceID": "CCR-A",
+                "DurationMinutes": 60,
+                "IsPrimaryCcr": True,
+            },
+            {
+                "RouteSequence": 20,
+                "OperationID": "SO-1:10:PACK",
+                "SourceOperationID": "PACK",
+                "ResourceID": "CCR-B",
+                "DurationMinutes": 60,
+                "IsPrimaryCcr": True,
+            },
+        ]
+
+        earliest = _earliest_safe_candidate(
+            order_id="SO-1:10",
+            all_route_operations=operations,
+            source_states={
+                ("CCR-A", cutoff, end): self._state(
+                    "CCR-A", cutoff, end, 480
+                ),
+                ("CCR-B", cutoff, end): self._state(
+                    "CCR-B", cutoff, end, 480
+                ),
+            },
+            capacity_assessment_cutoff_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        assert earliest["PromiseAt"] == datetime(
+            2026, 7, 20, 11, tzinfo=UTC
+        ).isoformat()
+        assert [
+            row["LatestAllowedCompletionAt"]
+            for row in earliest["ReservationRequests"]
+        ] == [
+            datetime(2026, 7, 20, 9, tzinfo=UTC).isoformat(),
+            datetime(2026, 7, 20, 10, tzinfo=UTC).isoformat(),
+        ]
 
     def test_no_later_window_returns_not_assessable_without_reservation_requests(
         self,
@@ -729,7 +778,13 @@ class TestCcrShadowPromiseSelection:
             issues=[{"Code": "NO_SAFE_CCR_WINDOW", "EntityIDs": []}],
         )
 
-        assert earliest is None
+        assert earliest == {
+            "Feasible": False,
+            "PromiseAt": None,
+            "WindowAssessments": [],
+            "ReservationRequests": [],
+            "ConsideredWindowKeys": [],
+        }
         assert result["Status"] == "NotAssessable"
         assert result["SelectedAssessment"] is None
         assert result["Summary"]["SelectedWindowCount"] == 0
@@ -786,3 +841,58 @@ class TestCcrShadowPromiseSelection:
         assert result["SelectedAssessment"]["ReservationRequests"][0][
             "WindowStartAt"
         ] == selected_start.isoformat()
+
+    def test_no_safe_result_retains_exact_blocking_capacity_evidence(self):
+        cutoff = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        requested_due_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        resource = Resource("CCR-1", "CCR", True, {})
+        routing = Routing(
+            product_id="FG-1",
+            operations=[Operation("CUT", "CCR-1", 10, 60)],
+        )
+
+        result = evaluate_ccr_shadow_schedule(
+            order_id="SO-1:10",
+            quantity=1.0,
+            routing=routing,
+            resources=[resource],
+            capacity_buckets=[
+                CapacityBucket("CCR-1", cutoff, end, 480),
+            ],
+            setup_transitions=[],
+            gantt_rows=[],
+            active_capacity_reservations=[
+                {
+                    "CapacityReservationID": "RES-BLOCKING",
+                    "Status": "ActivePlanReservation",
+                    "ResourceID": "CCR-1",
+                    "WindowStartAt": cutoff.isoformat(),
+                    "WindowEndAt": end.isoformat(),
+                    "LatestAllowedCompletionAt": end.isoformat(),
+                    "ReservedMinutes": 480,
+                }
+            ],
+            requested_due_at=requested_due_at,
+            evaluated_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        exact_key = ("CCR-1", cutoff.isoformat(), end.isoformat())
+        assert result["Status"] == "NotAssessable"
+        assert result["Issues"] == [
+            {"Code": "NO_SAFE_CCR_WINDOW", "EntityIDs": []}
+        ]
+        assert result["RequestedDateAssessment"]["Feasible"] is False
+        assert result["RequestedDateAssessment"]["ConsideredWindowKeys"] == [
+            exact_key
+        ]
+        assert result["EarliestSafeAssessment"]["Feasible"] is False
+        assert result["EarliestSafeAssessment"]["ConsideredWindowKeys"] == [
+            exact_key
+        ]
+        assert result["RelevantCapacityWindowKeys"] == [exact_key]
+        assert result["SelectedAssessment"] is None
+        assert result["RequestedDateAssessment"]["ReservationRequests"] == []
+        assert result["EarliestSafeAssessment"]["ReservationRequests"] == []

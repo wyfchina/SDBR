@@ -4846,6 +4846,7 @@ from sdbr.planning_reservations import (
     ReservationConflict,
     ReservationLegacyMigrationRequired,
     apply_reservation_write_set,
+    assert_reservation_write_set_replay_matches,
 )
 from sdbr.plan_publication import (
     publication_state,
@@ -5784,7 +5785,10 @@ Expected: eight tests pass.
 ### Task 19: Decision Preconditions, Rejection, and Exact Replay
 
 **Files and anchors**
+- Modify `sdbr/planning_reservations.py`; expose the existing idempotent replay
+  verifier without widening its lifecycle-field allowlist.
 - Modify `sdbr/api.py` inside `create_app`; begin real decision route.
+- Modify `tests/test_planning_reservations.py` after the existing replay tests.
 - Modify `tests/test_order_commitment_api.py` after re-evaluation tests.
 
 **IDs:** `BE-SDBR-010`.
@@ -5797,17 +5801,34 @@ Add `TestOrderCommitmentApiDecisionReplay`:
 - `test_reject_records_server_actor_and_time_without_phase0_rows`;
 - `test_exact_reject_replay_returns_same_record_without_duplicate_event`;
 - `test_exact_accepted_replay_returns_same_verified_phase0_result`;
+- `test_exact_accepted_replay_rejects_one_field_phase0_corruption`;
 - `test_same_decision_id_one_field_at_a_time_change_conflicts`;
 - `test_terminal_row_rejects_new_decision_id`;
 - `test_decision_event_and_record_share_one_server_time_and_actor`.
 
 Parameterize the one-field test over decision code, expected fingerprint, effective actor header, trimmed reason, CCR acknowledgement, and material acknowledgement.
 
+Parameterize `test_exact_accepted_replay_rejects_one_field_phase0_corruption`
+over these independent mutations, restoring a fresh accepted fixture for every
+case: demand `Quantity`; batch `ConfirmedBy`; capacity `ReservedMinutes`;
+material `AllocatedQty`; planning-reservation event `PayloadFingerprint`;
+planning-reservation event `Result.ReservationBatchID`; event `ActorID`; event
+`OccurredAt`; event `DemandCommitmentID`; batch `DemandCommitmentID`; one batch
+`CapacityReservationIDs` entry; and one batch `MaterialAllocationIDs` entry.
+Assert `409
+OrderCommitmentDecisionReplayEvidenceMismatch`, the complete public store equals
+its pre-request deep copy, and no event or processed key is added. The normal
+exact replay test must also advance demand/batch/capacity/material through the
+documented Planning Run lifecycle and prove replay still succeeds; no status,
+version, Planning Run provenance, or material-authority handoff exception may be
+defined in the API.
+
 ~~~powershell
 pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay -q --basetemp .tmp/pytest-mto-decision-replay-red -p no:cacheprovider
 ~~~
 
-Expected: seven logical tests fail because decision route is incomplete.
+Expected: eight logical tests fail because decision route and shared replay
+entry point are incomplete.
 
 - [ ] **Step 2: Enforce preconditions and one captured decision observation**
 
@@ -5853,7 +5874,25 @@ incoming_fingerprint = canonical_decision_fingerprint(
 
 Existing middleware handles numeric revision mismatch before route code. Do not reread/retry.
 
-- [ ] **Step 3: Implement exact terminal replay and rejection**
+- [ ] **Step 3: Expose the Phase 0 verifier and implement exact terminal replay and rejection**
+
+In `planning_reservations.py`, rename
+`_assert_idempotent_replay_matches` to
+`assert_reservation_write_set_replay_matches`, add
+`processed_event_keys: MutableSet[str]` to its parameters, and move the
+processed-key membership check into that function before its existing unique
+event lookup. Keep `_REPLAY_TRANSITION_FIELDS`, all allowed status sets, the
+newer-`RecordVersion` requirement, and the narrowly defined material-authority
+handoff exactly as implemented. Keep the existing canonical demand
+normalization, immutable-content comparisons, child lookup, event
+`PayloadFingerprint`, and event `Result` checks unchanged, and additionally
+require the one persisted event to equal the canonical write-set event in every
+field. Events have no mutable replay fields; this comparison therefore verifies
+event ID/type, demand/batch linkage, actor/time/trace provenance, idempotency
+key, payload fingerprint, and result together. Change
+`apply_reservation_write_set` to call this public verifier for the processed-key
+branch. Add one direct Phase 0 test proving the public verifier accepts a deep
+copy of a valid evolved ledger and does not mutate any supplied collection.
 
 For terminal status:
 
@@ -5879,49 +5918,45 @@ if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
         message="Decision replay content differs from persisted content.",
     )
 if evaluation["Status"] == "AcceptedPendingFormalSchedule":
-    demand_id = str(evaluation["Decision"]["DemandCommitmentID"])
-    batch_id = str(evaluation["Decision"]["ReservationBatchID"])
-    demand = planning_demand_commitments.get(demand_id)
-    batch = planning_reservation_batches.get(batch_id)
-    if demand is None or batch is None:
-        return _order_commitment_error(
-            endpoint=endpoint, status_code=409,
-            status="OrderCommitmentDecisionReplayEvidenceMissing",
-            message="Persisted acceptance demand or batch is missing.",
+    original = deepcopy(evaluation)
+    original["Status"] = "AwaitingPlannerDecision"
+    original["RecordVersion"] = int(evaluation["RecordVersion"]) - 1
+    original.pop("Decision", None)
+    try:
+        original_write_set = prepare_mto_acceptance(
+            evaluation=original,
+            existing_commitments={},
+            decision_id=str(persisted_decision["DecisionID"]),
+            decision=str(persisted_decision["Decision"]),
+            decided_by=str(persisted_decision["DecidedBy"]),
+            decided_at=_parse_aware(persisted_decision["DecidedAt"]),
+            reason=str(persisted_decision["Reason"]),
+            ccr_risk_acknowledged=bool(
+                persisted_decision["CcrRiskAcknowledged"]
+            ),
+            material_risk_acknowledged=bool(
+                persisted_decision["MaterialRiskAcknowledged"]
+            ),
         )
-    if batch.get("DemandCommitmentID") != demand_id:
+        assert_reservation_write_set_replay_matches(
+            write_set=original_write_set,
+            commitments=deepcopy(planning_demand_commitments),
+            batches=deepcopy(planning_reservation_batches),
+            capacity_reservations=deepcopy(ccr_capacity_reservations),
+            material_allocations=deepcopy(material_planning_allocations),
+            events=deepcopy(planning_reservation_events),
+            processed_event_keys=deepcopy(
+                processed_planning_event_keys
+            ),
+        )
+    except ReservationConflict:
         return _order_commitment_error(
             endpoint=endpoint, status_code=409,
             status="OrderCommitmentDecisionReplayEvidenceMismatch",
-            message="Persisted acceptance batch/demand linkage differs.",
-        )
-    if any(
-        capacity_id not in ccr_capacity_reservations
-        for capacity_id in batch.get("CapacityReservationIDs", [])
-    ):
-        return _order_commitment_error(
-            endpoint=endpoint, status_code=409,
-            status="OrderCommitmentDecisionReplayEvidenceMissing",
-            message="Persisted capacity reservation evidence is missing.",
-        )
-    if any(
-        allocation_id not in material_planning_allocations
-        for allocation_id in batch.get("MaterialAllocationIDs", [])
-    ):
-        return _order_commitment_error(
-            endpoint=endpoint, status_code=409,
-            status="OrderCommitmentDecisionReplayEvidenceMissing",
-            message="Persisted material allocation evidence is missing.",
-        )
-    processed_key = (
-        "PlanningReservationActivated:"
-        + str(persisted_decision["DecisionID"])
-    )
-    if processed_key not in processed_planning_event_keys:
-        return _order_commitment_error(
-            endpoint=endpoint, status_code=409,
-            status="OrderCommitmentDecisionReplayEvidenceMissing",
-            message="Persisted Phase 0 idempotency evidence is missing.",
+            message=(
+                "Persisted acceptance does not match its canonical "
+                "Phase 0 write set."
+            ),
         )
 return {
     "Endpoint": endpoint,
@@ -5979,12 +6014,14 @@ Rejection creates no shared demand/reservation or external state.
 
 ~~~powershell
 pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay --collect-only -q
-pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay -q --basetemp .tmp/pytest-mto-decision-replay-green -p no:cacheprovider
-git add -- sdbr/api.py tests/test_order_commitment_api.py
+pytest tests/test_planning_reservations.py tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay -q --basetemp .tmp/pytest-mto-decision-replay-green -p no:cacheprovider
+git add -- sdbr/planning_reservations.py sdbr/api.py tests/test_planning_reservations.py tests/test_order_commitment_api.py
 git commit -m "feat: record replay-safe MTO decisions"
 ~~~
 
-Expected: exact replay is stable and every one-field change returns 409.
+Expected: exact replay is stable across only the Phase 0 verifier's documented
+monotonic lifecycle changes; every one-field content, provenance, event, result,
+or ID-linkage corruption returns 409 without mutating state.
 
 ---
 

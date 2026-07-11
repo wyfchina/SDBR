@@ -2,274 +2,358 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an automatic CCR-first MTO order commitment assessment that returns a recommendation, lets a planner make the explicit decision, and atomically activates the existing shared demand, CCR capacity reservation, and material planning allocation ledgers without accepting an external order or mutating production systems.
+**Goal:** Deliver an automatic CCR-first MTO order-commitment evaluation that gives a recommendation, leaves the final decision to a planner, and activates the existing shared demand/capacity/material ledgers only after an explicit option-2 decision.
 
-**Architecture:** A canonical Mock API intake immediately creates an immutable, idempotent shadow assessment against one completed and Approved/Published baseline Planning Run, its frozen master/calendar/configuration references, active shared reservations, and one operational-state snapshot. Pure domain modules own the window-level CCR shadow scheduler, material feasibility, recommendation, confirmation guards, and sanitized read models; FastAPI only resolves repository state and applies the existing Phase 0 reservation write set under the current revision-controlled state boundary. The approved option-2 planner flow ends at `AcceptedPendingFormalSchedule`: it never creates a Planning Run, changes a master-data version, accepts the customer order in an external system, or writes ERP/MES production state.
+**Architecture:** Keep the shadow scheduler, material assessment, recommendation/identity logic, and sanitized projections pure. FastAPI resolves a completed Approved/Published baseline, server-selected current operational evidence, and exact relevant Phase 0 rows, then persists immutable evaluations and revision-guarded decisions through the existing `WorkbenchStateStore` boundary. Acceptance ends at `AcceptedPendingFormalSchedule` and never creates a Planning Run or mutates DDAE, master data, ERP/WMS, MES, supplier-authority, or production-authority state.
 
-**Tech Stack:** Python 3.11+, FastAPI, Pydantic `AwareDatetime`, existing dataclass scheduling models, `WorkbenchStateStore` / `SQLiteWorkbenchStateStore`, pytest, vanilla HTML/CSS/JavaScript planner workbench.
+**Tech Stack:** Python 3.11+, FastAPI, Pydantic `AwareDatetime`, existing scheduling and Phase 0 dataclasses, `WorkbenchStateStore` / `SQLiteWorkbenchStateStore`, pytest, vanilla HTML/CSS/JavaScript, PowerShell.
 
 ## Global Constraints
 
-- Cite `BE-SDBR-006` through `BE-SDBR-010`, `BE-RUN-011`, and `UI-COMMIT-001` in changed tests and acceptance evidence.
-- Update `docs/backend-specification.md` and `docs/ui-specification.md` before implementation code; do not mark either new item verified until repeatable evidence exists.
-- SDBR remains a DDOM / S-DBR execution system. Do not add DDS&OP workflows, DDAE parameter governance, Buffer Profile governance, or strategic scenario governance.
-- Do not modify `D:\Documents\DDAE_INTERFACE_CONTRACT`, `sdbr/ddsop_contracts.py`, or any DDAE schema. The current MTO adapter must return the explicit `80.0%` reference policy with `Source="ReferenceFallback"` and `Approved=false`; it must never reinterpret an uncontracted field as an approved CCR threshold.
-- A reference threshold can never produce the ordinary `RecommendAccept` result. It always sets `RequiresCcrAcknowledgement=true`, even when projected load is at or below 80%.
-- Order intake performs the assessment automatically. Intake and re-evaluation create no `DemandCommitment`, reservation batch, capacity reservation, material allocation, Planning Run, integration message, or external order.
-- Every acceptance is a planner action. On-time capacity above an approved threshold requires an explicit CCR-risk acknowledgement and non-empty reason.
-- Material checking defaults to enabled. Disabling it requires a non-empty reason, produces no `MaterialPlanningAllocation`, records pending material requirements, and does not weaken the existing release-stage material hard gate.
-- Material evidence that is missing, stale, or insufficient cannot be accepted as material-feasible.
-- The approved option-2 workflow is: automatic assessment -> planner detail review -> optional audited re-evaluation -> explicit confirmation dialog -> revision-guarded decision -> atomic shared reservation activation -> `AcceptedPendingFormalSchedule`.
-- Acceptance does not create or modify a Planning Run. A later, explicit Planning Run may select the resulting `ReservationBatchID` through the existing `PlanningRunPayload.PlanningReservationBatchIDs` interface and `BE-RUN-011` bridge.
-- Acceptance does not append the MTO order to a master-data version. Formal scheduling still requires a valid planning input containing the order and an explicit selected reservation batch.
-- No endpoint may claim external customer-order acceptance, production ERP/WMS allocation, MES dispatch, or formal schedule publication.
-- Keep OR-Tools CP-SAT as the only executable solver for formal Planning Runs. The CCR-first assessment is a deterministic window-level shadow calculation and does not call CP-SAT, Gurobi, or Simio.
-- First-scope shadow scheduling uses one published primary route, each operation's primary resource, non-split operations, and date/shift windows. Alternate resources may only make the conservative result better; they are shown as unused options. A relevant nonzero sequence-dependent setup rule that cannot be tied to an exact predecessor must return structured `CCR_SETUP_LOAD_REQUIRES_REVIEW` and cannot produce an acceptance action.
-- Preserve all history. Re-evaluation creates a new immutable evaluation and supersedes only an undecided prior evaluation; accepted or rejected evidence is not overwritten.
-- Do not expose raw master-data, operational-state, DDAE, evaluation, or reservation JSON in the planner workflow. Technical IDs and fingerprints belong in collapsed technical details.
-- Do not touch `nofinish/`.
+- Cite `BE-SDBR-006` through `BE-SDBR-010` and `BE-RUN-011` in backend tests; cite `UI-COMMIT-001` in UI tests and evidence.
+- The first specification commit uses backend version `2.80` and UI version `5.35`. Current histories end at `2.79` and `5.34`; preserve those rows. Advance the stale document headers (`2.67` and `5.29`) instead of treating them as ledger tips.
+- Recommendation only: intake and re-evaluation never accept an order, create a `DemandCommitment`, reserve capacity/material, create a Planning Run, or emit an external message.
+- Planner decides. Material checking defaults on; a planner may disable it only through authenticated re-evaluation with a trimmed non-empty reason.
+- Option 2 is fixed: acceptance writes shared Phase 0 objects and ends at `AcceptedPendingFormalSchedule`. It does not create or modify a Planning Run.
+- No code or payload may govern or mutate DDAE parameters, extend a DDAE contract, append an order to a master-data version, acknowledge an external order, change ERP/WMS stock, or issue MES output.
+- Use only OR-Tools CP-SAT for later formal runs. The shadow evaluator is deterministic window logic and does not invoke CP-SAT, Gurobi, or Simio.
+- The API adapter uses only `REFERENCE_CCR_PROTECTION_POLICY` (80.0%, `ReferenceFallback`, `Approved=false`). Approved-policy behavior is pure-domain compatibility coverage, not a hidden DDAE field.
+- A reference fallback always sets `RequiresCcrAcknowledgement=true`. Any selected candidate over an approved threshold also sets it, including later-safe candidates.
+- Stale, future, missing, or malformed material evidence never produces `Feasible` or allocation requests. Skipped checking is not material feasibility.
+- Resolve material lookahead only from the baseline run's frozen release policy through `release_policy_settings(frozen_release_policy).material_lookahead_minutes`. No MTO client or JavaScript payload may provide a material-window value.
+- Preserve all history. Re-evaluation may supersede only an undecided row; accepted and rejected rows are immutable except exact decision replay.
+- Normal planner projections expose no raw order, basis, master-data, snapshot, event-detail, or reservation JSON. Fingerprints and trace IDs stay in collapsed technical details.
+- Do not modify `D:\Documents\DDAE_INTERFACE_CONTRACT`, `sdbr/ddsop_contracts.py`, or `nofinish/`.
+- UI acceptance unit 13 stops at `已验证待用户确认` until explicit user confirmation.
 
 ---
 
-## Option-2 Workflow Contract
+## Exact Domain Contract
 
-1. `POST /planner/workbench/order-commitments/intake` receives a canonical MTO line plus a completed, Approved/Published `BaselinePlanningRunID` and immediately evaluates it.
-2. The persisted evaluation contains the order content fingerprint, relevant-state basis fingerprint, CCR window evidence, material evidence, recommendation, threshold source, and allowed planner actions.
-3. `GET /planner/workbench/order-commitments/workbench` and `GET /planner/workbench/order-commitments/{evaluation_id}` return sanitized list/detail projections and the current `X-Workbench-Revision`.
-4. A planner may call `POST /planner/workbench/order-commitments/{evaluation_id}/reevaluate` to refresh evidence or opt out of material checking with a reason. This creates a new evaluation ID and retains the old evidence.
-5. A planner calls `POST /planner/workbench/order-commitments/{evaluation_id}/decision` with `If-Match`, the evaluation fingerprint, a stable `DecisionID`, a permitted decision code, a reason, and any required acknowledgements.
-6. Acceptance builds one canonical `MTOCustomerOrder` demand and invokes `prepare_reservation_confirmation` plus `apply_reservation_write_set`. The evaluation decision, demand, batch, CCR rows, optional material rows, and audit events persist together or all roll back.
-7. The response and UI display `AcceptedPendingFormalSchedule`, the accepted promise, and reservation batch identity. They explicitly display `ExternalOrderAcceptance="NotPerformed"` and `ProductionMutation="NotPerformed"`.
-8. Rejection records the planner decision and creates no shared demand or reservation objects.
+### Solver-Parity Capacity Semantics
+
+Use these equations in `sdbr/ccr_shadow_scheduler.py`.
+
+1. Mirror the formal duration pipeline exactly:
+
+~~~python
+base_duration = int(operation.duration_minutes * quantity)
+effective_duration = max(
+    1,
+    ceil(base_duration * 100 / max(1, resource.efficiency_percent)),
+)
+~~~
+
+2. `CapacityBucket.capacity_minutes` is already the formal aggregate duration limit. Never multiply it by `Resource.capacity_units`. `capacity_units` is used only for temporal overlap:
+
+~~~python
+aggregate_remaining = (
+    bucket.capacity_minutes
+    - scheduled_minutes_in_full_bucket
+    - active_reserved_minutes_for_exact_bucket
+    - candidate_minutes_already_assigned_to_bucket
+)
+usable_end = min(bucket.bucket_end, operation_deadline)
+usable_span_minutes = floor_minutes(usable_end - bucket.bucket_start)
+temporal_capacity = usable_span_minutes * resource.capacity_units
+temporal_remaining = (
+    temporal_capacity
+    - scheduled_overlap_minutes_before_usable_end
+    - active_reserved_minutes_for_exact_bucket
+    - candidate_minutes_assigned_before_usable_end
+)
+fits = effective_duration <= min(aggregate_remaining, temporal_remaining)
+~~~
+
+All exact-window reservations are charged to the usable subwindow because Phase 0 deliberately does not lock an intra-window position. Full-bucket scheduled overlap protects the formal aggregate constraint; deadline-truncated overlap protects the temporal constraint.
+
+3. Only `Processing` bars contribute scheduled load. Malformed/duplicate schedule or reservation evidence returns `NotAssessable`, never an undercount.
+
+4. Active rows are exactly statuses in `ACTIVE_PLANNING_STATUSES` and match the triple `(ResourceID, WindowStartAt, WindowEndAt)`. Group/allocate windows per primary CCR resource; never pool resources.
+
+5. Every selected row satisfies:
+
+~~~python
+latest_allowed = min(window_end, operation_deadline)
+assert window_start < latest_allowed <= window_end
+~~~
+
+Equality with `WindowEndAt` is valid and must pass `prepare_reservation_confirmation`. A window that merely starts before the deadline is insufficient.
+
+6. Threshold percent is `LoadAfterMinutes / bucket.capacity_minutes * 100`. Physical/date feasibility and protection risk remain separate.
+
+### Freshness Policy
+
+Ground MTO freshness in `evaluate_operational_state_freshness`:
+
+~~~python
+ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES = 60
+age_minutes = (evaluated_at - snapshot.captured_at).total_seconds() / 60
+status = "Future" if age_minutes < 0 else "Stale" if age_minutes > 60 else "Fresh"
+acceptable = status == "Fresh"
+~~~
+
+- With no explicit snapshot ID, select the greatest `(captured_at, snapshot_id)` among snapshots with `captured_at <= evaluated_at`. Do not fall back to the baseline run's frozen snapshot.
+- With an explicit SDBR snapshot ID, resolve that exact row. Unknown ID returns `404 OperationalStateSnapshotNotFound` before registration.
+- Exactly 60 minutes is `Fresh`; older is `Stale`; any explicitly selected future snapshot is `Future`.
+- `Stale`, `Future`, or no current snapshot yields `EvidenceInsufficient`, zero `AllocationRequests`, and no acceptance action.
+- Persist selected ID, captured time, status, age at evaluation, max age, and `ValidThroughAt = CapturedAt + 60 minutes`.
+- Snapshot identity, captured/valid-through times, freshness status, and max age are identity facts. Age-at-evaluation is observation metadata: store it in `Basis` and `MaterialAssessment` but exclude it, with `EvaluatedAt`, from identity fingerprints. Crossing from `Fresh` to `Stale` changes identity.
+
+### Total Recommendation and Decision Matrix
+
+Threshold state is `ApprovedWithin`, `ApprovedExceeded`, or `ReferenceFallback`. `RequiresCcrAcknowledgement` is true for every `ApprovedExceeded` and `ReferenceFallback` row. `RequiresMaterialAcknowledgement` is true for every `SkippedPendingConfirmation` row.
+
+| Capacity | Material | ApprovedWithin | ApprovedExceeded / ReferenceFallback | Allowed actions |
+| --- | --- | --- | --- | --- |
+| `NotAssessable` | any | `DoNotRecommendAccept` | `DoNotRecommendAccept` | `Reevaluate`, `Reject` |
+| `OnTime` | `Feasible` | `RecommendAccept` | `PlannerConfirmationRequired` | `AcceptRequestedDate`, `Reevaluate`, `Reject` |
+| `OnTime` | `SkippedPendingConfirmation` | `CapacityAcceptableMaterialPending` | `PlannerConfirmationRequired` | `ConditionallyAcceptRequestedDate`, `Reevaluate`, `Reject` |
+| `OnTime` | `EvidenceInsufficient` | `MaterialEvidenceRequired` | `MaterialEvidenceRequired` | `Reevaluate`, `Reject` |
+| `OnTime` | `Shortage` | `DoNotRecommendAccept` | `DoNotRecommendAccept` | `Reevaluate`, `Reject` |
+| `LaterSafeDate` | `Feasible` | `RecommendLaterPromise` | `PlannerConfirmationRequired` | `AcceptRecommendedDate`, `Reevaluate`, `Reject` |
+| `LaterSafeDate` | `SkippedPendingConfirmation` | `RecommendLaterPromise` | `PlannerConfirmationRequired` | `ConditionallyAcceptRecommendedDate`, `Reevaluate`, `Reject` |
+| `LaterSafeDate` | `EvidenceInsufficient` | `MaterialEvidenceRequired` | `MaterialEvidenceRequired` | `Reevaluate`, `Reject` |
+| `LaterSafeDate` | `Shortage` | `DoNotRecommendAccept` | `DoNotRecommendAccept` | `Reevaluate`, `Reject` |
+
+Exact acceptance contexts:
+
+~~~python
+ACCEPTANCE_ACTION_CONTEXT = {
+    "AcceptRequestedDate": ("OnTime", "Feasible", "RequestedDateAssessment"),
+    "ConditionallyAcceptRequestedDate": (
+        "OnTime", "SkippedPendingConfirmation", "RequestedDateAssessment"
+    ),
+    "AcceptRecommendedDate": (
+        "LaterSafeDate", "Feasible", "EarliestSafeAssessment"
+    ),
+    "ConditionallyAcceptRecommendedDate": (
+        "LaterSafeDate", "SkippedPendingConfirmation", "EarliestSafeAssessment"
+    ),
+}
+~~~
+
+`Reject` is allowed for every `AwaitingPlannerDecision` row. Evidence-insufficient, shortage, and not-assessable rows have no acceptance action. Terminal rows expose `AllowedActions=[]`.
+
+### Evaluation and Decision Identity
+
+Canonical evaluation identity:
+
+~~~python
+evaluation_identity = {
+    "OrderContentFingerprint": order["OrderContentFingerprint"],
+    "BasisFingerprint": basis["BasisFingerprint"],
+    "MaterialPolicy": {
+        "CheckEnabled": material["CheckEnabled"],
+        "SkipReason": material.get("SkipReason"),
+        "MaterialCheckWindowMinutes": material["MaterialCheckWindowMinutes"],
+        "SnapshotSelectionMode": material["SnapshotSelectionMode"],
+        "RequestedOperationalStateSnapshotID": material.get(
+            "RequestedOperationalStateSnapshotID"
+        ),
+    },
+    "ProtectionPolicy": normalized_protection_policy,
+    "ShadowAlgorithm": {
+        "Mode": "CCRFirstShadowScheduleV1",
+        "Version": 1,
+        "CapacitySemantics": "FormalBucketAggregateDeadlineTruncatedV1",
+    },
+}
+~~~
+
+`BasisFingerprint` includes baseline schedule fingerprint; master version; `OperatingModelConfigurationID`, `OperatingModelFingerprint`, `SchedulingConfigurationID`, `DDMRPConfigurationID`; `ReleasePolicyVersionID` and frozen-policy fingerprint; route/calendar fingerprints; selected snapshot identity/freshness; exact CCR resource/window keys considered; matching active capacity rows; requirement item/location snapshot projections; and matching active material rows. It excludes unrelated rows and observation-only age.
+
+Canonical decision fingerprint:
+
+~~~python
+decision_identity = {
+    "DecisionID": decision_id.strip(),
+    "EvaluationID": evaluation["EvaluationID"],
+    "EvaluationFingerprint": evaluation["EvaluationFingerprint"],
+    "Decision": decision,
+    "ActorID": effective_actor_id.strip(),
+    "Reason": reason.strip(),
+    "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+    "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
+}
+~~~
+
+Exclude `DecidedAt`. Capture `decision_at = server_utc_now()` and `actor_id = _effective_actor_id(request, payload.DecidedBy)` once and pass those same values to every write/event builder.
+
+### Sanitized Read Contract
+
+Each workbench row has exactly:
+
+~~~python
+ORDER_COMMITMENT_ROW_FIELDS = (
+    "EvaluationID", "OrderID", "DemandLineID", "ProductID", "Quantity", "Uom",
+    "BusinessPriority", "RequestedDueAt", "EarliestSafePromiseAt",
+    "SelectedPromiseAt", "CcrResourceIDs", "CcrWindowCount",
+    "LoadBeforeMinutes", "LoadAfterMinutes", "LoadAfterPercent",
+    "ProtectionThresholdPercent", "ProtectionThresholdSource",
+    "ProtectionThresholdApproved", "MaterialStatus",
+    "MaterialEvidenceFreshnessStatus", "Recommendation", "AllowedActions",
+    "RequiresCcrAcknowledgement", "RequiresMaterialAcknowledgement", "Status",
+    "ReservationBatchID", "ReservationStatus", "ExceptionStatus", "EvaluatedAt",
+    "ExternalOrderAcceptance", "PlanningRunCreation", "ProductionMutation",
+)
+~~~
+
+`ReservationStatus` is `NotReserved`, a linked Phase 0 batch status, or `ReservationEvidenceMissing`. `ExceptionStatus` is `None`, `AssessmentBlocked`, `MaterialEvidenceBlocked`, `ReservationEvidenceMissing`, or `PlanningErrorPending`.
+
+Audit projections expose:
+
+~~~python
+AUDIT_FIELDS = (
+    "EventID", "EventType", "OccurredAt", "ActorID",
+    "DecisionID", "ReservationBatchID", "Details",
+)
+SAFE_AUDIT_DETAIL_FIELDS = frozenset({
+    "FromStatus", "ToStatus", "Recommendation", "DecisionCode",
+    "SupersededByEvaluationID", "AcceptedPromiseAt",
+    "CcrRiskAcknowledged", "MaterialRiskAcknowledged",
+    "MaterialCheckEnabled", "MaterialEvidenceFreshnessStatus",
+})
+~~~
+
+Do not project event trace/causation/correlation IDs, source payloads, `Basis`, raw orders, master/snapshot rows, or unknown `Details`. Safe trace/fingerprint values belong only in collapsed `TechnicalDetails`.
 
 ---
 
-## File Structure
+## File Map
 
-- Create `sdbr/ccr_shadow_scheduler.py`
-  - Pure date/shift-capacity-window scheduler for primary-route CCR operations.
-  - Counts completed-schedule processing load plus active Phase 0 capacity reservations.
-  - Produces requested-date and earliest-safe candidates without changing the schedule.
-- Create `sdbr/order_commitment_evaluation.py`
-  - Canonical MTO input, fingerprints, material feasibility, recommendation, evaluation registration, supersession, planner-decision guards, and Phase 0 confirmation preparation.
-- Create `sdbr/order_commitment_view.py`
-  - Sanitized list and detail projections for the planner workbench.
-- Modify `sdbr/sdbr_market_control.py`
-  - Promote the existing CCR load-status classifier to the shared public `classify_ccr_load` interface used by market control and shadow scheduling.
-- Modify `sdbr/state_store.py`
-  - Persist `order_commitment_evaluations` and `order_commitment_events`; include them in restore, clear, health counts, rollback snapshots, and SQLite round trips.
-- Modify `sdbr/api.py`
-  - Add Pydantic payloads, reference resolution, automatic intake/re-evaluation, read endpoints, revision-guarded planner decision, auth coverage, and atomic calls into Phase 0.
-- Modify `sdbr/web/planner-workbench.html`
-  - Add the independent Order Commitments navigation route, dense workbench table, detail drawer, material re-evaluation controls, and option-2 confirmation dialog.
-- Modify `sdbr/web/planner-workbench.js`
-  - Add bilingual copy, route/load/render state, `X-Workbench-Revision` capture, `If-Match` decisions, acknowledgement validation, and refresh behavior.
-- Modify `sdbr/web/planner-workbench.css`
-  - Add restrained table/detail/dialog layouts and desktop/narrow-screen rules.
-- Create `tests/test_ccr_shadow_scheduler.py`
-  - CCR sequence, repeated visits, threshold, physical capacity, later safe promise, calendars, and malformed-input tests.
-- Create `tests/test_order_commitment_evaluation.py`
-  - Material default/opt-out, recommendation matrix, fingerprints, idempotency, supersession, decision guards, and Phase 0 write-set tests.
-- Create `tests/test_order_commitment_view.py`
-  - Sanitization, summary, source/status, audit, and technical-details tests.
-- Modify `tests/test_state_store.py`
-  - SQLite round-trip, clear, health count, and rollback coverage for the two new collections.
-- Modify `tests/test_sdbr_market_control.py`
-  - Shared classifier regression and unchanged planned-load behavior.
-- Modify `tests/test_api.py`
-  - End-to-end API, auth, revision, concurrency, rollback, no-external-mutation, and static UI acceptance tests.
-- Modify `docs/backend-specification.md`
-  - Add `BE-SDBR-010`, acceptance evidence, remaining boundaries, and dated change-log entries.
-- Modify `docs/ui-specification.md`
-  - Add `UI-COMMIT-001`, acceptance unit 13, option-2 interaction details, status/evidence, and dated change-log entries.
-
-The implementation must reuse these existing interfaces without creating parallel ledgers:
-
-```python
-create_demand_commitment -> dict[str, object]
-prepare_reservation_confirmation -> PlanningReservationWriteSet
-apply_reservation_write_set -> None
-reservation_load_by_bucket -> dict[tuple[str, str], dict[str, object]]
-planning_allocated_qty_for_other_demands -> float
-freeze_planning_reservations -> dict[str, object]
-```
+- Create `sdbr/ccr_shadow_scheduler.py`: pure CCR route/window and safe-promise evaluation.
+- Create `sdbr/order_commitment_evaluation.py`: canonical order, snapshot/material gate, matrix, identity, registration, decision fingerprint, Phase 0 preparation.
+- Create `sdbr/order_commitment_view.py`: exact sanitized list/detail projections.
+- Create `tests/test_ccr_shadow_scheduler.py`, `tests/test_order_commitment_evaluation.py`, `tests/test_order_commitment_view.py`, and `tests/test_order_commitment_api.py`.
+- Create `scripts/seed_mto_order_commitment_browser.ps1`: API-only repeatable browser state.
+- Modify `sdbr/sdbr_market_control.py` at `_load_status` / `build_ccr_planned_load`.
+- Modify `sdbr/state_store.py` at `WorkbenchStateStore`, `_state_payloads`, `_apply_payloads`, `_clear`, and `_state_counts`.
+- Modify `sdbr/api.py` at payload models near `OrderPayload`, `create_app` aliases/auth middleware, `planning_reservation_workbench`, and endpoint registration before `planner_workbench_page`.
+- Modify `sdbr/test_data.py` at constants and a new MTO fixture function.
+- Modify `sdbr/web/planner-workbench.html`, `planner-workbench.js`, and `planner-workbench.css` at the symbols named in UI tasks.
+- Modify `tests/test_sdbr_market_control.py`, `tests/test_state_store.py`, `tests/test_test_data.py`, `tests/test_planning_run_reservation_bridge.py`, and existing shell assertions in `tests/test_api.py`.
+- Modify `docs/backend-specification.md` and `docs/ui-specification.md` before implementation and later only with observed evidence.
 
 ---
 
-### Task 1: Specification First
+### Task 1: Specification Start at Backend 2.80 and UI 5.35
 
-**Files:**
-- Modify: `docs/backend-specification.md`
-- Modify: `docs/ui-specification.md`
+**Files and anchors**
+- Modify `docs/backend-specification.md:3-8` header, `:143-151` after `BE-SDBR-009`, `:988-1010` acceptance records, and `:1010-1020` change-log head.
+- Modify `docs/ui-specification.md:3-8` header, `:131` section 6.1, `:253` after `UI-DDMRP-002`, `:792` section 11, `:879` section 16, `:898` section 17, and `:1109-1117` change-log head.
 
-**Interfaces:**
-- Consumes: current `BE-SDBR-001` through `BE-SDBR-009`, `BE-RUN-011`, UI status definitions in section 1, and the implementation-order gate in UI section 16.
-- Produces: `BE-SDBR-010` and `UI-COMMIT-001`, which every new backend/UI test must cite.
+**Produces:** `BE-SDBR-010` and `UI-COMMIT-001` in `[NOT-STARTED]` / `未开始`.
 
-- [ ] **Step 1: Add the backend capability before writing code**
+- [ ] **Step 1: Write the backend capability, policy, and start record**
 
-Update the backend document header to version `2.74` and date `2026-07-11`; leave its document-status wording unchanged.
+Set header version/date to `2.80` / `2026-07-11`. Insert:
 
-Add this row immediately after `BE-SDBR-009`:
-
-```markdown
-| `BE-SDBR-010` | Automatic MTO order commitment evaluation and planner decision | `[NOT-STARTED]` | `D` `docs/superpowers/specs/2026-07-10-sdbr-order-commitment-evaluation-design.md`; planned `C` `sdbr/ccr_shadow_scheduler.py`, `sdbr/order_commitment_evaluation.py`; planned `A` `/planner/workbench/order-commitments/*`; planned `T` `tests/test_ccr_shadow_scheduler.py`, `tests/test_order_commitment_evaluation.py`, `tests/test_api.py` | Canonical new-order intake must automatically perform a CCR-first shadow assessment against completed schedule load plus active shared reservations, default to material checking, return recommendation only, and require an explicit planner decision. Approved-threshold exceedance and the 80% reference fallback require acknowledgement. Acceptance must reuse `BE-SDBR-006` through `BE-SDBR-009`, end at `AcceptedPendingFormalSchedule`, and must not accept an external order, create a Planning Run, or mutate ERP/MES. |
-```
-
-Do not change `BE-SDBR-006` through `BE-SDBR-009` or `BE-RUN-011` to `[VERIFIED]`. They remain `[PARTIAL]` because MTA workflow, formal-order authority, and complete external closure remain outside this task.
-
-- [ ] **Step 2: Add the backend start record and change log**
+~~~markdown
+| `BE-SDBR-010` | Automatic MTO order commitment evaluation and planner decision | `[NOT-STARTED]` | `D` `docs/superpowers/specs/2026-07-10-sdbr-order-commitment-evaluation-design.md`; planned `C` `sdbr/ccr_shadow_scheduler.py`, `sdbr/order_commitment_evaluation.py`, `sdbr/order_commitment_view.py`; planned `A` `/planner/workbench/order-commitments/*`; planned `T` `tests/test_ccr_shadow_scheduler.py`, `tests/test_order_commitment_evaluation.py`, `tests/test_order_commitment_api.py` | Intake performs recommendation-only CCR shadow assessment using formal bucket semantics and exact active reservations. Current operational evidence is server-selected with a fixed 60-minute maximum age; stale/future evidence cannot be feasible. Identity freezes schedule/config/release/snapshot/relevant-ledger evidence. Only a planner decision may create shared Phase 0 rows, ending at `AcceptedPendingFormalSchedule`; no Planning Run or external-authority mutation is automatic. |
+~~~
 
 Add before section 18:
 
-```markdown
+~~~markdown
 ### BE-SDBR-010 MTO 订单承诺评估启动记录
 
 - 日期：2026-07-11
-- 范围：真实 MTO 新订单进入自动 CCR-first 影子评估；系统只返回建议，计划员通过独立工作台决定接受建议日期、条件接受或拒绝。
-- 保护线：当前 DDAE 契约不扩展字段；第一轮 API 只使用明确标记的 `80.0% ReferenceFallback`，因此不得返回普通“建议接受”，接受前必须确认风险。
-- 物料：默认检查共享未承诺可用量；计划员关闭检查时必须填写原因，只登记待确认物料需求，不创建已分配声明，且不绕过释放阶段物料硬门控。
-- 确认：复用共享 `DemandCommitment`、`PlanningReservationBatch`、`CCRCapacityReservation` 和 `MaterialPlanningAllocation`；结束状态为 `AcceptedPendingFormalSchedule`。
-- 边界：不自动接受外部客户订单，不创建 Planning Run，不修改主数据版本，不写 ERP/WMS/MES，不新增 DDAE 契约字段。
-- 状态：`[NOT-STARTED]`，待实现与重复测试证据。
-```
+- 状态：`[NOT-STARTED]`。
+- 建议边界：系统只产生建议，计划员保留最终决定权；接收与重新评估不产生需求承诺或预留。
+- 容量口径：`CapacityBucket.capacity_minutes` 保持正式求解器总分钟语义，不乘 `capacity_units`；交期落在窗口内时只使用截止时间前子窗口，并满足 `WindowStartAt < LatestAllowedCompletionAt <= WindowEndAt`。
+- 物料与新鲜度：检查默认开启；最大年龄固定 60 分钟；默认选择不晚于服务端评估时间的最新快照，显式引用按 ID 解析；`Stale`、`Future` 或缺失证据返回 `EvidenceInsufficient` 且无分配请求。
+- 确认：矩阵包含请求日期/建议日期与物料跳过组合；参考保护线及批准保护线超限均要求 CCR 确认，跳过物料均要求物料确认。
+- 身份：评估依据冻结 baseline schedule、Operating Model、Scheduling、DDMRP、release policy、route/calendar、当前快照及精确相关容量/物料投影；决定指纹不含服务端观察时间。
+- 结束状态：`AcceptedPendingFormalSchedule`；Planning Run 必须由后续显式操作通过 `PlanningReservationBatchIDs` 选择预留。
+- 权威边界：不修改 DDAE、主数据版本、外部订单、ERP/WMS、MES、供应商或生产权威台账。
+~~~
 
-Add the next backend change-log row:
+Prepend:
 
-```markdown
-| 2.74 | 2026-07-11 | 启动 `BE-SDBR-010` MTO 订单承诺工作流：新订单自动进行 CCR-first 影子评估，默认检查物料，计划员按 option-2 显式确认后写入共享预留；不扩展 DDAE 契约、不自动接受外部订单、不修改 ERP/MES |
-```
+~~~markdown
+| 2.80 | 2026-07-11 | 启动 `BE-SDBR-010` MTO 订单承诺：固化正式求解器一致的 CCR 影子容量、60 分钟运行快照新鲜度、完整建议/决定矩阵、配置与相关状态身份、option-2 共享预留和无外部权威修改边界 |
+~~~
 
-- [ ] **Step 3: Add the independent UI specification**
+- [ ] **Step 2: Write the UI capability, IA, API map, and acceptance unit**
 
-Update the UI document header to version `5.35` and date `2026-07-11`; do not rewrite the statuses of existing acceptance units.
+Set UI header to `5.35` / `2026-07-11`. Replace section 6.1 with the live route sequence:
 
-Insert this page specification after `UI-DDMRP-002` and before the Planning Run pages:
+~~~markdown
+| NAV-01 | 计划总览 | Planning Overview | 今日异常、队列、约束和待办 |
+| NAV-02 | 运营指标 | Operational Metrics | DDOM 运行指标 |
+| NAV-03 | 数据就绪 | Data Readiness | 主数据版本与运行快照健康度 |
+| NAV-04 | 物料计划 | Materials Planning | DDMRP 运行 read model |
+| NAV-05 | 订单承诺 | Order Commitments | MTO 自动评估与计划员决定 |
+| NAV-06 | 排程任务 | Planning Runs | 创建、入队、执行、恢复和审计 |
+| NAV-07 | 排程结果 | Schedule Results | 甘特图、负荷、订单与诊断 |
+| NAV-08 | 释放管理 | Release Management | 绳长、物料、WIP 和缓冲门控 |
+| NAV-09 | 缓冲执行 | Buffer Execution | 缓冲状态与执行反馈 |
+| NAV-10 | 派工建议 | Dispatch Suggestions | MES 建议和证据 |
+| NAV-11 | 异常中心 | Exceptions | 失败、死信、重排和稳定性 |
+| NAV-12 | 日历配置 | Calendar Configuration | 日历与有效能力窗口 |
+| NAV-13 | 管理后台 | Administration | 主数据、集成、求解器和权限 |
+| NAV-D1 | 公开演示闭环 | Public Demo | 演示数据与验收路径 |
+~~~
 
-```markdown
-### UI-COMMIT-001 MTO 订单承诺评估工作台
+Insert `UI-COMMIT-001` with `状态：未开始`. Copy the exact row fields from “Sanitized Read Contract” into the spec and require `ReservationStatus`, `ExceptionStatus`, lifecycle-derived `AllowedActions`, the safe audit whitelist, no raw JSON, no material-window client field, bilingual labels, stale conflict handling, and option-2 terminal wording.
 
-**状态：未开始**
+Add section 11 rows:
 
-- 独立一级导航为“订单承诺 / Order Commitments”，不放入创建排程向导，也不替代排程结果 What-if。
-- 默认列表显示订单、产品、请求交期、建议安全日期、CCR、负荷前后、保护线来源、物料状态、建议、预留状态和异常状态。
-- 详情显示路线/CCR 负荷依据、日期或班次候选、物料证据、配置/日历/快照引用和审计历史；技术 ID 与 fingerprint 只放在折叠技术详情中。
-- “检查物料计划可用性”默认开启。关闭时必须填写原因，并持续显示“物料待确认”和“释放阶段仍执行物料硬门控”。
-- option-2 接受流程固定为：查看建议 -> 选择允许动作 -> 打开影响明确的确认对话框 -> 完成 CCR/物料风险确认 -> 提交 revision-guarded 决定 -> 显示“已接受，待正式排程”。
-- 普通建议、保护线超限、80%参考保护线、跳过物料、物料证据不足和建议调整交期必须使用不同文字状态；颜色不能是唯一表达。
-- 保护线超限或参考保护线必须勾选风险确认并填写原因；跳过物料的条件接受必须再次确认物料仍待处理。
-- 接受或拒绝都必须由计划员触发。页面不得显示或暗示外部订单已接受、Planning Run 已创建、ERP/WMS 已分配或 MES 已下发。
-- `409 StateStoreRevisionConflict` 或 `OrderCommitmentEvaluationStale` 显示“数据已更新，需要重新评估”，不得静默重试或覆盖。
-- 列表/详情必须有加载、空、错误和窄屏状态；正常工作流不得显示原始 JSON。
-```
+~~~markdown
+| 订单承诺接收 | `POST /planner/workbench/order-commitments/intake` |
+| 订单承诺列表/详情 | `GET /planner/workbench/order-commitments/workbench`、`GET /planner/workbench/order-commitments/{evaluation_id}` |
+| 订单承诺重新评估 | `POST /planner/workbench/order-commitments/{evaluation_id}/reevaluate` |
+| 订单承诺计划员决定 | `POST /planner/workbench/order-commitments/{evaluation_id}/decision` |
+~~~
 
-- [ ] **Step 4: Add UI acceptance unit 13 and change log**
+Append:
 
-Append this row to section 16:
-
-```markdown
+~~~markdown
 | 13 | MTO 订单承诺评估 | UI-COMMIT-001 | 是 |
-```
+~~~
 
-Add before UI section 18:
+Add record `17.13` with status `未开始`, then prepend:
 
-```markdown
-### 17.13 第十三验收单元记录
+~~~markdown
+| 5.35 | 2026-07-11 | 启动 `UI-COMMIT-001` 独立 MTO 订单承诺工作台：精确列表/详情字段、预留与异常状态、AllowedActions 门控、安全审计、当前快照重新评估和 option-2 决定；不发送物料窗口、不创建 Planning Run、不修改外部权威 |
+~~~
 
-- 规格：`UI-COMMIT-001`
-- 后台依赖：`BE-SDBR-006` 至 `BE-SDBR-010`、`BE-RUN-011`
-- 日期：2026-07-11
-- 范围：独立订单承诺工作台、自动评估结果、默认物料检查、带原因的物料跳过、option-2 计划员确认和共享预留状态。
-- 边界：不创建 Planning Run，不自动接受外部订单，不修改 ERP/WMS/MES，不新增 DDAE 字段，不显示原始 JSON。
-- 状态：未开始。
-```
+- [ ] **Step 3: Verify and commit**
 
-Add the next UI change-log row:
-
-```markdown
-| 5.35 | 2026-07-11 | 启动 `UI-COMMIT-001` 独立 MTO 订单承诺评估工作台：自动 CCR-first 建议、默认物料检查、带原因的物料跳过、option-2 计划员确认和共享预留状态；不自动接受外部订单或修改生产系统 |
-```
-
-- [ ] **Step 5: Verify IDs, statuses, and boundaries**
-
-Run:
-
-```powershell
-rg -n "BE-SDBR-010|UI-COMMIT-001|17\.13|2\.74|5\.35|AcceptedPendingFormalSchedule|ReferenceFallback" docs/backend-specification.md docs/ui-specification.md
-```
-
-Expected: both IDs, both `[NOT-STARTED]` / `未开始` states, both change-log rows, the acceptance unit, and all scope boundaries are present.
-
-- [ ] **Step 6: Commit specification targets**
-
-```powershell
+~~~powershell
+rg -n "文档版本 \| 2\.80|BE-SDBR-010|60 分钟|AcceptedPendingFormalSchedule|^\| 2\.80 " docs/backend-specification.md
+rg -n "文档版本 \| 5\.35|UI-COMMIT-001|NAV-05|订单承诺接收|^\| 13 \||^\| 5\.35 " docs/ui-specification.md
+git diff --check
 git add -- docs/backend-specification.md docs/ui-specification.md
-git commit -m "docs: specify MTO order commitment workflow"
-```
+git commit -m "docs: specify revised MTO commitment workflow"
+~~~
+
+Expected: one `2.80` and one `5.35` row, no duplicate historical version, both new IDs not started, and a clean diff check.
 
 ---
 
-### Task 2: CCR-First Shadow Scheduler
+### Task 2: Shared CCR Load Classifier
 
-**Files:**
-- Create: `sdbr/ccr_shadow_scheduler.py`
-- Create: `tests/test_ccr_shadow_scheduler.py`
-- Modify: `sdbr/sdbr_market_control.py`
-- Modify: `tests/test_sdbr_market_control.py`
+**Files and anchors**
+- Modify `sdbr/sdbr_market_control.py` at `_load_status` and `build_ccr_planned_load`.
+- Modify `tests/test_sdbr_market_control.py` after existing planned-load coverage.
 
-**Interfaces:**
-- Consumes:
-  - `Routing`, `Resource`, and `Operation` from `sdbr.planner_workbench`.
-  - `CapacityBucket` and `SetupTransition` from `sdbr.scheduling_solver`.
-  - completed schedule `GanttRows` with processing `Start`, `End`, `OrderID`, and `OperationID`.
-  - active Phase 0 capacity rows with exact `WindowStartAt`, `WindowEndAt`, `ReservedMinutes`, `ResourceID`, and active status.
-- Produces:
-  - `classify_ccr_load(*, load_percent: float, protective_capacity_target_percent: float) -> str` in `sdbr.sdbr_market_control`.
-  - `evaluate_ccr_shadow_schedule(*, order_id: str, quantity: float, routing: Routing | None, resources: list[Resource], capacity_buckets: list[CapacityBucket], setup_transitions: list[SetupTransition], gantt_rows: list[dict[str, object]], active_capacity_reservations: list[dict[str, object]], requested_due_at: datetime, evaluated_at: datetime, downstream_protection_minutes: int, protection_threshold_percent: float) -> dict[str, object]`.
-  - Output keys `Mode`, `Status`, `RequestedDueAt`, `LatestCcrCompletionAt`, `RequestedDateAssessment`, `EarliestSafeAssessment`, `SelectedAssessment`, `Issues`, and `Summary`.
-  - Each selected assessment produces Phase 0-ready `ReservationRequests` with exact `ReservationLineID`, `OrderID`, `OperationID`, `ResourceID`, `WindowStartAt`, `WindowEndAt`, `ReservedMinutes`, and `LatestAllowedCompletionAt`.
+**IDs:** `BE-SDBR-001`, `BE-SDBR-010`.
 
-- [ ] **Step 1: Write failing shared-classifier tests**
+- [ ] **Step 1: Add the exact failing test**
 
-Add to `tests/test_sdbr_market_control.py`:
+Add class `TestSharedCcrLoadClassifier` with method `test_classifier_preserves_existing_threshold_boundaries`, asserting 80.0 → `Protected`, 80.01 → `Watch`, 95.0 → `NearLimit`, and 100.01 → `Overloaded` for target 80.0.
 
-```python
-# BE-SDBR-001 / BE-SDBR-010
-from sdbr.sdbr_market_control import classify_ccr_load
+~~~powershell
+pytest tests/test_sdbr_market_control.py::TestSharedCcrLoadClassifier::test_classifier_preserves_existing_threshold_boundaries -q --basetemp .tmp/pytest-mto-classifier-red -p no:cacheprovider
+~~~
 
+Expected: FAIL because `classify_ccr_load` is not public.
 
-def test_classify_ccr_load_uses_the_existing_market_control_thresholds():
-    assert classify_ccr_load(
-        load_percent=80.0,
-        protective_capacity_target_percent=80.0,
-    ) == "Protected"
-    assert classify_ccr_load(
-        load_percent=80.01,
-        protective_capacity_target_percent=80.0,
-    ) == "Watch"
-    assert classify_ccr_load(
-        load_percent=95.0,
-        protective_capacity_target_percent=80.0,
-    ) == "NearLimit"
-    assert classify_ccr_load(
-        load_percent=100.01,
-        protective_capacity_target_percent=80.0,
-    ) == "Overloaded"
-```
+- [ ] **Step 2: Promote the existing logic**
 
-Run:
-
-```powershell
-pytest tests/test_sdbr_market_control.py -q -k "classify_ccr_load" --basetemp .tmp/pytest-mto-load-classifier-red -p no:cacheprovider
-```
-
-Expected: FAIL because `classify_ccr_load` is not public yet.
-
-- [ ] **Step 2: Promote one load classifier without changing P1 behavior**
-
-In `sdbr/sdbr_market_control.py`, replace the private `_load_status` call and definition with:
-
-```python
+~~~python
 def classify_ccr_load(
     *,
     load_percent: float,
@@ -282,225 +366,39 @@ def classify_ccr_load(
     if load_percent > protective_capacity_target_percent:
         return "Watch"
     return "Protected"
-```
+~~~
 
-Call it from `build_ccr_planned_load` with keyword arguments. Do not alter `PROTECTIVE_CAPACITY_TARGET_PERCENT`, `PLANNED_LOAD_WARNING_PERCENT`, bucket totals, or P1 response fields.
+Replace only the private call in `build_ccr_planned_load`; preserve constants, totals, and response fields.
 
-- [ ] **Step 3: Write failing shadow-schedule tests**
+- [ ] **Step 3: Verify and commit**
 
-Create `tests/test_ccr_shadow_scheduler.py` with deterministic aware datetimes and these helpers/tests:
+~~~powershell
+pytest tests/test_sdbr_market_control.py::TestSharedCcrLoadClassifier --collect-only -q
+pytest tests/test_sdbr_market_control.py -q --basetemp .tmp/pytest-mto-market-green -p no:cacheprovider
+git add -- sdbr/sdbr_market_control.py tests/test_sdbr_market_control.py
+git commit -m "refactor: share CCR load classification"
+~~~
 
-```python
-"""Acceptance evidence for BE-SDBR-010."""
+Expected: one class test collects and the full file passes.
 
-from datetime import datetime, timezone
+---
 
-import pytest
+### Task 3: Shadow Input, Route, and CCR Operation Contract
 
-from sdbr.ccr_shadow_scheduler import evaluate_ccr_shadow_schedule
-from sdbr.planner_workbench import Operation, Resource, Routing
-from sdbr.scheduling_solver import CapacityBucket, SetupTransition
+**Files and anchors**
+- Create `sdbr/ccr_shadow_scheduler.py`.
+- Create `tests/test_ccr_shadow_scheduler.py`.
 
+**IDs:** `BE-SDBR-008`, `BE-SDBR-010`.
 
-UTC = timezone.utc
+**Produces**
 
-
-def _resource(*, capacity_units: int = 1, efficiency_percent: int = 100) -> Resource:
-    return Resource(
-        resource_id="CCR-1",
-        name="Constraint",
-        is_constraint=True,
-        daily_capacity_minutes={},
-        capacity_units=capacity_units,
-        efficiency_percent=efficiency_percent,
-    )
-
-
-def _routing(*, repeated_visit: bool = False) -> Routing:
-    operations = [
-        Operation("PREP", "NCR-1", 20, 10),
-        Operation("CCR-CUT", "CCR-1", 60, 20, setup_family="FG-1"),
-        Operation("PACK", "NCR-2", 30, 30),
-    ]
-    if repeated_visit:
-        operations.insert(2, Operation("CCR-INSPECT", "CCR-1", 30, 25))
-    return Routing(product_id="FG-1", routing_id="PRIMARY", operations=operations)
-
-
-def _bucket(day: int, *, capacity: int = 480) -> CapacityBucket:
-    return CapacityBucket(
-        resource_id="CCR-1",
-        bucket_start=datetime(2026, 7, day, 8, tzinfo=UTC),
-        bucket_end=datetime(2026, 7, day, 16, tzinfo=UTC),
-        capacity_minutes=capacity,
-    )
-
-
-def _evaluate(**overrides: object) -> dict[str, object]:
-    arguments: dict[str, object] = {
-        "order_id": "SO-100:10",
-        "quantity": 1.0,
-        "routing": _routing(),
-        "resources": [_resource(), Resource("NCR-1", "Prep", False, {}), Resource("NCR-2", "Pack", False, {})],
-        "capacity_buckets": [_bucket(20), _bucket(21)],
-        "setup_transitions": [],
-        "gantt_rows": [],
-        "active_capacity_reservations": [],
-        "requested_due_at": datetime(2026, 7, 20, 18, tzinfo=UTC),
-        "evaluated_at": datetime(2026, 7, 20, 7, tzinfo=UTC),
-        "downstream_protection_minutes": 60,
-        "protection_threshold_percent": 80.0,
-    }
-    arguments.update(overrides)
-    return evaluate_ccr_shadow_schedule(**arguments)  # type: ignore[arg-type]
-
-
-def test_on_time_window_returns_phase0_ready_reservation_request():
-    result = _evaluate()
-
-    assert result["Status"] == "OnTime"
-    selected = result["SelectedAssessment"]
-    assert selected["PromiseAt"] == "2026-07-20T18:00:00+00:00"
-    assert selected["ThresholdExceeded"] is False
-    assert selected["ReservationRequests"] == [{
-        "ReservationLineID": "SO-100:10:CCR-CUT:2026-07-20T08:00:00+00:00",
-        "OrderID": "SO-100:10",
-        "OperationID": "SO-100:10:CCR-CUT",
-        "ResourceID": "CCR-1",
-        "WindowStartAt": "2026-07-20T08:00:00+00:00",
-        "WindowEndAt": "2026-07-20T16:00:00+00:00",
-        "ReservedMinutes": 60,
-        "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
-    }]
-
-
-def test_on_time_physical_fit_above_protection_threshold_requires_review():
-    result = _evaluate(
-        gantt_rows=[{
-            "ResourceID": "CCR-1",
-            "Bars": [{
-                "BarType": "Processing",
-                "OrderID": "WO-EXISTING",
-                "OperationID": "WO-EXISTING:CCR",
-                "Start": "2026-07-20T08:00:00+00:00",
-                "End": "2026-07-20T14:30:00+00:00",
-            }],
-        }],
-    )
-
-    selected = result["SelectedAssessment"]
-    assert result["Status"] == "OnTime"
-    assert selected["LoadBeforeMinutes"] == 390
-    assert selected["LoadAfterMinutes"] == 450
-    assert selected["LoadAfterPercent"] == 93.75
-    assert selected["ThresholdExceeded"] is True
-    assert selected["PhysicalCapacityExceeded"] is False
-
-
-def test_request_that_misses_deadline_returns_later_safe_promise():
-    result = _evaluate(
-        gantt_rows=[{
-            "ResourceID": "CCR-1",
-            "Bars": [{
-                "BarType": "Processing",
-                "OrderID": "WO-FULL",
-                "OperationID": "WO-FULL:CCR",
-                "Start": "2026-07-20T08:00:00+00:00",
-                "End": "2026-07-20T16:00:00+00:00",
-            }],
-        }],
-    )
-
-    assert result["Status"] == "LaterSafeDate"
-    assert result["RequestedDateAssessment"]["Feasible"] is False
-    assert result["EarliestSafeAssessment"]["Feasible"] is True
-    assert result["EarliestSafeAssessment"]["PromiseAt"] > "2026-07-20T18:00:00+00:00"
-    assert result["SelectedAssessment"] == result["EarliestSafeAssessment"]
-
-
-def test_repeated_ccr_visits_keep_distinct_operation_correlations():
-    result = _evaluate(routing=_routing(repeated_visit=True))
-
-    requests = result["SelectedAssessment"]["ReservationRequests"]
-    assert [row["OperationID"] for row in requests] == [
-        "SO-100:10:CCR-CUT",
-        "SO-100:10:CCR-INSPECT",
-    ]
-    assert sum(row["ReservedMinutes"] for row in requests) == 90
-
-
-def test_shadow_load_counts_active_reservations_but_not_converted_rows():
-    active = {
-        "CapacityReservationID": "CCR-ACTIVE",
-        "ResourceID": "CCR-1",
-        "WindowStartAt": "2026-07-20T08:00:00+00:00",
-        "WindowEndAt": "2026-07-20T16:00:00+00:00",
-        "ReservedMinutes": 300,
-        "DemandClass": "MTA",
-        "Status": "ActivePlanReservation",
-    }
-    converted = {**active, "CapacityReservationID": "CCR-CONVERTED", "ReservedMinutes": 100, "Status": "ConvertedToScheduledOccupancy"}
-
-    result = _evaluate(active_capacity_reservations=[active, converted])
-
-    selected = result["SelectedAssessment"]
-    assert selected["ExistingReservationMinutes"] == 300
-    assert selected["LoadAfterMinutes"] == 360
-
-
-def test_low_load_in_a_window_after_the_deadline_does_not_make_request_on_time():
-    result = _evaluate(
-        capacity_buckets=[_bucket(21)],
-        requested_due_at=datetime(2026, 7, 20, 12, tzinfo=UTC),
-    )
-
-    assert result["Status"] == "LaterSafeDate"
-
-
-def test_unresolved_sequence_setup_rule_blocks_acceptance_instead_of_undercounting():
-    result = _evaluate(
-        setup_transitions=[SetupTransition("CCR-1", "FAMILY-A", "FG-1", 30)],
-    )
-
-    assert result["Status"] == "NotAssessable"
-    assert "CCR_SETUP_LOAD_REQUIRES_REVIEW" in [row["Code"] for row in result["Issues"]]
-
-
-@pytest.mark.parametrize("field", ["requested_due_at", "evaluated_at"])
-def test_shadow_schedule_rejects_naive_decision_times(field: str):
-    with pytest.raises(ValueError, match="timezone-aware"):
-        _evaluate(**{field: datetime(2026, 7, 20, 8)})
-```
-
-Run:
-
-```powershell
-pytest tests/test_ccr_shadow_scheduler.py -q --basetemp .tmp/pytest-ccr-shadow-red -p no:cacheprovider
-```
-
-Expected: FAIL because `sdbr.ccr_shadow_scheduler` does not exist.
-
-- [ ] **Step 4: Implement the window-level algorithm**
-
-Create `sdbr/ccr_shadow_scheduler.py` with this public shape and exact rules:
-
-```python
-from __future__ import annotations
-
-from copy import deepcopy
-from datetime import datetime, timedelta, timezone
-from hashlib import sha256
-from math import ceil, isfinite
-from numbers import Real
-
-from sdbr.planner_workbench import Resource, Routing
-from sdbr.planning_reservation_view import ACTIVE_PLANNING_STATUSES
-from sdbr.scheduling_solver import CapacityBucket, SetupTransition
-from sdbr.sdbr_market_control import classify_ccr_load
-
-
-SHADOW_MODE = "CCRFirstShadowScheduleV1"
-
+~~~python
+SHADOW_ALGORITHM = {
+    "Mode": "CCRFirstShadowScheduleV1",
+    "Version": 1,
+    "CapacitySemantics": "FormalBucketAggregateDeadlineTruncatedV1",
+}
 
 def evaluate_ccr_shadow_schedule(
     *,
@@ -517,498 +415,449 @@ def evaluate_ccr_shadow_schedule(
     downstream_protection_minutes: int,
     protection_threshold_percent: float,
 ) -> dict[str, object]:
-    """Evaluate one MTO line without creating a formal schedule or reservation."""
-    _validate_request(
-        order_id=order_id,
-        quantity=quantity,
-        requested_due_at=requested_due_at,
-        evaluated_at=evaluated_at,
-        downstream_protection_minutes=downstream_protection_minutes,
-        protection_threshold_percent=protection_threshold_percent,
-    )
-    ccr_operations, operation_issues = _ccr_operations(
-        order_id=order_id,
-        quantity=quantity,
-        routing=routing,
-        resources=resources,
-        setup_transitions=setup_transitions,
-    )
-    window_states, window_issues = _capacity_window_states(
-        resources=resources,
-        capacity_buckets=capacity_buckets,
-        gantt_rows=gantt_rows,
-        active_capacity_reservations=active_capacity_reservations,
-    )
-    issues = [*operation_issues, *window_issues]
-    if issues:
-        return _not_assessable_result(
-            requested_due_at=requested_due_at,
-            issues=issues,
-            protection_threshold_percent=protection_threshold_percent,
+~~~
+
+- [ ] **Step 1: Write focused tests**
+
+Create UTC `_resource`, `_routing`, `_bucket`, and `_evaluate` fixtures. Add `TestCcrShadowInputContract`:
+
+- `test_rejects_blank_order_nonfinite_quantity_naive_times_and_invalid_threshold`;
+- `test_repeated_ccr_visits_keep_route_order_and_distinct_correlations`;
+- `test_missing_route_resource_or_ccr_returns_not_assessable`;
+- `test_unresolved_nonzero_setup_transition_returns_ccr_setup_load_requires_review`;
+- `test_effective_duration_matches_formal_int_then_efficiency_rounding`.
+
+The last uses duration 11, quantity 1.5, efficiency 80 and expects `int(16.5)=16`, then 20 minutes.
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowInputContract -q --basetemp .tmp/pytest-mto-shadow-input-red -p no:cacheprovider
+~~~
+
+Expected: import/collection fails because the module is absent.
+
+- [ ] **Step 2: Implement normalization and extraction**
+
+~~~python
+def _extract_ccr_operations(order_id, quantity, routing, resources, setup_transitions):
+    if routing is None:
+        return [], [issue("ROUTING_NOT_FOUND")]
+    resources_by_id = require_unique_nonblank_ids(resources, "resource_id")
+    operations = sorted(routing.operations, key=lambda row: row.sequence)
+    require_unique_nonblank_ids(operations, "operation_id")
+    result = []
+    for operation in operations:
+        resource = resources_by_id.get(operation.resource_id)
+        if resource is None:
+            return [], [issue("RESOURCE_NOT_FOUND", operation.operation_id)]
+        base = int(operation.duration_minutes * quantity)
+        duration = max(
+            1,
+            ceil(base * 100 / max(1, int(resource.efficiency_percent))),
         )
-    requested = _backward_requested_date_candidate(
-        order_id=order_id,
-        operations=ccr_operations,
-        windows=window_states,
-        requested_due_at=requested_due_at,
-        evaluated_at=evaluated_at,
-        downstream_protection_minutes=downstream_protection_minutes,
-        protection_threshold_percent=protection_threshold_percent,
-    )
-    earliest_safe = None
-    if not requested["Feasible"]:
-        earliest_safe = _forward_earliest_safe_candidate(
-            order_id=order_id,
-            operations=ccr_operations,
-            windows=window_states,
-            evaluated_at=evaluated_at,
-            downstream_protection_minutes=downstream_protection_minutes,
-            protection_threshold_percent=protection_threshold_percent,
+        unresolved_setup = any(
+            transition.resource_id == resource.resource_id
+            and transition.to_setup_family == (
+                operation.setup_family or routing.product_id
+            )
+            and transition.setup_minutes > 0
+            for transition in setup_transitions
         )
-    return _shadow_result(
-        requested_due_at=requested_due_at,
-        requested=requested,
-        earliest_safe=earliest_safe,
-        protection_threshold_percent=protection_threshold_percent,
-    )
-```
+        if resource.is_constraint and unresolved_setup:
+            return [], [issue(
+                "CCR_SETUP_LOAD_REQUIRES_REVIEW",
+                operation.operation_id,
+                resource.resource_id,
+            )]
+        if resource.is_constraint:
+            result.append({
+                "RouteSequence": operation.sequence,
+                "OperationID": f"{order_id}:{operation.operation_id}",
+                "SourceOperationID": operation.operation_id,
+                "ResourceID": resource.resource_id,
+                "DurationMinutes": duration,
+                "AlternateResourceIDs": sorted(
+                    operation.alternate_resource_ids or []
+                ),
+            })
+    if not result:
+        return [], [issue("CCR_OPERATION_NOT_FOUND")]
+    return result, []
+~~~
 
-Implement the body and private helpers with these non-negotiable rules:
+Validation rejects bool/non-real/non-finite/non-positive quantity, blank IDs, naive datetimes, negative protection, threshold outside `(0, 100]`, duplicates, and non-positive durations/efficiency/units. Normalize comparisons/output to UTC. Return `NotAssessable` with `Algorithm=SHADOW_ALGORITHM` on any issue.
 
-1. Reject blank `order_id`, non-finite/non-positive `quantity`, naive decision times, negative protection minutes, and thresholds outside `(0, 100]`.
-2. Normalize all datetime comparisons to UTC while preserving ISO offsets in returned window references.
-3. Select CCR operations by resolving each operation's primary `resource_id` to `Resource.is_constraint=True`. Preserve alternate resource IDs as display-only conservative context. If a relevant nonzero `SetupTransition` targets the CCR operation's setup family but the exact predecessor family cannot be proven from schedule evidence, return `CCR_SETUP_LOAD_REQUIRES_REVIEW` and `NotAssessable` rather than omitting setup minutes. A missing route, missing resource, no CCR operation, duplicate operation identity, malformed capacity window, or malformed active reservation also produces `Status="NotAssessable"`; it never becomes a feasible empty schedule.
-4. Effective operation load is `ceil(operation.duration_minutes * quantity * 100 / resource.efficiency_percent)`. Bucket physical capacity is `bucket.capacity_minutes * resource.capacity_units`.
-5. Scheduled load is the overlap in minutes of `Processing` bars with each exact capacity window. Count active Phase 0 rows only when status is in `ACTIVE_PLANNING_STATUSES` and `(ResourceID, WindowStartAt, WindowEndAt)` exactly matches the window. Reject ambiguous duplicate IDs or malformed rows instead of undercounting.
-6. Derive the last CCR deadline as `requested_due_at - downstream_protection_minutes`. Walk the route backward so downstream non-CCR durations and later CCR visits constrain earlier CCR deadlines.
-7. The requested-date candidate allocates each CCR operation in reverse sequence into the latest single window that starts before its operation deadline and has sufficient physical capacity. Do not split one operation over windows. Update candidate load after every selected operation so repeated visits cannot reuse the same free minutes.
-8. If the requested-date candidate fails, run a forward earliest-safe pass from `evaluated_at`, respecting route sequence and non-CCR durations. `PromiseAt` is the final route estimate plus downstream protection. The selected candidate is requested-date when on time, otherwise earliest-safe.
-9. Every selected window reports `CapacityMinutes`, `ScheduledLoadMinutes`, `ExistingReservationMinutes`, `CandidateLoadMinutes`, `LoadBeforeMinutes`, `LoadAfterMinutes`, rounded percentages, `LoadStatus`, `ThresholdExceeded`, and `PhysicalCapacityExceeded`.
-10. A candidate is feasible only when every CCR operation fits at or below physical capacity. Crossing the protection threshold changes risk and recommendation inputs but does not by itself make the date infeasible.
-11. Sort returned reservation requests by route sequence. Use `OperationID=f"{order_id}:{operation.operation_id}"` and `ReservationLineID=f"{operation_id}:{window_start.isoformat()}"`; set `LatestAllowedCompletionAt` to an aware instant strictly inside the selected window and no later than the operation deadline.
-12. Return only copied/derived business evidence. Do not mutate routing, resources, Gantt rows, capacity buckets, or reservation rows.
+- [ ] **Step 3: Verify and commit**
 
-Implement every named private helper in the same module according to the twelve rules above; the committed module must contain no stubbed helper or `NotImplementedError`.
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowInputContract --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowInputContract -q --basetemp .tmp/pytest-mto-shadow-input-green -p no:cacheprovider
+git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
+git commit -m "feat: define MTO CCR shadow inputs"
+~~~
 
-- [ ] **Step 5: Run scheduler and P1 regressions**
-
-Run:
-
-```powershell
-pytest tests/test_ccr_shadow_scheduler.py tests/test_sdbr_market_control.py tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-ccr-shadow-green -p no:cacheprovider
-```
-
-Expected: PASS. Existing P1 load totals and Phase 0 active/converted filtering remain unchanged.
-
-- [ ] **Step 6: Commit the scheduler slice**
-
-```powershell
-git add -- sdbr/ccr_shadow_scheduler.py sdbr/sdbr_market_control.py tests/test_ccr_shadow_scheduler.py tests/test_sdbr_market_control.py
-git commit -m "feat: add CCR-first MTO shadow scheduler"
-```
+Expected: exactly five named tests collect and pass.
 
 ---
 
-### Task 3: MTO Evaluation, Material Gate, and Planner-Decision Domain
+### Task 4: Solver-Parity Window Capacity and Deadline Truncation
 
-**Files:**
-- Create: `sdbr/order_commitment_evaluation.py`
-- Create: `tests/test_order_commitment_evaluation.py`
+**Files and anchors**
+- Modify `sdbr/ccr_shadow_scheduler.py` at `evaluate_ccr_shadow_schedule`; add `_window_states`, `_window_metrics`, `_fits_window`, and `_reservation_request`.
+- Modify `tests/test_ccr_shadow_scheduler.py` after `TestCcrShadowInputContract`.
 
-**Interfaces:**
-- Consumes:
-  - `create_demand_commitment` and `normalize_demand_commitment` from `sdbr.planning_commitments`.
-  - `prepare_reservation_confirmation` and `PlanningReservationWriteSet` from `sdbr.planning_reservations`.
-  - `planning_allocated_qty_for_other_demands` from `sdbr.planning_reservation_view`.
-  - `InventoryBufferPolicy`, `MaterialAvailability`, and the Task 2 shadow-schedule output.
-- Produces:
-  - `CcrProtectionPolicy(target_percent: float, source: Literal["ApprovedOperatingModel", "ReferenceFallback"], approved: bool, configuration_id: str | None = None)`.
-  - `REFERENCE_CCR_PROTECTION_POLICY` with `80.0`, `ReferenceFallback`, and `approved=False`.
-  - `normalize_mto_order(record: Mapping[str, object]) -> dict[str, object]`.
-  - `candidate_demand_commitment_id(order: Mapping[str, object]) -> str`.
-  - `evaluate_mto_material_availability(*, order: Mapping[str, object], inventory_buffers: list[InventoryBufferPolicy], material_availability: list[MaterialAvailability], active_material_allocations: list[dict[str, object]], current_demand_commitment_id: str, snapshot_id: str, evaluated_at: datetime, material_check_window_minutes: int, check_material_availability: bool, skip_reason: str | None) -> dict[str, object]`.
-  - `build_order_commitment_basis(*, baseline_planning_run_id: str, baseline_schedule_fingerprint: str, master_data_version_id: str, routing_fingerprint: str, operational_state_snapshot_id: str, operational_state_captured_at: datetime, capacity_ledger_rows: list[dict[str, object]], material_ledger_rows: list[dict[str, object]], calendar_fingerprint: str, time_buffer_minutes: int) -> dict[str, object]`.
-  - `create_order_commitment_evaluation(*, order: Mapping[str, object], shadow_schedule: Mapping[str, object], material_assessment: Mapping[str, object], basis: Mapping[str, object], protection_policy: CcrProtectionPolicy, evaluated_at: datetime) -> dict[str, object]`.
-  - `register_order_commitment_evaluation(evaluations: Mapping[str, dict[str, object]], candidate: dict[str, object]) -> tuple[Literal["Created", "Duplicate"], dict[str, object]]`.
-  - `supersede_open_order_commitment_evaluations(*, evaluations: Mapping[str, dict[str, object]], candidate: dict[str, object], superseded_at: datetime) -> dict[str, dict[str, object]]`.
-  - `prepare_mto_acceptance(*, evaluation: Mapping[str, object], existing_commitments: Mapping[str, dict[str, object]], decision_id: str, decision: str, decided_by: str, decided_at: datetime, reason: str, ccr_risk_acknowledged: bool, material_risk_acknowledged: bool) -> PlanningReservationWriteSet`.
-  - `accepted_evaluation_record(*, evaluation: Mapping[str, object], write_set: PlanningReservationWriteSet, decision_id: str, decision: str, decided_by: str, decided_at: datetime, reason: str, ccr_risk_acknowledged: bool, material_risk_acknowledged: bool) -> dict[str, object]`.
-  - `rejected_evaluation_record(*, evaluation: Mapping[str, object], decision_id: str, decided_by: str, decided_at: datetime, reason: str) -> dict[str, object]`.
+**IDs:** `BE-SDBR-008`, `BE-SDBR-010`.
 
-- [ ] **Step 1: Write failing material and recommendation tests**
+- [ ] **Step 1: Write exact parity tests**
 
-Create `tests/test_order_commitment_evaluation.py` with an approved-policy fixture, a reference-policy fixture, one on-time shadow result, one later-safe result, inventory/availability rows, and active allocations. Include these core tests:
+Add `TestCcrShadowCapacityParity`:
 
-```python
-"""Acceptance evidence for BE-SDBR-006 through BE-SDBR-010."""
+1. `test_capacity_units_do_not_multiply_formal_bucket_total`: units 2, bucket 480, exact active reservation 450, candidate 60; requested window is infeasible.
+2. `test_crossing_bucket_uses_only_capacity_before_operation_deadline`: 08:00-16:00, deadline 12:00, 180 scheduled before deadline, candidate 120; temporal remaining is 60 and request is infeasible.
+3. `test_full_bucket_load_after_deadline_still_protects_aggregate_limit`: processing after deadline makes full aggregate plus candidate exceed 480.
+4. `test_latest_completion_equal_to_window_end_is_phase0_valid`: returned deadline 16:00 equals window end and passes `prepare_reservation_confirmation`.
+5. `test_capacity_is_scoped_to_each_ccr_resource_and_exact_window`: idle CCR-A cannot offset full CCR-B; a different CCR-B window is not charged.
+6. `test_repeated_visits_cannot_reuse_candidate_minutes_in_one_window`.
 
-from datetime import datetime, timezone
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowCapacityParity -q --basetemp .tmp/pytest-mto-shadow-parity-red -p no:cacheprovider
+~~~
 
-import pytest
+Expected: six tests fail because window allocation is absent.
 
-from sdbr.order_commitment_evaluation import (
-    CcrProtectionPolicy,
-    OrderCommitmentConflict,
-    REFERENCE_CCR_PROTECTION_POLICY,
-    accepted_evaluation_record,
-    create_order_commitment_evaluation,
-    evaluate_mto_material_availability,
-    normalize_mto_order,
-    prepare_mto_acceptance,
-    register_order_commitment_evaluation,
+- [ ] **Step 2: Implement exact accounting**
+
+~~~python
+def _window_metrics(state, *, deadline, candidate_minutes):
+    usable_end = min(state["WindowEnd"], deadline)
+    if usable_end <= state["WindowStart"]:
+        return {"Fits": False, "Reason": "DEADLINE_BEFORE_WINDOW"}
+    usable_span = floor_minutes(usable_end - state["WindowStart"])
+    candidate_before_deadline = state[
+        "CandidateUsableMinutesByDeadline"
+    ].get(usable_end.isoformat(), 0)
+    aggregate_before = (
+        state["ScheduledFullMinutes"]
+        + state["ExistingReservationMinutes"]
+        + state["CandidateFullMinutes"]
+    )
+    scheduled_before_deadline = overlap_minutes(
+        state["ProcessingIntervals"],
+        state["WindowStart"],
+        usable_end,
+    )
+    temporal_before = (
+        scheduled_before_deadline
+        + state["ExistingReservationMinutes"]
+        + candidate_before_deadline
+    )
+    aggregate_remaining = state["CapacityMinutes"] - aggregate_before
+    temporal_capacity = usable_span * state["CapacityUnits"]
+    temporal_remaining = temporal_capacity - temporal_before
+    return {
+        "Fits": candidate_minutes <= min(
+            aggregate_remaining, temporal_remaining
+        ),
+        "UsableWindowEndAt": usable_end,
+        "CapacityMinutes": state["CapacityMinutes"],
+        "UsableTemporalCapacityMinutes": temporal_capacity,
+        "ScheduledLoadMinutes": state["ScheduledFullMinutes"],
+        "ScheduledLoadBeforeDeadlineMinutes": scheduled_before_deadline,
+        "ExistingReservationMinutes": state["ExistingReservationMinutes"],
+        "CandidateLoadMinutes": candidate_minutes,
+        "LoadBeforeMinutes": aggregate_before,
+        "LoadAfterMinutes": aggregate_before + candidate_minutes,
+        "AggregateRemainingMinutes": aggregate_remaining,
+        "TemporalRemainingMinutes": temporal_remaining,
+    }
+~~~
+
+Create one state per unique `(resource_id, start, end)`. Reject non-aware/reversed/duplicate buckets, duplicate/malformed bars, duplicate reservation IDs, malformed active rows, and invalid active-row latest deadlines. Ignore non-active rows. Charge reservations only on exact triple match.
+
+Before assigning a repeated visit, include prior candidate minutes in both state counters. Use unchanged `CapacityMinutes` as percentage denominator and call `classify_ccr_load`.
+
+Return Phase 0 rows exactly:
+
+~~~python
+{
+    "ReservationLineID": (
+        f"{operation['OperationID']}:{window_start.isoformat()}"
+    ),
+    "OrderID": order_id,
+    "OperationID": operation["OperationID"],
+    "ResourceID": operation["ResourceID"],
+    "WindowStartAt": window_start.isoformat(),
+    "WindowEndAt": window_end.isoformat(),
+    "ReservedMinutes": operation["DurationMinutes"],
+    "LatestAllowedCompletionAt": min(
+        window_end, operation_deadline
+    ).isoformat(),
+}
+~~~
+
+Assert `window_start < latest <= window_end`.
+
+- [ ] **Step 3: Verify and commit**
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowCapacityParity --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowCapacityParity tests/test_planning_reservations.py -q --basetemp .tmp/pytest-mto-shadow-parity-green -p no:cacheprovider
+git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
+git commit -m "feat: align shadow capacity with formal buckets"
+~~~
+
+Expected: six class tests collect and all selected tests pass.
+
+---
+
+### Task 5: Requested-Date and Earliest-Safe Selection
+
+**Files and anchors**
+- Modify `sdbr/ccr_shadow_scheduler.py`; add `_route_deadlines`, `_requested_candidate`, `_forward_window_metrics`, `_earliest_safe_candidate`, and `_result`.
+- Modify `tests/test_ccr_shadow_scheduler.py` after parity tests.
+
+**IDs:** `BE-SDBR-010`.
+
+- [ ] **Step 1: Write candidate tests**
+
+Add `TestCcrShadowPromiseSelection`:
+
+- `test_requested_candidate_walks_route_backward_and_returns_on_time`;
+- `test_late_requested_candidate_returns_earliest_safe_promise`;
+- `test_low_load_only_after_deadline_never_makes_request_on_time`;
+- `test_multi_ccr_route_uses_per_operation_deadlines_and_route_order`;
+- `test_no_later_window_returns_not_assessable_without_reservation_requests`;
+- `test_selected_evidence_lists_exact_relevant_capacity_window_keys`.
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection -q --basetemp .tmp/pytest-mto-shadow-promise-red -p no:cacheprovider
+~~~
+
+Expected: six tests fail because candidate passes are absent.
+
+- [ ] **Step 2: Implement both passes**
+
+~~~python
+cursor = requested_due_at - timedelta(
+    minutes=downstream_protection_minutes
 )
-from sdbr.planner_view import InventoryBufferPolicy
-from sdbr.release_candidates import MaterialAvailability
+deadlines = {}
+for operation in reversed(all_route_operations):
+    deadlines[operation.operation_id] = cursor
+    cursor -= timedelta(minutes=formal_effective_duration(operation))
+~~~
 
+Requested pass:
 
-UTC = timezone.utc
-APPROVED_POLICY = CcrProtectionPolicy(
-    target_percent=80.0,
-    source="ApprovedOperatingModel",
-    approved=True,
-    configuration_id="OMC-APPROVED",
-)
-
-
-def _order() -> dict[str, object]:
-    return normalize_mto_order({
-        "SourceSystem": "MockERP",
-        "SourceObjectType": "CustomerOrder",
-        "OrderID": "SO-100",
-        "OrderVersion": "1",
-        "DemandLineID": "10",
-        "ProductID": "FG-1",
-        "LocationID": "MAIN",
-        "Quantity": 2.0,
-        "Uom": "EA",
-        "RequestedDueAt": "2026-07-20T18:00:00+00:00",
-        "BusinessPriority": 10,
-        "ReceivedAt": "2026-07-11T08:00:00+00:00",
-        "TraceID": "TRACE-SO-100-10",
-        "BaselinePlanningRunID": "RUN-BASELINE",
-        "RoutingID": "PRIMARY",
-        "MaterialRequirements": [{
-            "RequirementLineID": "SO-100:10:RM-1",
-            "ItemID": "RM-1",
-            "LocationID": "MAIN",
-            "RequiredQty": 5.0,
-            "Uom": "EA",
-        }],
+~~~python
+for ccr_operation in reversed(ccr_operations):
+    deadline = deadlines[ccr_operation["SourceOperationID"]]
+    candidates = [
+        row for row in windows_by_resource[ccr_operation["ResourceID"]]
+        if row["WindowStart"] < deadline
+    ]
+    fitting = [
+        (row, _window_metrics(
+            row,
+            deadline=deadline,
+            candidate_minutes=ccr_operation["DurationMinutes"],
+        ))
+        for row in candidates
+    ]
+    fitting = [item for item in fitting if item[1]["Fits"]]
+    selected = max(
+        fitting,
+        key=lambda item: (
+            item[0]["WindowStart"], item[0]["WindowEnd"]
+        ),
+        default=None,
+    )
+    if selected is None:
+        return {
+            "Feasible": False,
+            "PromiseAt": requested_due_at.isoformat(),
+            "WindowAssessments": deepcopy(examined_assessments),
+            "ReservationRequests": [],
+            "ConsideredWindowKeys": sorted(examined_window_keys),
+        }
+    row, metrics = selected
+    row["CandidateFullMinutes"] += ccr_operation["DurationMinutes"]
+    deadline_key = metrics["UsableWindowEndAt"].isoformat()
+    row["CandidateUsableMinutesByDeadline"][deadline_key] = (
+        row["CandidateUsableMinutesByDeadline"].get(deadline_key, 0)
+        + ccr_operation["DurationMinutes"]
+    )
+    assessments.append({
+        **metrics,
+        "RouteSequence": ccr_operation["RouteSequence"],
+        "OperationID": ccr_operation["OperationID"],
+        "ResourceID": ccr_operation["ResourceID"],
     })
+    reservation_requests.append(_reservation_request(
+        order_id=order_id,
+        operation=ccr_operation,
+        window=row,
+        operation_deadline=deadline,
+    ))
+return {
+    "Feasible": True,
+    "PromiseAt": requested_due_at.isoformat(),
+    "WindowAssessments": sorted(
+        assessments, key=lambda item: item["RouteSequence"]
+    ),
+    "ReservationRequests": sorted(
+        reservation_requests,
+        key=lambda item: route_sequence_by_operation[item["OperationID"]],
+    ),
+    "ConsideredWindowKeys": sorted(examined_window_keys),
+}
+~~~
 
+Forward safe pass:
 
-def _shadow(*, load_after_percent: float = 70.0, status: str = "OnTime") -> dict[str, object]:
-    selected = {
-        "Feasible": True,
-        "PromiseAt": "2026-07-20T18:00:00+00:00" if status == "OnTime" else "2026-07-21T18:00:00+00:00",
-        "LoadBeforeMinutes": 240,
-        "LoadAfterMinutes": 300,
-        "LoadAfterPercent": load_after_percent,
-        "ThresholdExceeded": load_after_percent > 80.0,
-        "PhysicalCapacityExceeded": False,
-        "ReservationRequests": [{
-            "ReservationLineID": "SO-100:10:CCR-CUT:2026-07-20T08:00:00+00:00",
-            "OrderID": "SO-100:10",
-            "OperationID": "SO-100:10:CCR-CUT",
-            "ResourceID": "CCR-1",
-            "WindowStartAt": "2026-07-20T08:00:00+00:00",
-            "WindowEndAt": "2026-07-20T16:00:00+00:00",
-            "ReservedMinutes": 60,
-            "LatestAllowedCompletionAt": "2026-07-20T16:00:00+00:00",
-        }],
-    }
+~~~python
+def _forward_window_metrics(*, row, cursor, candidate_minutes):
+    usable_start = max(row["WindowStart"], cursor)
+    usable_end = row["WindowEnd"]
+    if usable_end <= usable_start:
+        return {"Fits": False}
+    scheduled_after_cursor = overlap_minutes(
+        row["ProcessingIntervals"], usable_start, usable_end
+    )
+    aggregate_before = (
+        row["ScheduledFullMinutes"]
+        + row["ExistingReservationMinutes"]
+        + row["CandidateFullMinutes"]
+    )
+    temporal_capacity = (
+        floor_minutes(usable_end - usable_start) * row["CapacityUnits"]
+    )
+    temporal_before = (
+        scheduled_after_cursor
+        + row["ExistingReservationMinutes"]
+        + row["CandidateFullMinutes"]
+    )
     return {
-        "Mode": "CCRFirstShadowScheduleV1",
-        "Status": status,
-        "RequestedDateAssessment": selected if status == "OnTime" else {"Feasible": False},
-        "EarliestSafeAssessment": selected if status != "OnTime" else None,
-        "SelectedAssessment": selected,
-        "Issues": [],
+        "Fits": candidate_minutes <= min(
+            row["CapacityMinutes"] - aggregate_before,
+            temporal_capacity - temporal_before,
+        ),
+        "EstimatedCompletionAt": usable_end,
+        "UsableWindowStartAt": usable_start,
+        "UsableWindowEndAt": usable_end,
+        "LoadBeforeMinutes": aggregate_before,
+        "LoadAfterMinutes": aggregate_before + candidate_minutes,
     }
 
-
-def _basis() -> dict[str, object]:
-    return {
-        "BaselinePlanningRunID": "RUN-BASELINE",
-        "BaselineScheduleFingerprint": "sha256:schedule",
-        "MasterDataVersionID": "MDV-1",
-        "RoutingFingerprint": "sha256:routing",
-        "OperationalStateSnapshotID": "OPS-1",
-        "OperationalStateCapturedAt": "2026-07-11T07:30:00+00:00",
-        "CapacityLedgerFingerprint": "sha256:capacity",
-        "MaterialLedgerFingerprint": "sha256:material",
-        "CalendarFingerprint": "sha256:calendar",
-        "TimeBufferMinutes": 60,
-    }
-
-
-def test_material_check_defaults_to_shared_uncommitted_availability():
-    material = evaluate_mto_material_availability(
-        order=_order(),
-        inventory_buffers=[InventoryBufferPolicy("RM-1", "MAIN", 10, 2, 4, 8)],
-        material_availability=[MaterialAvailability("RM-1", "MAIN", allocated_qty=1)],
-        active_material_allocations=[{
-            "MaterialAllocationID": "MPA-OTHER",
-            "DemandCommitmentID": "DC-OTHER",
-            "ItemID": "RM-1",
-            "LocationID": "MAIN",
-            "AllocatedQty": 3,
-            "Status": "ActivePlanReservation",
-        }],
-        current_demand_commitment_id="DC-CANDIDATE",
-        snapshot_id="OPS-1",
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-        material_check_window_minutes=0,
-        check_material_availability=True,
-        skip_reason=None,
-    )
-
-    assert material["Status"] == "Feasible"
-    assert material["CheckEnabled"] is True
-    assert material["Lines"][0]["UncommittedAvailabilityQty"] == 6.0
-    assert material["AllocationRequests"][0]["AllocatedQty"] == 5.0
-
-
-def test_material_opt_out_requires_reason_and_never_creates_allocations():
-    with pytest.raises(OrderCommitmentConflict, match="skip reason"):
-        evaluate_mto_material_availability(
-            order=_order(), inventory_buffers=[], material_availability=[],
-            active_material_allocations=[], current_demand_commitment_id="DC-1",
-            snapshot_id="OPS-1", evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-            material_check_window_minutes=0, check_material_availability=False,
-            skip_reason="",
+cursor = evaluated_at
+for operation in all_route_operations sorted by sequence:
+    duration = formal_effective_duration(operation)
+    if operation is not a primary CCR operation:
+        cursor += timedelta(minutes=duration)
+        continue
+    candidates = [
+        row for row in windows_by_resource[operation.resource_id]
+        if row["WindowEnd"] > cursor
+    ]
+    fitting = []
+    for row in candidates:
+        metrics = _forward_window_metrics(
+            row=row,
+            cursor=cursor,
+            candidate_minutes=duration,
         )
-
-    material = evaluate_mto_material_availability(
-        order=_order(), inventory_buffers=[], material_availability=[],
-        active_material_allocations=[], current_demand_commitment_id="DC-1",
-        snapshot_id="OPS-1", evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-        material_check_window_minutes=0, check_material_availability=False,
-        skip_reason="Customer asked for a capacity-only decision.",
+        if metrics["Fits"]:
+            fitting.append((row, metrics))
+    selected = min(
+        fitting,
+        key=lambda item: (
+            item[1]["EstimatedCompletionAt"],
+            item[0]["WindowStart"],
+        ),
+        default=None,
     )
-
-    assert material["Status"] == "SkippedPendingConfirmation"
-    assert material["AllocationRequests"] == []
-    assert material["PendingRequirements"] == _order()["MaterialRequirements"]
-    assert material["ReleaseGateStillRequired"] is True
-
-
-def test_reference_threshold_never_returns_ordinary_recommend_accept():
-    material = {"Status": "Feasible", "CheckEnabled": True, "AllocationRequests": [], "PendingRequirements": []}
-
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(load_after_percent=70.0),
-        material_assessment=material, basis=_basis(),
-        protection_policy=REFERENCE_CCR_PROTECTION_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
+    if selected is None:
+        return None
+    row, metrics = selected
+    row["CandidateFullMinutes"] += duration
+    deadline_key = row["WindowEnd"].isoformat()
+    row["CandidateUsableMinutesByDeadline"][deadline_key] = (
+        row["CandidateUsableMinutesByDeadline"].get(deadline_key, 0)
+        + duration
     )
+    assessments.append({
+        **metrics,
+        "RouteSequence": operation.sequence,
+        "OperationID": ccr_operation_by_source_id[
+            operation.operation_id
+        ]["OperationID"],
+        "ResourceID": operation.resource_id,
+    })
+    reservation_requests.append(_reservation_request(
+        order_id=order_id,
+        operation=ccr_operation_by_source_id[operation.operation_id],
+        window=row,
+        operation_deadline=row["WindowEnd"],
+    ))
+    cursor = selected[1]["EstimatedCompletionAt"]
+promise_at = cursor + timedelta(minutes=downstream_protection_minutes)
+~~~
 
-    assert evaluation["Recommendation"]["Decision"] == "PlannerConfirmationRequired"
-    assert evaluation["Recommendation"]["RequiresCcrAcknowledgement"] is True
-    assert evaluation["ProtectionPolicy"] == {
-        "TargetPercent": 80.0,
-        "Source": "ReferenceFallback",
-        "Approved": False,
-        "ConfigurationID": None,
-    }
+Return:
 
-
-def test_approved_threshold_under_line_can_recommend_accept_but_does_not_accept():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(load_after_percent=70.0),
-        material_assessment={"Status": "Feasible", "CheckEnabled": True, "AllocationRequests": [], "PendingRequirements": []},
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
-
-    assert evaluation["Recommendation"]["Decision"] == "RecommendAccept"
-    assert evaluation["Status"] == "AwaitingPlannerDecision"
-    assert "Decision" not in evaluation
-
-
-def test_approved_threshold_exceedance_requires_explicit_acknowledgement():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(load_after_percent=90.0),
-        material_assessment={"Status": "Feasible", "CheckEnabled": True, "AllocationRequests": [], "PendingRequirements": []},
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
-
-    assert evaluation["Recommendation"]["Decision"] == "PlannerConfirmationRequired"
-    assert evaluation["Recommendation"]["RequiresCcrAcknowledgement"] is True
-    with pytest.raises(OrderCommitmentConflict, match="CCR risk acknowledgement"):
-        prepare_mto_acceptance(
-            evaluation=evaluation, existing_commitments={}, decision_id="DEC-1",
-            decision="AcceptRequestedDate", decided_by="planner-1",
-            decided_at=datetime(2026, 7, 11, 8, 5, tzinfo=UTC), reason="Reviewed",
-            ccr_risk_acknowledged=False, material_risk_acknowledged=False,
+~~~python
+{
+    "Algorithm": SHADOW_ALGORITHM,
+    "Status": "OnTime" | "LaterSafeDate" | "NotAssessable",
+    "RequestedDueAt": utc_iso(requested_due_at),
+    "LatestCcrCompletionAt": utc_iso(
+        requested_due_at - timedelta(
+            minutes=downstream_protection_minutes
         )
+    ),
+    "RequestedDateAssessment": requested,
+    "EarliestSafeAssessment": earliest_safe,
+    "SelectedAssessment": requested if requested["Feasible"] else earliest_safe,
+    "RelevantCapacityWindowKeys": sorted_unique_triples_examined,
+    "Issues": issues,
+    "Summary": {
+        "CcrOperationCount": len(ccr_operations),
+        "SelectedWindowCount": len(selected_reservations),
+        "MaximumLoadAfterPercent": maximum_selected_percent,
+    },
+}
+~~~
 
+No later candidate returns `NotAssessable`, issue `NO_SAFE_CCR_WINDOW`, and no selected/reservation rows.
 
-def test_intake_registration_is_idempotent_for_same_content_and_basis():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(),
-        material_assessment={"Status": "Feasible", "CheckEnabled": True, "AllocationRequests": [], "PendingRequirements": []},
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
+- [ ] **Step 3: Verify and commit**
 
-    status, created = register_order_commitment_evaluation({}, evaluation)
-    replay_status, replay = register_order_commitment_evaluation(
-        {str(created["EvaluationID"]): created}, evaluation
-    )
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py -q --basetemp .tmp/pytest-mto-shadow-complete -p no:cacheprovider
+git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
+git commit -m "feat: select safe MTO promise windows"
+~~~
 
-    assert status == "Created"
-    assert replay_status == "Duplicate"
-    assert replay == created
-```
+Expected: six class tests collect and the complete scheduler file passes.
 
-Also include exact tests named:
+---
 
-```python
-def test_missing_material_evidence_allows_only_reevaluate_or_reject():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(),
-        material_assessment={
-            "Status": "EvidenceInsufficient", "CheckEnabled": True,
-            "AllocationRequests": [], "PendingRequirements": [],
-        },
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
+### Task 6: Canonical MTO Order and Protection Policy
 
-    assert evaluation["Recommendation"]["Decision"] == "MaterialEvidenceRequired"
-    assert evaluation["Recommendation"]["AllowedActions"] == ["Reevaluate", "Reject"]
+**Files and anchors**
+- Create `sdbr/order_commitment_evaluation.py`.
+- Create `tests/test_order_commitment_evaluation.py`.
 
-def test_later_safe_candidate_allows_accept_recommended_date_only():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(status="LaterSafeDate"),
-        material_assessment={
-            "Status": "Feasible", "CheckEnabled": True,
-            "AllocationRequests": [], "PendingRequirements": [],
-        },
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
+**IDs:** `BE-SDBR-006`, `BE-SDBR-010`.
 
-    assert evaluation["Recommendation"]["Decision"] == "RecommendLaterPromise"
-    assert "AcceptRecommendedDate" in evaluation["Recommendation"]["AllowedActions"]
-    assert "AcceptRequestedDate" not in evaluation["Recommendation"]["AllowedActions"]
+**Produces**
 
-def test_prepare_mto_acceptance_builds_canonical_mto_demand_and_phase0_rows():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(),
-        material_assessment={
-            "Status": "Feasible", "CheckEnabled": True,
-            "AllocationRequests": [{
-                "RequirementLineID": "SO-100:10:RM-1", "ItemID": "RM-1",
-                "LocationID": "MAIN", "Uom": "EA", "AllocatedQty": 5.0,
-                "SupplySourceType": "OnHand", "MaterialSnapshotID": "OPS-1",
-            }],
-            "PendingRequirements": [],
-        },
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
-
-    write_set = prepare_mto_acceptance(
-        evaluation=evaluation, existing_commitments={}, decision_id="DEC-ACCEPT-1",
-        decision="AcceptRequestedDate", decided_by="planner-1",
-        decided_at=datetime(2026, 7, 11, 8, 5, tzinfo=UTC),
-        reason="Reviewed and accepted.", ccr_risk_acknowledged=False,
-        material_risk_acknowledged=False,
-    )
-
-    assert write_set.demand_commitment["DemandSourceType"] == "MTOCustomerOrder"
-    assert write_set.demand_commitment["RequiredAt"] == "2026-07-20T18:00:00+00:00"
-    assert write_set.demand_commitment["OrderCommitmentEvaluationID"] == evaluation["EvaluationID"]
-    assert len(write_set.capacity_reservations) == 1
-    assert len(write_set.material_allocations) == 1
-
-def test_conditional_acceptance_records_pending_material_and_zero_allocations():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(),
-        material_assessment={
-            "Status": "SkippedPendingConfirmation", "CheckEnabled": False,
-            "SkipReason": "Capacity-only decision.", "AllocationRequests": [],
-            "PendingRequirements": _order()["MaterialRequirements"],
-        },
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
-
-    write_set = prepare_mto_acceptance(
-        evaluation=evaluation, existing_commitments={}, decision_id="DEC-CONDITIONAL-1",
-        decision="ConditionallyAcceptRequestedDate", decided_by="planner-1",
-        decided_at=datetime(2026, 7, 11, 8, 5, tzinfo=UTC),
-        reason="Capacity accepted; material remains pending.",
-        ccr_risk_acknowledged=False, material_risk_acknowledged=True,
-    )
-
-    assert write_set.demand_commitment["MaterialCommitmentStatus"] == "PendingConfirmation"
-    assert write_set.demand_commitment["PendingMaterialRequirements"]
-    assert write_set.material_allocations == ()
-
-def test_accepted_or_rejected_evaluation_cannot_be_silently_superseded():
-    evaluation = create_order_commitment_evaluation(
-        order=_order(), shadow_schedule=_shadow(),
-        material_assessment={
-            "Status": "Feasible", "CheckEnabled": True,
-            "AllocationRequests": [], "PendingRequirements": [],
-        },
-        basis=_basis(), protection_policy=APPROVED_POLICY,
-        evaluated_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
-    )
-    accepted = {**evaluation, "Status": "AcceptedPendingFormalSchedule"}
-
-    with pytest.raises(OrderCommitmentConflict, match="cannot be superseded"):
-        supersede_open_order_commitment_evaluations(
-            evaluations={str(accepted["EvaluationID"]): accepted},
-            candidate={**evaluation, "EvaluationID": "OCE-NEW"},
-            superseded_at=datetime(2026, 7, 11, 8, 10, tzinfo=UTC),
-        )
-```
-
-Import `supersede_open_order_commitment_evaluations` in the test module with the other Task 3 functions.
-
-Run:
-
-```powershell
-pytest tests/test_order_commitment_evaluation.py -q --basetemp .tmp/pytest-mto-evaluation-red -p no:cacheprovider
-```
-
-Expected: FAIL because `sdbr.order_commitment_evaluation` does not exist.
-
-- [ ] **Step 2: Implement canonical order and protection-policy types**
-
-Create the module with these public definitions:
-
-```python
-from __future__ import annotations
-
-from copy import deepcopy
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from hashlib import sha256
-import json
-from math import isfinite
-from numbers import Real
-from typing import Literal, Mapping
-
-from sdbr.planner_view import InventoryBufferPolicy
-from sdbr.planning_commitments import create_demand_commitment
-from sdbr.planning_reservation_view import planning_allocated_qty_for_other_demands
-from sdbr.planning_reservations import PlanningReservationWriteSet, prepare_reservation_confirmation
-from sdbr.release_candidates import MaterialAvailability
-
-
+~~~python
 class OrderCommitmentConflict(ValueError):
     status = "OrderCommitmentConflict"
 
-
 class OrderCommitmentStale(OrderCommitmentConflict):
     status = "OrderCommitmentEvaluationStale"
-
 
 @dataclass(frozen=True, slots=True)
 class CcrProtectionPolicy:
@@ -1017,58 +866,46 @@ class CcrProtectionPolicy:
     approved: bool
     configuration_id: str | None = None
 
-
 REFERENCE_CCR_PROTECTION_POLICY = CcrProtectionPolicy(
     target_percent=80.0,
     source="ReferenceFallback",
     approved=False,
 )
 
-
-ACCEPTANCE_DECISIONS = frozenset({
-    "AcceptRequestedDate",
-    "AcceptRecommendedDate",
-    "ConditionallyAcceptRequestedDate",
-})
-```
-
-`normalize_mto_order` must validate non-empty identity fields, allowed MTO demand class, finite positive quantity/requirements, unique requirement line IDs, aware request/receipt times, and a valid primary-route reference. It returns canonical UTC timestamps plus:
-
-```python
-{
-    "OrderKey": "<canonical JSON identity>",
-    "LogicalOrderKey": "<same identity without OrderVersion>",
-    "OrderContentFingerprint": "sha256:<digest>",
-    "PlanningOrderID": "<OrderID>:<DemandLineID>",
-}
-```
-
-Do not include baseline load, material mode, or evaluation time in `OrderContentFingerprint`; those belong to the evaluation basis/policy fingerprint.
-
-- [ ] **Step 3: Implement material feasibility and immutable fingerprints**
-
-`evaluate_mto_material_availability` must:
-
-1. Default to `check_material_availability=True` at the API boundary.
-2. Return `SkippedPendingConfirmation` only with a trimmed reason, zero allocation requests, copied pending requirements, and `ReleaseGateStillRequired=true`.
-3. Return `EvidenceInsufficient` when checking is enabled but requirements are empty, inventory balance is missing, snapshot identity is missing, an inbound timestamp is naive, or numeric evidence is malformed.
-4. For each requirement, calculate:
-
-```text
-QualifiedSupplyQty = OnHandQty + eligible inbound within the material window
-UncommittedAvailabilityQty = QualifiedSupplyQty
-  - authority AllocatedQty
-  - active SDBR planning allocations for other DemandCommitmentIDs
-```
-
-5. Never subtract allocations belonging to `current_demand_commitment_id`.
-6. Return `Feasible` only when every line covers `RequiredQty`; otherwise return `Shortage` and no allocation requests.
-7. Build one Phase 0 material request per feasible requirement with `RequirementLineID`, `ItemID`, `LocationID`, `Uom`, `AllocatedQty=RequiredQty`, `SupplySourceType` (`OnHand` or `OnHandAndInbound`), and `MaterialSnapshotID`.
-
-Use one canonical helper:
-
-```python
+def normalize_mto_order(record: Mapping[str, object]) -> dict[str, object]:
+def candidate_demand_commitment_id(order: Mapping[str, object]) -> str:
 def canonical_fingerprint(value: object) -> str:
+~~~
+
+- [ ] **Step 1: Write order/policy tests**
+
+Add `TestMtoOrderAndProtectionPolicy`:
+
+- `test_normalize_mto_order_derives_stable_versioned_and_logical_identity`;
+- `test_order_fingerprint_covers_sorted_material_requirements_but_not_evaluation_time`;
+- `test_order_rejects_blank_identity_naive_times_duplicate_requirements_and_nonfinite_quantity`;
+- `test_reference_policy_is_exactly_unapproved_80_percent`;
+- `test_approved_policy_requires_configuration_and_reference_policy_rejects_configuration`.
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestMtoOrderAndProtectionPolicy -q --basetemp .tmp/pytest-mto-order-red -p no:cacheprovider
+~~~
+
+Expected: import fails because the module is absent.
+
+- [ ] **Step 2: Implement canonical content**
+
+Canonical order fields:
+
+~~~python
+ORDER_CONTENT_FIELDS = (
+    "SourceSystem", "SourceObjectType", "OrderID", "OrderVersion",
+    "DemandLineID", "ProductID", "LocationID", "Quantity", "Uom",
+    "RequestedDueAt", "BusinessPriority", "ReceivedAt", "TraceID",
+    "BaselinePlanningRunID", "RoutingID", "MaterialRequirements",
+)
+
+def canonical_fingerprint(value):
     encoded = json.dumps(
         value,
         ensure_ascii=True,
@@ -1076,300 +913,1101 @@ def canonical_fingerprint(value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{sha256(encoded).hexdigest()}"
-```
+~~~
 
-`build_order_commitment_basis` must copy and fingerprint only these relevant facts: baseline run ID and schedule fingerprint; master version ID; route fingerprint; operational snapshot ID/captured time; active capacity reservation IDs, statuses, record versions, windows, and minutes; active material allocation IDs, statuses, record versions, item/location, and quantity; frozen calendar fingerprint; and time-buffer minutes. It must not use the global state-store revision as a business fingerprint.
+Normalize all strings with `.strip()`, datetimes to UTC ISO, quantity/requirements to finite positive floats, priority to integer 1-999, and requirements sorted by `RequirementLineID`. Require unique non-empty requirement IDs and `(ItemID, LocationID, RequirementLineID)` identities. Derive:
 
-- [ ] **Step 4: Implement the recommendation matrix and immutable evaluation**
-
-`create_order_commitment_evaluation` must derive a stable ID from the order, basis, and material-policy content:
-
-```python
-evaluation_identity = {
-    "OrderContentFingerprint": order["OrderContentFingerprint"],
-    "BasisFingerprint": canonical_fingerprint(basis),
-    "MaterialPolicy": {
-        "CheckEnabled": material_assessment["CheckEnabled"],
-        "SkipReason": material_assessment.get("SkipReason"),
-        "MaterialCheckWindowMinutes": material_assessment["MaterialCheckWindowMinutes"],
-    },
+~~~python
+identity = {
+    "SourceSystem": order["SourceSystem"],
+    "SourceObjectType": order["SourceObjectType"],
+    "OrderID": order["OrderID"],
+    "OrderVersion": order["OrderVersion"],
+    "DemandLineID": order["DemandLineID"],
+    "ProductID": order["ProductID"],
+    "LocationID": order["LocationID"],
 }
-evaluation_id = f"OCE-{sha256(canonical_fingerprint(evaluation_identity).encode('utf-8')).hexdigest()[:20]}"
-```
-
-Return `EvaluationFingerprint` over the immutable evaluation content, excluding lifecycle `Status`, `RecordVersion`, `Decision`, and first-observation timestamps `EvaluatedAt` / `CreatedAt`. This lets a duplicate message observed later return the original evidence instead of conflicting on wall-clock time. Apply this exact recommendation order:
-
-| Capacity | Material | Threshold | Decision | Allowed acceptance |
-|---|---|---|---|---|
-| Not assessable | any | any | `DoNotRecommendAccept` | none |
-| Later safe date | feasible | any | `RecommendLaterPromise` | `AcceptRecommendedDate` |
-| On time | insufficient/shortage | any | `MaterialEvidenceRequired` | none |
-| On time | skipped | any | `CapacityAcceptableMaterialPending` unless CCR acknowledgement is also required | `ConditionallyAcceptRequestedDate` |
-| On time | feasible | approved and within threshold | `RecommendAccept` | `AcceptRequestedDate` |
-| On time | feasible/skipped | approved but exceeded | `PlannerConfirmationRequired` | corresponding requested-date action with CCR acknowledgement |
-| On time | feasible/skipped | reference fallback | `PlannerConfirmationRequired` | corresponding requested-date action with CCR acknowledgement |
-
-Every recommendation sets `RequiresPlannerDecision=true`. No evaluation function accepts an order.
-
-- [ ] **Step 5: Implement registration, supersession, and Phase 0 acceptance preparation**
-
-`register_order_commitment_evaluation` must return the persisted row for an exact duplicate ID/content and reject ID/content conflicts. `supersede_open_order_commitment_evaluations` may supersede only `AwaitingPlannerDecision` rows sharing `LogicalOrderKey`; it returns copied updates with `Status="Superseded"`, incremented `RecordVersion`, `SupersededByEvaluationID`, and `SupersededAt`. It must reject superseding `AcceptedPendingFormalSchedule` or `Rejected` rows.
-
-`prepare_mto_acceptance` must:
-
-1. Require `Status="AwaitingPlannerDecision"`, an allowed action, a non-empty decision ID/actor/reason, an aware decision time, and all recommendation acknowledgements.
-2. Use requested due for `AcceptRequestedDate` / `ConditionallyAcceptRequestedDate`; use `EarliestSafeAssessment.PromiseAt` for `AcceptRecommendedDate`.
-3. Reject expired windows where `LatestAllowedCompletionAt <= decided_at`.
-4. Build a canonical `MTOCustomerOrder` demand through `create_demand_commitment` and then add only explicit SDBR execution context:
-
-```python
-demand.update({
-    "OrderCommitmentEvaluationID": evaluation["EvaluationID"],
-    "BaselinePlanningRunID": evaluation["Basis"]["BaselinePlanningRunID"],
-    "RoutingID": evaluation["Order"]["RoutingID"],
-    "BusinessPriority": evaluation["Order"]["BusinessPriority"],
-    "AcceptedPromiseAt": accepted_promise_at,
-    "MaterialCommitmentStatus": (
-        "PlannedAllocationPrepared"
-        if evaluation["MaterialAssessment"]["Status"] == "Feasible"
-        else "PendingConfirmation"
-    ),
-    "PendingMaterialRequirements": deepcopy(
-        evaluation["MaterialAssessment"].get("PendingRequirements", [])
-    ),
-    "ExternalOrderAcceptance": "NotPerformed",
-    "ProductionMutation": "NotPerformed",
+logical_identity = {
+    key: value for key, value in identity.items()
+    if key != "OrderVersion"
+}
+order["OrderKey"] = canonical_json(identity)
+order["LogicalOrderKey"] = canonical_json(logical_identity)
+order["PlanningOrderID"] = (
+    f"{order['OrderID']}:{order['DemandLineID']}"
+)
+order["OrderContentFingerprint"] = canonical_fingerprint({
+    field: order[field] for field in ORDER_CONTENT_FIELDS
 })
-```
+~~~
 
-5. Call the existing `prepare_reservation_confirmation` with `confirmation_id=decision_id`, the selected shadow candidate's capacity requests, and material allocation requests only when material status is `Feasible`.
-6. Do not mutate evaluation or store collections. Return the `PlanningReservationWriteSet` for the API transaction.
+`candidate_demand_commitment_id` calls `create_demand_commitment` using requested due time and returns its canonical `DemandCommitmentID`; do not recreate Phase 0 identity logic.
 
-`accepted_evaluation_record` and `rejected_evaluation_record` must return copied records with incremented `RecordVersion`, stable decision fingerprint, actor/time/reason, and status. Acceptance also records `DemandCommitmentID`, `ReservationBatchID`, accepted promise, `ExternalOrderAcceptance="NotPerformed"`, and `ProductionMutation="NotPerformed"`.
+Normalize policy to:
 
-- [ ] **Step 6: Run pure-domain and shared-ledger regressions**
+~~~python
+{
+    "TargetPercent": float(policy.target_percent),
+    "Source": policy.source,
+    "Approved": policy.approved,
+    "ConfigurationID": normalized_configuration_id,
+}
+~~~
 
-Run:
+Require `ApprovedOperatingModel` ↔ `approved=True` plus non-empty configuration; require `ReferenceFallback` ↔ `approved=False`, target exactly 80.0, and no configuration.
 
-```powershell
-pytest tests/test_order_commitment_evaluation.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-evaluation-green -p no:cacheprovider
-```
+- [ ] **Step 3: Verify and commit**
 
-Expected: PASS. Existing demand normalization, replay, predecessor, and one-batch-per-demand guards remain green.
-
-- [ ] **Step 7: Commit the evaluation slice**
-
-```powershell
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestMtoOrderAndProtectionPolicy --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestMtoOrderAndProtectionPolicy tests/test_planning_commitments.py -q --basetemp .tmp/pytest-mto-order-green -p no:cacheprovider
 git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
-git commit -m "feat: add MTO commitment evaluation domain"
-```
+git commit -m "feat: define canonical MTO commitment identity"
+~~~
+
+Expected: five class tests and Phase 0 identity regressions pass.
 
 ---
 
-### Task 4: Persistent Evidence and Sanitized Read Models
+### Task 7: Current Operational Snapshot Selection and Freshness
 
-**Files:**
-- Modify: `sdbr/state_store.py`
-- Create: `sdbr/order_commitment_view.py`
-- Modify: `tests/test_state_store.py`
-- Create: `tests/test_order_commitment_view.py`
+**Files and anchors**
+- Modify `sdbr/order_commitment_evaluation.py` after policy definitions.
+- Modify `tests/test_order_commitment_evaluation.py` after order tests.
 
-**Interfaces:**
-- Produces state collections:
-  - `order_commitment_evaluations: dict[str, dict[str, object]]`
-  - `order_commitment_events: list[dict[str, object]]`
-- Produces read models:
-  - `build_order_commitment_workbench(*, evaluations: list[dict[str, object]], demand_commitments: Mapping[str, dict[str, object]], reservation_batches: Mapping[str, dict[str, object]]) -> dict[str, object]`
-  - `build_order_commitment_detail(*, evaluation: dict[str, object], events: list[dict[str, object]], demand_commitment: dict[str, object] | None, reservation_batch: dict[str, object] | None) -> dict[str, object]`
-- Main rows never expose `OrderContentFingerprint`, `BasisFingerprint`, raw `Basis`, or source payloads. Detail exposes safe references and a collapsed `TechnicalDetails` object.
+**IDs:** `BE-SDBR-010`.
 
-- [ ] **Step 1: Write failing state-store tests**
+**Consumes:** `OperationalStateSnapshot`, `evaluate_operational_state_freshness`.
 
-Extend the existing full SQLite round-trip test in `tests/test_state_store.py`:
+**Produces**
 
-```python
-# BE-SDBR-010
-store.order_commitment_evaluations["OCE-1"] = {
-    "EvaluationID": "OCE-1",
-    "Status": "AwaitingPlannerDecision",
+~~~python
+ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES = 60
+
+def select_order_commitment_operational_snapshot(
+    *,
+    snapshots: Mapping[str, OperationalStateSnapshot],
+    evaluated_at: datetime,
+    requested_snapshot_id: str | None,
+) -> dict[str, object]:
+~~~
+
+- [ ] **Step 1: Write freshness tests**
+
+Add `TestOrderCommitmentSnapshotFreshness`:
+
+- `test_default_selection_uses_latest_nonfuture_snapshot_with_id_tiebreak`;
+- `test_explicit_fresh_snapshot_is_selected_exactly`;
+- `test_snapshot_at_sixty_minutes_is_fresh`;
+- `test_snapshot_older_than_sixty_minutes_is_stale`;
+- `test_explicit_future_snapshot_is_future_and_unacceptable`;
+- `test_no_nonfuture_snapshot_returns_no_current_snapshot`;
+- `test_unknown_explicit_snapshot_raises_snapshot_not_found`.
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentSnapshotFreshness -q --basetemp .tmp/pytest-mto-freshness-red -p no:cacheprovider
+~~~
+
+Expected: seven failures because selection is absent.
+
+- [ ] **Step 2: Implement deterministic selection**
+
+~~~python
+def select_order_commitment_operational_snapshot(
+    *, snapshots, evaluated_at, requested_snapshot_id
+):
+    require_aware(evaluated_at, "evaluated_at")
+    requested = (
+        requested_snapshot_id.strip()
+        if isinstance(requested_snapshot_id, str)
+        and requested_snapshot_id.strip()
+        else None
+    )
+    mode = "Explicit" if requested is not None else "LatestCurrent"
+    if requested is not None:
+        snapshot = snapshots.get(requested)
+        if snapshot is None:
+            raise OrderCommitmentSnapshotNotFound(requested)
+    else:
+        eligible = [
+            row for row in snapshots.values()
+            if row.captured_at <= evaluated_at
+        ]
+        snapshot = max(
+            eligible,
+            key=lambda row: (row.captured_at, row.snapshot_id),
+            default=None,
+        )
+    if snapshot is None:
+        return {
+            "SnapshotSelectionMode": mode,
+            "RequestedOperationalStateSnapshotID": requested,
+            "OperationalStateSnapshot": None,
+            "OperationalStateSnapshotID": None,
+            "OperationalStateCapturedAt": None,
+            "OperationalStateFreshnessStatus": "Missing",
+            "OperationalStateAgeMinutes": None,
+            "OperationalStateMaxAgeMinutes": 60,
+            "OperationalStateValidThroughAt": None,
+            "Acceptable": False,
+        }
+    freshness = evaluate_operational_state_freshness(
+        snapshot=snapshot,
+        evaluated_at=evaluated_at,
+        max_age_minutes=60,
+    )
+    return {
+        "SnapshotSelectionMode": mode,
+        "RequestedOperationalStateSnapshotID": requested,
+        "OperationalStateSnapshot": snapshot,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "OperationalStateCapturedAt": snapshot.captured_at.isoformat(),
+        "OperationalStateFreshnessStatus": freshness.status,
+        "OperationalStateAgeMinutes": freshness.age_minutes,
+        "OperationalStateMaxAgeMinutes": freshness.max_age_minutes,
+        "OperationalStateValidThroughAt": (
+            snapshot.captured_at + timedelta(minutes=60)
+        ).isoformat(),
+        "Acceptable": freshness.acceptable,
+    }
+~~~
+
+`OrderCommitmentSnapshotNotFound` carries status `OperationalStateSnapshotNotFound` and the missing ID. Do not choose a future row in latest mode.
+
+- [ ] **Step 3: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentSnapshotFreshness --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentSnapshotFreshness tests/test_operational_state.py -q --basetemp .tmp/pytest-mto-freshness-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: gate MTO evidence by current snapshot"
+~~~
+
+Expected: seven class tests and existing freshness tests pass.
+
+---
+
+### Task 8: Default-On Material Feasibility
+
+**Files and anchors**
+- Modify `sdbr/order_commitment_evaluation.py`; add `evaluate_mto_material_availability`.
+- Modify `tests/test_order_commitment_evaluation.py` after freshness tests.
+
+**IDs:** `BE-SDBR-009`, `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+def evaluate_mto_material_availability(
+    *,
+    order: Mapping[str, object],
+    snapshot_selection: Mapping[str, object],
+    active_material_allocations: list[dict[str, object]],
+    current_demand_commitment_id: str,
+    evaluated_at: datetime,
+    material_check_window_minutes: int,
+    check_material_availability: bool = True,
+    skip_reason: str | None = None,
+) -> dict[str, object]:
+~~~
+
+- [ ] **Step 1: Write material tests**
+
+Add `TestOrderCommitmentMaterialFeasibility`:
+
+- `test_check_defaults_on_and_uses_uncommitted_shared_availability`;
+- `test_skip_requires_reason_records_pending_requirements_and_zero_allocations`;
+- `test_stale_snapshot_returns_evidence_insufficient_and_zero_allocations`;
+- `test_future_snapshot_returns_evidence_insufficient_and_zero_allocations`;
+- `test_missing_snapshot_or_required_item_row_is_evidence_insufficient`;
+- `test_inbound_counts_only_when_aware_and_inside_frozen_material_window`;
+- `test_shortage_is_all_or_nothing_and_returns_no_allocation_requests`;
+- `test_current_demand_allocation_is_not_subtracted_twice`.
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility -q --basetemp .tmp/pytest-mto-material-red -p no:cacheprovider
+~~~
+
+Expected: eight failures because material evaluation is absent.
+
+- [ ] **Step 2: Implement all branches**
+
+Start every result with:
+
+~~~python
+evidence = {
+    "CheckEnabled": bool(check_material_availability),
+    "SkipReason": normalized_skip_reason,
+    "MaterialCheckWindowMinutes": material_check_window_minutes,
+    "SnapshotSelectionMode": selection["SnapshotSelectionMode"],
+    "RequestedOperationalStateSnapshotID": selection[
+        "RequestedOperationalStateSnapshotID"
+    ],
+    "OperationalStateSnapshotID": selection[
+        "OperationalStateSnapshotID"
+    ],
+    "OperationalStateCapturedAt": selection[
+        "OperationalStateCapturedAt"
+    ],
+    "OperationalStateFreshnessStatus": selection[
+        "OperationalStateFreshnessStatus"
+    ],
+    "OperationalStateAgeMinutes": selection[
+        "OperationalStateAgeMinutes"
+    ],
+    "OperationalStateMaxAgeMinutes": 60,
+    "OperationalStateValidThroughAt": selection[
+        "OperationalStateValidThroughAt"
+    ],
+    "ReleaseGateStillRequired": True,
 }
-store.order_commitment_events.append({
-    "EventID": "OCE-EVENT-1",
-    "EvaluationID": "OCE-1",
-    "EventType": "OrderCommitmentEvaluated",
+~~~
+
+Exact branch order:
+
+~~~python
+if material_check_window_minutes < 0:
+    raise OrderCommitmentConflict("Material check window cannot be negative.")
+if not check_material_availability:
+    if not normalized_skip_reason:
+        raise OrderCommitmentConflict("Material check skip reason is required.")
+    return {
+        **evidence,
+        "Status": "SkippedPendingConfirmation",
+        "Lines": [],
+        "AllocationRequests": [],
+        "PendingRequirements": deepcopy(order["MaterialRequirements"]),
+    }
+if not selection["Acceptable"]:
+    return {
+        **evidence,
+        "Status": "EvidenceInsufficient",
+        "Lines": [],
+        "AllocationRequests": [],
+        "PendingRequirements": deepcopy(order["MaterialRequirements"]),
+        "Issues": [{
+            "Code": "OPERATIONAL_STATE_EVIDENCE_NOT_FRESH",
+            "FreshnessStatus": selection[
+                "OperationalStateFreshnessStatus"
+            ],
+        }],
+    }
+if not order["MaterialRequirements"]:
+    return evidence_insufficient("MATERIAL_REQUIREMENTS_MISSING")
+~~~
+
+For each sorted requirement, require one inventory buffer and one material-availability row for the exact `(ItemID, LocationID)`. Reject duplicates or malformed/naive inbound evidence as `EvidenceInsufficient`. Calculate:
+
+~~~python
+eligible_inbound = (
+    availability.inbound_qty
+    if availability.inbound_available_at is not None
+    and availability.inbound_available_at <= (
+        evaluated_at + timedelta(
+            minutes=material_check_window_minutes
+        )
+    )
+    else 0.0
+)
+qualified = buffer.on_hand_qty + eligible_inbound
+other_planning = planning_allocated_qty_for_other_demands(
+    allocations=active_material_allocations,
+    item_id=requirement["ItemID"],
+    location_id=requirement["LocationID"],
+    current_demand_commitment_id=current_demand_commitment_id,
+)
+uncommitted = max(
+    qualified - availability.allocated_qty - other_planning,
+    0.0,
+)
+~~~
+
+Line fields are `RequirementLineID`, `ItemID`, `LocationID`, `Uom`, `RequiredQty`, `OnHandQty`, `EligibleInboundQty`, `AuthorityAllocatedQty`, `OtherPlanningAllocatedQty`, `QualifiedSupplyQty`, `UncommittedAvailabilityQty`, and `CoverageStatus`.
+
+If any line is short, return `Shortage` and no allocations. If all cover, return `Feasible` and one request per requirement:
+
+~~~python
+{
+    "RequirementLineID": requirement["RequirementLineID"],
+    "ItemID": requirement["ItemID"],
+    "LocationID": requirement["LocationID"],
+    "Uom": requirement["Uom"],
+    "AllocatedQty": requirement["RequiredQty"],
+    "SupplySourceType": (
+        "OnHandAndInbound" if eligible_inbound > 0 else "OnHand"
+    ),
+    "MaterialSnapshotID": selection[
+        "OperationalStateSnapshotID"
+    ],
+}
+~~~
+
+- [ ] **Step 3: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-material-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: evaluate fresh MTO material evidence"
+~~~
+
+Expected: eight class tests and shared-allocation regressions pass.
+
+---
+
+### Task 9: Total Recommendation Matrix
+
+**Files and anchors**
+- Modify `sdbr/order_commitment_evaluation.py`; add constants and `build_order_commitment_recommendation`.
+- Modify `tests/test_order_commitment_evaluation.py` after material tests.
+
+**IDs:** `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+ACCEPTANCE_DECISIONS = frozenset({
+    "AcceptRequestedDate",
+    "ConditionallyAcceptRequestedDate",
+    "AcceptRecommendedDate",
+    "ConditionallyAcceptRecommendedDate",
 })
 
-# After reload:
-assert restored.order_commitment_evaluations == store.order_commitment_evaluations
-assert restored.order_commitment_events == store.order_commitment_events
-assert restored.health()["StateCounts"]["OrderCommitmentEvaluations"] == 1
-assert restored.health()["StateCounts"]["OrderCommitmentEvents"] == 1
-```
+def build_order_commitment_recommendation(
+    *,
+    shadow_schedule: Mapping[str, object],
+    material_assessment: Mapping[str, object],
+    protection_policy: CcrProtectionPolicy,
+) -> dict[str, object]:
+~~~
 
-Extend the clear test to assert both collections empty. Add a rollback test that mutates both collections inside `atomic_update`, raises `RuntimeError`, and asserts object identity plus content are restored.
+- [ ] **Step 1: Write a parameterized exhaustive matrix**
 
-Run:
+Add `TestOrderCommitmentRecommendationMatrix` with a 27-row parameter table covering 3 capacity states × 4 material states where applicable × all 3 threshold states. Name explicit focused methods:
 
-```powershell
-pytest tests/test_state_store.py -q -k "order_commitment" --basetemp .tmp/pytest-mto-state-red -p no:cacheprovider
-```
+- `test_later_safe_skipped_material_allows_conditional_recommended_date`;
+- `test_later_safe_reference_fallback_requires_ccr_acknowledgement`;
+- `test_later_safe_approved_threshold_exceeded_requires_ccr_acknowledgement`;
+- `test_later_safe_insufficient_material_has_no_acceptance_action`;
+- `test_every_reference_fallback_sets_ccr_acknowledgement`;
+- `test_every_skipped_material_row_sets_material_acknowledgement`.
 
-Expected: FAIL because the fields do not exist.
+The parameterized test asserts recommendation code, exact ordered actions, and both acknowledgement booleans for every table row.
 
-- [ ] **Step 2: Persist both collections through every store boundary**
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentRecommendationMatrix -q --basetemp .tmp/pytest-mto-matrix-red -p no:cacheprovider
+~~~
 
-Add the two dataclass fields adjacent to the Phase 0 planning collections. Add both keys to `_state_payloads`, `_apply_payloads`, `_clear`, and `_state_counts`. Do not increment `SCHEMA_VERSION`: the SQLite store is a keyed JSON state bag and missing keys already load as empty collections.
+Expected: failures because the matrix function and fourth acceptance action are absent.
 
-Do not add custom snapshot code. `_snapshot_complete_state` already walks all public dataclass fields, and `_restore_complete_state` preserves existing container aliases by clearing/updating lists and dictionaries.
+- [ ] **Step 2: Implement the total branch table**
 
-- [ ] **Step 3: Write failing read-model tests**
-
-Create `tests/test_order_commitment_view.py`:
-
-```python
-"""Acceptance evidence for BE-SDBR-010 and UI-COMMIT-001."""
-
-from sdbr.order_commitment_view import (
-    build_order_commitment_detail,
-    build_order_commitment_workbench,
+~~~python
+capacity = shadow_schedule["Status"]
+material = material_assessment["Status"]
+selected = shadow_schedule.get("SelectedAssessment") or {}
+threshold_state = (
+    "ReferenceFallback"
+    if protection_policy.source == "ReferenceFallback"
+    else "ApprovedExceeded"
+    if bool(selected.get("ThresholdExceeded"))
+    else "ApprovedWithin"
 )
+requires_ccr = threshold_state in {
+    "ReferenceFallback", "ApprovedExceeded"
+}
+requires_material = material == "SkippedPendingConfirmation"
 
-
-def _evaluation() -> dict[str, object]:
-    return {
-        "EvaluationID": "OCE-1",
-        "EvaluationFingerprint": "sha256:evaluation",
-        "OrderContentFingerprint": "sha256:order",
-        "BasisFingerprint": "sha256:basis",
-        "LogicalOrderKey": "logical-order",
-        "Status": "AwaitingPlannerDecision",
-        "EvaluatedAt": "2026-07-11T08:00:00+00:00",
-        "Order": {
-            "OrderID": "SO-100", "DemandLineID": "10", "ProductID": "FG-1",
-            "Quantity": 2, "Uom": "EA", "RequestedDueAt": "2026-07-20T18:00:00+00:00",
-            "BusinessPriority": 10, "RoutingID": "PRIMARY", "TraceID": "TRACE-1",
-        },
-        "Basis": {
-            "BaselinePlanningRunID": "RUN-1", "MasterDataVersionID": "MDV-1",
-            "OperationalStateSnapshotID": "OPS-1", "CalendarFingerprint": "sha256:calendar",
-        },
-        "ProtectionPolicy": {"TargetPercent": 80.0, "Source": "ReferenceFallback", "Approved": False, "ConfigurationID": None},
-        "ShadowSchedule": {
-            "Status": "OnTime",
-            "SelectedAssessment": {
-                "PromiseAt": "2026-07-20T18:00:00+00:00",
-                "LoadBeforeMinutes": 240, "LoadAfterMinutes": 300,
-                "LoadAfterPercent": 62.5, "ThresholdExceeded": False,
-                "ReservationRequests": [{"ResourceID": "CCR-1", "WindowStartAt": "2026-07-20T08:00:00+00:00"}],
-            },
-            "Issues": [],
-        },
-        "MaterialAssessment": {"Status": "Feasible", "CheckEnabled": True, "Lines": []},
-        "Recommendation": {
-            "Decision": "PlannerConfirmationRequired",
-            "AllowedActions": ["AcceptRequestedDate", "Reject", "Reevaluate"],
-            "RequiresCcrAcknowledgement": True,
-            "RequiresMaterialAcknowledgement": False,
-        },
-    }
-
-
-def test_workbench_is_business_facing_and_omits_raw_fingerprints():
-    result = build_order_commitment_workbench(
-        evaluations=[_evaluation()], demand_commitments={}, reservation_batches={}
+if capacity == "NotAssessable":
+    decision, actions = "DoNotRecommendAccept", ["Reevaluate", "Reject"]
+elif material == "EvidenceInsufficient":
+    decision, actions = "MaterialEvidenceRequired", ["Reevaluate", "Reject"]
+elif material == "Shortage":
+    decision, actions = "DoNotRecommendAccept", ["Reevaluate", "Reject"]
+elif capacity == "OnTime" and material == "Feasible":
+    decision = (
+        "RecommendAccept"
+        if threshold_state == "ApprovedWithin"
+        else "PlannerConfirmationRequired"
     )
-
-    assert result["Summary"]["AwaitingDecisionCount"] == 1
-    row = result["Rows"][0]
-    assert row["OrderID"] == "SO-100"
-    assert row["Recommendation"] == "PlannerConfirmationRequired"
-    assert row["ProtectionThresholdSource"] == "ReferenceFallback"
-    assert "Basis" not in row
-    assert "BasisFingerprint" not in row
-    assert "OrderContentFingerprint" not in row
-
-
-def test_detail_keeps_technical_ids_collapsed_and_includes_audit():
-    result = build_order_commitment_detail(
-        evaluation=_evaluation(),
-        events=[{"EventID": "EV-1", "EvaluationID": "OCE-1", "EventType": "OrderCommitmentEvaluated"}],
-        demand_commitment=None,
-        reservation_batch=None,
+    actions = ["AcceptRequestedDate", "Reevaluate", "Reject"]
+elif capacity == "OnTime" and material == "SkippedPendingConfirmation":
+    decision = (
+        "CapacityAcceptableMaterialPending"
+        if threshold_state == "ApprovedWithin"
+        else "PlannerConfirmationRequired"
     )
-
-    assert result["Order"]["OrderID"] == "SO-100"
-    assert result["CapacityEvidence"]["Status"] == "OnTime"
-    assert result["Boundary"]["ExternalOrderAcceptance"] == "NotPerformed"
-    assert result["Boundary"]["ProductionMutation"] == "NotPerformed"
-    assert result["TechnicalDetails"]["EvaluationFingerprint"] == "sha256:evaluation"
-    assert result["AuditHistory"][0]["EventType"] == "OrderCommitmentEvaluated"
-```
-
-Run:
-
-```powershell
-pytest tests/test_order_commitment_view.py -q --basetemp .tmp/pytest-mto-view-red -p no:cacheprovider
-```
-
-Expected: FAIL because the read-model module does not exist.
-
-- [ ] **Step 4: Implement deterministic list/detail projections**
-
-The workbench summary must include:
-
-```python
-{
-    "EvaluationCount": int,
-    "AwaitingDecisionCount": int,
-    "ConfirmationRequiredCount": int,
-    "MaterialPendingCount": int,
-    "AcceptedPendingScheduleCount": int,
-    "RejectedCount": int,
+    actions = [
+        "ConditionallyAcceptRequestedDate", "Reevaluate", "Reject"
+    ]
+elif capacity == "LaterSafeDate" and material == "Feasible":
+    decision = (
+        "RecommendLaterPromise"
+        if threshold_state == "ApprovedWithin"
+        else "PlannerConfirmationRequired"
+    )
+    actions = ["AcceptRecommendedDate", "Reevaluate", "Reject"]
+elif (
+    capacity == "LaterSafeDate"
+    and material == "SkippedPendingConfirmation"
+):
+    decision = (
+        "RecommendLaterPromise"
+        if threshold_state == "ApprovedWithin"
+        else "PlannerConfirmationRequired"
+    )
+    actions = [
+        "ConditionallyAcceptRecommendedDate", "Reevaluate", "Reject"
+    ]
+else:
+    raise OrderCommitmentConflict(
+        f"Unsupported recommendation state: {capacity}/{material}."
+    )
+return {
+    "Decision": decision,
+    "AllowedActions": actions,
+    "ThresholdState": threshold_state,
+    "RequiresPlannerDecision": True,
+    "RequiresCcrAcknowledgement": requires_ccr,
+    "RequiresMaterialAcknowledgement": requires_material,
 }
-```
+~~~
 
-Each row must include only:
+- [ ] **Step 3: Verify and commit**
 
-```python
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentRecommendationMatrix --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentRecommendationMatrix -q --basetemp .tmp/pytest-mto-matrix-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: complete MTO recommendation matrix"
+~~~
+
+Expected: all matrix cases and six named edge tests pass.
+
+---
+
+### Task 10: Relevant-State Basis, Evaluation Identity, and Supersession
+
+**Files and anchors**
+- Modify `sdbr/order_commitment_evaluation.py`; add basis/evaluation/registration functions.
+- Modify `tests/test_order_commitment_evaluation.py` after matrix tests.
+
+**IDs:** `BE-SDBR-006`, `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+def build_order_commitment_basis(
+    *,
+    baseline_planning_run_id: str,
+    baseline_operational_state_snapshot_id: str | None,
+    baseline_schedule_fingerprint: str,
+    master_data_version_id: str,
+    operating_model_configuration_id: str | None,
+    operating_model_fingerprint: str | None,
+    scheduling_configuration_id: str | None,
+    ddmrp_configuration_id: str | None,
+    release_policy_version_id: str | None,
+    frozen_release_policy_fingerprint: str,
+    routing_fingerprint: str,
+    calendar_fingerprint: str,
+    time_buffer_minutes: int,
+    material_check_window_minutes: int,
+    snapshot_selection: Mapping[str, object],
+    relevant_capacity_window_keys: list[tuple[str, str, str]],
+    capacity_ledger_rows: list[dict[str, object]],
+    relevant_material_keys: list[tuple[str, str]],
+    inventory_buffer_rows: list[InventoryBufferPolicy],
+    material_availability_rows: list[MaterialAvailability],
+    material_ledger_rows: list[dict[str, object]],
+) -> dict[str, object]:
+
+def create_order_commitment_evaluation(
+    *,
+    order: Mapping[str, object],
+    shadow_schedule: Mapping[str, object],
+    material_assessment: Mapping[str, object],
+    basis: Mapping[str, object],
+    protection_policy: CcrProtectionPolicy,
+    evaluated_at: datetime,
+) -> dict[str, object]:
+
+def register_order_commitment_evaluation(
+    evaluations: Mapping[str, dict[str, object]],
+    candidate: dict[str, object],
+) -> tuple[Literal["Created", "Duplicate"], dict[str, object]]:
+
+def supersede_open_order_commitment_evaluations(
+    *,
+    evaluations: Mapping[str, dict[str, object]],
+    candidate: dict[str, object],
+    superseded_at: datetime,
+) -> dict[str, dict[str, object]]:
+~~~
+
+- [ ] **Step 1: Write identity/relevant-state tests**
+
+Add `TestOrderCommitmentEvaluationIdentity`:
+
+- `test_exact_replay_returns_existing_evaluation`;
+- `test_protection_policy_change_creates_new_evaluation`;
+- `test_each_frozen_configuration_reference_changes_identity`;
+- `test_shadow_algorithm_capacity_semantics_changes_identity`;
+- `test_relevant_capacity_change_in_exact_assessed_window_changes_basis`;
+- `test_unrelated_capacity_resource_or_window_does_not_change_basis`;
+- `test_relevant_material_item_location_change_changes_basis`;
+- `test_unrelated_material_item_location_does_not_change_basis`;
+- `test_fresh_age_observation_change_keeps_identity_but_fresh_to_stale_changes_it`;
+- `test_only_open_same_logical_order_is_superseded`;
+- `test_accepted_or_rejected_evidence_cannot_be_superseded`.
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity -q --basetemp .tmp/pytest-mto-identity-red -p no:cacheprovider
+~~~
+
+Expected: eleven failures because basis and registration functions are absent.
+
+- [ ] **Step 2: Build only exact relevant projections**
+
+Normalize relevant keys:
+
+~~~python
+capacity_keys = sorted({
+    (str(resource_id), utc_iso(start), utc_iso(end))
+    for resource_id, start, end in relevant_capacity_window_keys
+})
+material_keys = sorted({
+    (str(item_id), str(location_id))
+    for item_id, location_id in relevant_material_keys
+})
+~~~
+
+Capacity projection includes only active rows whose exact triple is in `capacity_keys`, sorted by `CapacityReservationID`, with exactly:
+
+~~~python
+(
+    "CapacityReservationID", "ReservationBatchID", "DemandCommitmentID",
+    "DemandClass", "ResourceID", "WindowStartAt", "WindowEndAt",
+    "ReservedMinutes", "LatestAllowedCompletionAt", "Status",
+    "RecordVersion",
+)
+~~~
+
+Material ledger projection includes only active rows whose `(ItemID, LocationID)` is relevant, sorted by `MaterialAllocationID`, with:
+
+~~~python
+(
+    "MaterialAllocationID", "ReservationBatchID", "DemandCommitmentID",
+    "DemandClass", "ItemID", "LocationID", "AllocatedQty",
+    "MaterialSnapshotID", "Status", "RecordVersion",
+)
+~~~
+
+Snapshot projections include exact relevant `InventoryBufferPolicy` and `MaterialAvailability` fields, including aware ISO inbound time. Reject duplicate/malformed relevant rows.
+
+Construct basis with all signature fields plus:
+
+~~~python
 {
-    "EvaluationID", "OrderID", "DemandLineID", "ProductID", "Quantity", "Uom",
-    "RequestedDueAt", "EarliestSafePromiseAt", "CcrResourceIDs",
-    "LoadBeforeMinutes", "LoadAfterMinutes", "LoadAfterPercent",
-    "ProtectionThresholdPercent", "ProtectionThresholdSource",
-    "MaterialStatus", "Recommendation", "AllowedActions", "Status",
-    "ReservationBatchID", "EvaluatedAt", "ExternalOrderAcceptance",
-    "PlanningRunCreation", "ProductionMutation",
+    "SelectedOperationalStateSnapshotID": selection[
+        "OperationalStateSnapshotID"
+    ],
+    "SelectedOperationalStateCapturedAt": selection[
+        "OperationalStateCapturedAt"
+    ],
+    "OperationalStateFreshnessStatus": selection[
+        "OperationalStateFreshnessStatus"
+    ],
+    "OperationalStateAgeMinutes": selection[
+        "OperationalStateAgeMinutes"
+    ],
+    "OperationalStateMaxAgeMinutes": 60,
+    "OperationalStateValidThroughAt": selection[
+        "OperationalStateValidThroughAt"
+    ],
+    "RelevantCapacityWindowKeys": capacity_keys,
+    "RelevantCapacityLedger": capacity_projection,
+    "RelevantMaterialKeys": material_keys,
+    "RelevantInventoryBuffers": inventory_projection,
+    "RelevantMaterialAvailability": availability_projection,
+    "RelevantMaterialLedger": material_projection,
 }
-```
+~~~
 
-Resolve `ReservationBatchID` from the accepted evaluation decision first, then from a matching demand commitment if needed. Sort newest `EvaluatedAt` first, then `OrderID`, then `EvaluationID`.
+Compute `BasisFingerprint` over the complete basis after removing only `OperationalStateAgeMinutes`.
 
-Default `ExternalOrderAcceptance`, `PlanningRunCreation`, and `ProductionMutation` to `NotPerformed` for undecided/rejected rows as well as accepted rows.
+- [ ] **Step 3: Build complete evaluation identity**
 
-The detail projection must use this exact top-level shape:
+~~~python
+policy = normalized_policy_dict(protection_policy)
+identity = {
+    "OrderContentFingerprint": order["OrderContentFingerprint"],
+    "BasisFingerprint": basis["BasisFingerprint"],
+    "MaterialPolicy": {
+        "CheckEnabled": material_assessment["CheckEnabled"],
+        "SkipReason": material_assessment.get("SkipReason"),
+        "MaterialCheckWindowMinutes": material_assessment[
+            "MaterialCheckWindowMinutes"
+        ],
+        "SnapshotSelectionMode": material_assessment[
+            "SnapshotSelectionMode"
+        ],
+        "RequestedOperationalStateSnapshotID": material_assessment.get(
+            "RequestedOperationalStateSnapshotID"
+        ),
+    },
+    "ProtectionPolicy": policy,
+    "ShadowAlgorithm": deepcopy(shadow_schedule["Algorithm"]),
+}
+evaluation_id = (
+    "OCE-" + sha256(canonical_json(identity).encode("utf-8")).hexdigest()[:20]
+)
+immutable = {
+    "EvaluationID": evaluation_id,
+    "Order": deepcopy(order),
+    "LogicalOrderKey": order["LogicalOrderKey"],
+    "OrderContentFingerprint": order["OrderContentFingerprint"],
+    "Basis": deepcopy(basis),
+    "BasisFingerprint": basis["BasisFingerprint"],
+    "ProtectionPolicy": policy,
+    "ShadowSchedule": deepcopy(shadow_schedule),
+    "MaterialAssessment": deepcopy(material_assessment),
+    "Recommendation": build_order_commitment_recommendation(
+        shadow_schedule=shadow_schedule,
+        material_assessment=material_assessment,
+        protection_policy=protection_policy,
+    ),
+}
+fingerprint_projection = deepcopy(immutable)
+fingerprint_projection["Basis"].pop("OperationalStateAgeMinutes", None)
+fingerprint_projection["MaterialAssessment"].pop(
+    "OperationalStateAgeMinutes", None
+)
+evaluation_fingerprint = canonical_fingerprint(fingerprint_projection)
+return {
+    **immutable,
+    "EvaluationFingerprint": evaluation_fingerprint,
+    "EvaluatedAt": utc_iso(evaluated_at),
+    "CreatedAt": utc_iso(evaluated_at),
+    "Status": "AwaitingPlannerDecision",
+    "RecordVersion": 1,
+}
+~~~
 
-```python
+Registration returns the persisted deep copy only when ID and evaluation fingerprint match; otherwise same-ID content raises conflict. Supersession updates only `AwaitingPlannerDecision` rows with the same logical key; accepted/rejected conflicts are explicit.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity -q --basetemp .tmp/pytest-mto-identity-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: freeze MTO evaluation identity"
+~~~
+
+Expected: eleven exact identity/relevance tests pass.
+
+---
+
+### Task 11: Decision Fingerprint and Phase 0 Acceptance Preparation
+
+**Files and anchors**
+- Modify `sdbr/order_commitment_evaluation.py`; add decision and record builders.
+- Modify `tests/test_order_commitment_evaluation.py` after identity tests.
+
+**IDs:** `BE-SDBR-006` through `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+def canonical_decision_fingerprint(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    actor_id: str,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> str:
+
+def prepare_mto_acceptance(
+    *,
+    evaluation: Mapping[str, object],
+    existing_commitments: Mapping[str, dict[str, object]],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> PlanningReservationWriteSet:
+
+def accepted_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    write_set: PlanningReservationWriteSet,
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+
+def rejected_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+~~~
+
+- [ ] **Step 1: Write action, acknowledgement, and fingerprint tests**
+
+Add `TestOrderCommitmentAcceptancePreparation`:
+
+- `test_requested_feasible_builds_canonical_mto_demand_and_material_rows`;
+- `test_requested_skipped_builds_pending_material_and_zero_allocations`;
+- `test_later_feasible_uses_recommended_promise`;
+- `test_later_skipped_uses_conditional_recommended_action_and_zero_allocations`;
+- `test_all_reference_and_exceeded_selected_candidates_require_ccr_ack`;
+- `test_all_skipped_acceptance_actions_require_material_ack`;
+- `test_insufficient_shortage_and_not_assessable_reject_acceptance`;
+- `test_expired_latest_completion_rejects_acceptance`;
+- `test_decision_fingerprint_excludes_decided_at_and_covers_every_canonical_field`;
+- `test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context`.
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation -q --basetemp .tmp/pytest-mto-acceptance-prep-red -p no:cacheprovider
+~~~
+
+Expected: ten failures because acceptance functions are absent.
+
+- [ ] **Step 2: Validate action and build the canonical demand**
+
+~~~python
+if evaluation["Status"] != "AwaitingPlannerDecision":
+    raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
+context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
+if context is None or decision not in evaluation["Recommendation"]["AllowedActions"]:
+    raise OrderCommitmentConflict("Decision is not allowed.")
+capacity_status, material_status, candidate_key = context
+if evaluation["ShadowSchedule"]["Status"] != capacity_status:
+    raise OrderCommitmentConflict("Decision capacity context does not match.")
+if evaluation["MaterialAssessment"]["Status"] != material_status:
+    raise OrderCommitmentConflict("Decision material context does not match.")
+if evaluation["Recommendation"]["RequiresCcrAcknowledgement"] and not ccr_risk_acknowledged:
+    raise OrderCommitmentConflict("CCR risk acknowledgement is required.")
+if evaluation["Recommendation"]["RequiresMaterialAcknowledgement"] and not material_risk_acknowledged:
+    raise OrderCommitmentConflict("Material risk acknowledgement is required.")
+candidate = evaluation["ShadowSchedule"][candidate_key]
+accepted_promise_at = parse_aware(candidate["PromiseAt"])
+for row in candidate["ReservationRequests"]:
+    if parse_aware(row["LatestAllowedCompletionAt"]) <= decided_at:
+        raise OrderCommitmentConflict("Selected reservation window has expired.")
+~~~
+
+Require trimmed non-empty decision ID, actor, reason and aware decision time. Build:
+
+~~~python
+demand = create_demand_commitment(
+    demand_source_type="MTOCustomerOrder",
+    source_system=order["SourceSystem"],
+    source_object_type=order["SourceObjectType"],
+    source_object_id=order["OrderID"],
+    source_object_version=order["OrderVersion"],
+    demand_line_id=order["DemandLineID"],
+    item_or_product_id=order["ProductID"],
+    location_id=order["LocationID"],
+    quantity=order["Quantity"],
+    uom=order["Uom"],
+    required_at=accepted_promise_at,
+    demand_class="MTO",
+    trace_id=order["TraceID"],
+)
+demand.update({
+    "OrderCommitmentEvaluationID": evaluation["EvaluationID"],
+    "BaselinePlanningRunID": evaluation["Basis"]["BaselinePlanningRunID"],
+    "OperatingModelConfigurationID": evaluation["Basis"][
+        "OperatingModelConfigurationID"
+    ],
+    "RoutingID": order["RoutingID"],
+    "BusinessPriority": order["BusinessPriority"],
+    "AcceptedPromiseAt": accepted_promise_at.isoformat(),
+    "MaterialCommitmentStatus": (
+        "PlannedAllocationPrepared"
+        if material_status == "Feasible"
+        else "PendingConfirmation"
+    ),
+    "PendingMaterialRequirements": (
+        [] if material_status == "Feasible"
+        else deepcopy(material["PendingRequirements"])
+    ),
+    "ExternalOrderAcceptance": "NotPerformed",
+    "PlanningRunCreation": "NotPerformed",
+    "ProductionMutation": "NotPerformed",
+})
+demand = normalize_demand_commitment(demand)
+~~~
+
+Call `prepare_reservation_confirmation` with `confirmation_id=decision_id`, exact candidate reservation requests, and material requests only for `Feasible`.
+
+- [ ] **Step 3: Implement fingerprint and immutable records**
+
+Use the exact decision identity in the global contract. `accepted_evaluation_record` and `rejected_evaluation_record` deep-copy the evaluation, increment `RecordVersion`, and set:
+
+~~~python
+updated["Decision"] = {
+    "DecisionID": normalized_decision_id,
+    "DecisionFingerprint": canonical_decision_fingerprint(
+        evaluation=evaluation,
+        decision_id=decision_id,
+        decision=decision,
+        actor_id=decided_by,
+        reason=reason,
+        ccr_risk_acknowledged=ccr_risk_acknowledged,
+        material_risk_acknowledged=material_risk_acknowledged,
+    ),
+    "Decision": decision,
+    "DecidedBy": normalized_actor,
+    "DecidedAt": decided_at.isoformat(),
+    "Reason": normalized_reason,
+    "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+    "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
+}
+~~~
+
+Acceptance additionally records `AcceptedPromiseAt`, `DemandCommitmentID`, `ReservationBatchID`, `ExternalOrderAcceptance`, `PlanningRunCreation`, and `ProductionMutation`, and sets `Status="AcceptedPendingFormalSchedule"`. Rejection sets `Status="Rejected"` and no demand/batch fields.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation --collect-only -q
+pytest tests/test_order_commitment_evaluation.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-domain-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: prepare option2 MTO reservations"
+~~~
+
+Expected: ten class tests and all shared-ledger regressions pass.
+
+---
+
+### Task 12: Persist Evaluation and Event Evidence
+
+**Files and anchors**
+- Modify `sdbr/state_store.py:60-125` `WorkbenchStateStore`.
+- Modify `sdbr/state_store.py:347` `_state_payloads`.
+- Modify `sdbr/state_store.py:500-630` `_apply_payloads`.
+- Modify `sdbr/state_store.py:640-680` `_clear`.
+- Modify `sdbr/state_store.py:730-790` `_state_counts`.
+- Modify `tests/test_state_store.py` after existing SQLite/rollback coverage.
+
+**IDs:** `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+order_commitment_evaluations: dict[str, dict[str, object]]
+order_commitment_events: list[dict[str, object]]
+~~~
+
+- [ ] **Step 1: Write standalone persistence tests**
+
+Add `TestOrderCommitmentStatePersistence`:
+
+- `test_order_commitment_collections_round_trip_through_sqlite`;
+- `test_order_commitment_collections_appear_in_health_and_clear`;
+- `test_order_commitment_collections_restore_content_and_aliases_after_atomic_rollback`.
+
+The rollback test captures `id(store.order_commitment_evaluations)` and `id(store.order_commitment_events)`, mutates both inside `atomic_update`, raises `RuntimeError`, then asserts both IDs and deep content match the pre-state.
+
+~~~powershell
+pytest tests/test_state_store.py::TestOrderCommitmentStatePersistence -q --basetemp .tmp/pytest-mto-store-red -p no:cacheprovider
+~~~
+
+Expected: three failures because fields are absent.
+
+- [ ] **Step 2: Add both fields through every existing state boundary**
+
+Add adjacent to Phase 0 fields:
+
+~~~python
+order_commitment_evaluations: dict[str, dict[str, object]] = field(
+    default_factory=dict
+)
+order_commitment_events: list[dict[str, object]] = field(
+    default_factory=list
+)
+~~~
+
+Add payload keys with those exact snake-case names. Restore with `self.order_commitment_evaluations.update(deepcopy(payloads.get("order_commitment_evaluations", {})))` and `self.order_commitment_events.extend(deepcopy(payloads.get("order_commitment_events", [])))`; clear both; report counts `OrderCommitmentEvaluations` and `OrderCommitmentEvents`.
+
+Do not change schema version. The SQLite store is a keyed JSON bag and already defaults missing keys. Do not add custom rollback logic: existing complete-state snapshot/restore handles public dataclass fields and alias preservation.
+
+- [ ] **Step 3: Verify and commit**
+
+~~~powershell
+pytest tests/test_state_store.py::TestOrderCommitmentStatePersistence --collect-only -q
+pytest tests/test_state_store.py -q --basetemp .tmp/pytest-mto-store-green -p no:cacheprovider
+git add -- sdbr/state_store.py tests/test_state_store.py
+git commit -m "feat: persist MTO evaluation evidence"
+~~~
+
+Expected: three class tests and the full state-store suite pass.
+
+---
+
+### Task 13: Exact Sanitized Workbench and Detail Projections
+
+**Files and anchors**
+- Create `sdbr/order_commitment_view.py`.
+- Create `tests/test_order_commitment_view.py`.
+
+**IDs:** `BE-SDBR-010`, `UI-COMMIT-001`.
+
+**Produces**
+
+~~~python
+def build_order_commitment_workbench(
+    *,
+    evaluations: list[dict[str, object]],
+    demand_commitments: Mapping[str, dict[str, object]],
+    reservation_batches: Mapping[str, dict[str, object]],
+) -> dict[str, object]:
+
+def build_order_commitment_detail(
+    *,
+    evaluation: dict[str, object],
+    events: list[dict[str, object]],
+    demand_commitment: dict[str, object] | None,
+    reservation_batch: dict[str, object] | None,
+) -> dict[str, object]:
+~~~
+
+- [ ] **Step 1: Write exact field/sanitization tests**
+
+Add `TestOrderCommitmentViewContract`:
+
+- `test_workbench_row_has_exact_field_set_and_exception_reservation_status`;
+- `test_terminal_rows_have_empty_allowed_actions`;
+- `test_held_batch_maps_to_planning_error_pending`;
+- `test_missing_accepted_batch_maps_to_reservation_evidence_missing`;
+- `test_detail_has_exact_top_level_and_whitelisted_capacity_material_fields`;
+- `test_audit_history_drops_unknown_details_trace_and_raw_payloads`;
+- `test_fingerprints_exist_only_in_collapsed_technical_details`;
+- `test_raw_basis_order_master_and_snapshot_payloads_never_appear`;
+- `test_workbench_sort_and_summary_are_deterministic`.
+
+~~~powershell
+pytest tests/test_order_commitment_view.py::TestOrderCommitmentViewContract -q --basetemp .tmp/pytest-mto-view-red -p no:cacheprovider
+~~~
+
+Expected: import fails because the module is absent.
+
+- [ ] **Step 2: Implement exact row derivation**
+
+Summary:
+
+~~~python
 {
-    "EvaluationID": str,
-    "Status": str,
-    "EvaluatedAt": str,
-    "RecordVersion": int,
-    "Order": dict[str, object],
-    "CapacityEvidence": dict[str, object],
-    "MaterialEvidence": dict[str, object],
-    "Recommendation": dict[str, object],
-    "EvidenceReferences": dict[str, object],
-    "Decision": dict[str, object] | None,
-    "Reservation": dict[str, object] | None,
-    "AuditHistory": list[dict[str, object]],
-    "TechnicalDetails": dict[str, object],
-    "Boundary": dict[str, object],
+    "EvaluationCount": len(rows),
+    "AwaitingDecisionCount": count_status("AwaitingPlannerDecision"),
+    "ConfirmationRequiredCount": count_recommendation(
+        "PlannerConfirmationRequired"
+    ),
+    "MaterialPendingCount": count_material({
+        "SkippedPendingConfirmation", "EvidenceInsufficient", "Shortage"
+    }),
+    "AcceptedPendingScheduleCount": count_status(
+        "AcceptedPendingFormalSchedule"
+    ),
+    "RejectedCount": count_status("Rejected"),
+    "ExceptionCount": count_exception_not_none(),
 }
-```
+~~~
 
-Copy selected capacity evidence, material lines, recommendation, safe configuration/snapshot references, decision/reservation summary, and audit history; place fingerprints only under `TechnicalDetails`. `Boundary` is always:
+Resolve linked demand/batch from decision IDs first, then matching `OrderCommitmentEvaluationID`. Derive:
 
-```python
+~~~python
+reservation_status = (
+    "NotReserved"
+    if evaluation["Status"] != "AcceptedPendingFormalSchedule"
+    and reservation_batch is None
+    else "ReservationEvidenceMissing"
+    if evaluation["Status"] == "AcceptedPendingFormalSchedule"
+    and reservation_batch is None
+    else str(reservation_batch["Status"])
+)
+exception_status = (
+    "PlanningErrorPending"
+    if reservation_status == "HeldForPlanningError"
+    else "ReservationEvidenceMissing"
+    if reservation_status == "ReservationEvidenceMissing"
+    else "AssessmentBlocked"
+    if shadow["Status"] == "NotAssessable" or shadow["Issues"]
+    else "MaterialEvidenceBlocked"
+    if material["Status"] == "EvidenceInsufficient"
+    else "None"
+)
+allowed_actions = (
+    deepcopy(recommendation["AllowedActions"])
+    if evaluation["Status"] == "AwaitingPlannerDecision"
+    else []
+)
+~~~
+
+Return exactly `ORDER_COMMITMENT_ROW_FIELDS`. Sort by descending aware `EvaluatedAt`, then `OrderID`, then `EvaluationID`.
+
+- [ ] **Step 3: Implement exact detail projection**
+
+Top level:
+
+~~~python
+DETAIL_FIELDS = (
+    "EvaluationID", "Status", "EvaluatedAt", "RecordVersion", "Order",
+    "CapacityEvidence", "MaterialEvidence", "Recommendation",
+    "EvidenceReferences", "Decision", "Reservation", "AuditHistory",
+    "TechnicalDetails", "Boundary",
+)
+~~~
+
+Whitelists:
+
+~~~python
+ORDER_FIELDS = (
+    "OrderID", "DemandLineID", "ProductID", "LocationID", "Quantity",
+    "Uom", "RequestedDueAt", "BusinessPriority", "RoutingID",
+)
+CAPACITY_WINDOW_FIELDS = (
+    "ResourceID", "OperationID", "WindowStartAt", "WindowEndAt",
+    "UsableWindowEndAt", "LatestAllowedCompletionAt", "CapacityMinutes",
+    "UsableTemporalCapacityMinutes", "ScheduledLoadMinutes",
+    "ScheduledLoadBeforeDeadlineMinutes", "ExistingReservationMinutes",
+    "CandidateLoadMinutes", "LoadBeforeMinutes", "LoadAfterMinutes",
+    "LoadAfterPercent", "LoadStatus", "ThresholdExceeded",
+    "PhysicalCapacityExceeded", "AlternateResourceIDs",
+)
+MATERIAL_LINE_FIELDS = (
+    "RequirementLineID", "ItemID", "LocationID", "Uom", "RequiredQty",
+    "OnHandQty", "EligibleInboundQty", "AuthorityAllocatedQty",
+    "OtherPlanningAllocatedQty", "QualifiedSupplyQty",
+    "UncommittedAvailabilityQty", "CoverageStatus",
+)
+~~~
+
+`EvidenceReferences` includes baseline run/master/config/release IDs and selected snapshot ID/captured/status/age/max. `Decision` includes only decision code, actor/time/reason, acknowledgements, promise, demand and batch IDs. `TechnicalDetails` includes fingerprints, trace ID, and correlation IDs but no raw objects.
+
+Audit rows are projected through `AUDIT_FIELDS`; project `Details` by `SAFE_AUDIT_DETAIL_FIELDS` intersection. Boundary is always:
+
+~~~python
 {
     "RecommendationOnly": True,
     "ExternalOrderAcceptance": "NotPerformed",
@@ -1377,251 +2015,204 @@ Copy selected capacity evidence, material lines, recommendation, safe configurat
     "ProductionMutation": "NotPerformed",
     "ReleaseMaterialGateStillRequired": True,
 }
-```
+~~~
 
-- [ ] **Step 5: Run persistence and view tests**
+- [ ] **Step 4: Verify and commit**
 
-Run:
+~~~powershell
+pytest tests/test_order_commitment_view.py::TestOrderCommitmentViewContract --collect-only -q
+pytest tests/test_order_commitment_view.py -q --basetemp .tmp/pytest-mto-view-green -p no:cacheprovider
+git add -- sdbr/order_commitment_view.py tests/test_order_commitment_view.py
+git commit -m "feat: project safe MTO commitment views"
+~~~
 
-```powershell
-pytest tests/test_state_store.py tests/test_order_commitment_view.py -q --basetemp .tmp/pytest-mto-state-view-green -p no:cacheprovider
-```
-
-Expected: PASS, including SQLite restart and rollback evidence.
-
-- [ ] **Step 6: Commit persistent evidence and read models**
-
-```powershell
-git add -- sdbr/state_store.py sdbr/order_commitment_view.py tests/test_state_store.py tests/test_order_commitment_view.py
-git commit -m "feat: persist MTO commitment evidence"
-```
+Expected: nine named tests pass.
 
 ---
 
-### Task 5: Automatic Intake, Re-Evaluation, and Read APIs
+### Task 14: Reproducible Test-Environment MTO Baseline Seed
 
-**Files:**
-- Modify: `sdbr/api.py`
-- Modify: `tests/test_api.py`
+**Files and anchors**
+- Modify `sdbr/test_data.py:20-35` constants and after `seed_baseline_test_data`.
+- Modify `sdbr/api.py` after `planner_workbench_test_data_acceptance_reset_all`.
+- Modify `tests/test_test_data.py` after existing reset endpoint tests.
 
-**Interfaces:**
-- Produces Pydantic payloads:
-  - `MtoMaterialRequirementPayload`
-  - `MtoOrderCommitmentIntakePayload`
-  - `MtoOrderCommitmentReevaluationPayload`
-- Produces endpoints:
-  - `POST /planner/workbench/order-commitments/intake`
-  - `POST /planner/workbench/order-commitments/{evaluation_id}/reevaluate`
-  - `GET /planner/workbench/order-commitments/workbench`
-  - `GET /planner/workbench/order-commitments/{evaluation_id}`
-- Intake and re-evaluation use `REFERENCE_CCR_PROTECTION_POLICY` only. No API field lets a caller supply, approve, or override the threshold.
-- Every GET returns the store revision in the existing `X-Workbench-Revision` header.
+**IDs:** `BE-DATA-014`, `BE-SDBR-010`.
 
-- [ ] **Step 1: Write the failing automatic-intake API fixture and tests**
+**Produces**
 
-Add imports for the new domain/view modules and `build_capacity_buckets_from_resources`. Add a dedicated `_order_commitment_test_store()` helper in `tests/test_api.py`; do not overload `_schedule_result_test_store()` because its route is intentionally empty and its historical solver is Gurobi.
+~~~python
+MTO_COMMITMENT_MASTER_DATA_VERSION_ID = "TST-MTO-MDV-COMMITMENT"
+MTO_COMMITMENT_OPERATIONAL_STATE_ID = "TST-MTO-OPS-CURRENT"
+MTO_COMMITMENT_BASELINE_RUN_ID = "TST-MTO-RUN-BASELINE"
 
-The helper must create:
+def seed_mto_order_commitment_fixture(
+    store: WorkbenchStateStore,
+    *,
+    captured_at: datetime,
+) -> dict[str, object]:
+~~~
 
-```python
-def _order_commitment_test_store() -> WorkbenchStateStore:
-    store = WorkbenchStateStore()
-    store.master_data_versions["MDV-MTO"] = {
-        "VersionID": "MDV-MTO",
-        "CapturedAt": "2026-07-11T07:00:00+00:00",
-        "SourceSystem": "SDBR-Test",
-        "Status": "Valid",
-        "CalendarTimezone": "UTC",
-        "Resources": [
-            {
-                "ResourceID": "CCR-1", "Name": "Constraint", "IsConstraint": True,
-                "DailyCapacityMinutes": {"2026-07-20": 480, "2026-07-21": 480},
-                "CapacityUnits": 1, "EfficiencyPercent": 100,
+- [ ] **Step 1: Write seed and endpoint tests**
+
+Add `TestOrderCommitmentBrowserSeed`:
+
+- `test_seed_builds_valid_master_fresh_snapshot_and_published_completed_baseline`;
+- `test_seed_returns_exact_api_intake_template_and_window_ids`;
+- `test_test_environment_reset_endpoint_uses_server_time_and_is_repeatable`;
+- `test_production_environment_rejects_order_commitment_fixture_reset`.
+
+~~~powershell
+pytest tests/test_test_data.py::TestOrderCommitmentBrowserSeed -q --basetemp .tmp/pytest-mto-seed-red -p no:cacheprovider
+~~~
+
+Expected: four failures because fixture seed is absent.
+
+- [ ] **Step 2: Seed exact prerequisites**
+
+Use `captured_at.astimezone(timezone.utc)` and dates `captured_at.date()+2` and `+3`. Create:
+
+~~~python
+resources = [
+    Resource(
+        "TST-MTO-CCR-1", "MTO Constraint", True,
+        {due_date: 480, next_date: 480},
+        capacity_units=1, efficiency_percent=100,
+    ),
+    Resource(
+        "TST-MTO-NCR-1", "MTO Pack", False,
+        {due_date: 480, next_date: 480},
+    ),
+]
+routing = Routing(
+    product_id="TST-MTO-FG-1",
+    routing_id="PRIMARY",
+    is_primary=True,
+    operations=[
+        Operation("CCR-CUT", "TST-MTO-CCR-1", 60, 10),
+        Operation("PACK", "TST-MTO-NCR-1", 30, 20),
+    ],
+)
+~~~
+
+Master version uses `CalendarTimezone="UTC"`, valid validation, no mutation after seed. Snapshot captured at `captured_at - 5 minutes` has `TST-MTO-RM-1/TST-MAIN` on-hand 100 and authority allocation 0.
+
+Baseline run is `Completed` and `Published`, with schedule fingerprint from `plan_publication.schedule_fingerprint`, 180 processing minutes on `TST-MTO-CCR-1` in 08:00-11:00, `TimeBufferMinutes=60`, empty frozen calendar overrides/setup transitions, and exact frozen references:
+
+~~~python
+{
+    "OperatingModelConfigurationID": None,
+    "OperatingModelFingerprint": None,
+    "SchedulingConfigurationID": None,
+    "DDMRPConfigurationID": None,
+    "ReleasePolicyVersionID": "TST-MTO-RELEASE-POLICY-1",
+    "FrozenReleasePolicy": {
+        "VersionID": "TST-MTO-RELEASE-POLICY-1",
+        "RopeBufferMinutes": 60,
+        "MaterialCheckWindowMinutes": 1440,
+    },
+}
+~~~
+
+Return fixed IDs plus an `IntakePayloadTemplate` whose requested due is 18:00 UTC on due date, quantity 1, and material requirement 5.
+
+- [ ] **Step 3: Add a test-only public reset endpoint**
+
+~~~python
+@app.post("/planner/workbench/test-data/order-commitment/reset")
+def planner_workbench_order_commitment_test_data_reset():
+    endpoint = "/planner/workbench/test-data/order-commitment/reset"
+    if active_environment.is_production:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "Endpoint": endpoint,
+                "StatusCode": 409,
+                "Data": {"Status": "TestDataResetNotAllowed"},
             },
-            {
-                "ResourceID": "NCR-1", "Name": "Pack", "IsConstraint": False,
-                "DailyCapacityMinutes": {"2026-07-20": 480, "2026-07-21": 480},
-                "CapacityUnits": 1, "EfficiencyPercent": 100,
-            },
+        )
+    seed_baseline_test_data(active_store)
+    fixture = seed_mto_order_commitment_fixture(
+        active_store,
+        captured_at=server_utc_now(),
+    )
+    return {
+        "Endpoint": endpoint,
+        "StatusCode": 200,
+        "Data": {"Status": "Reset", **fixture},
+    }
+~~~
+
+This is the only browser prerequisite seeder; it writes the actual uvicorn SQLite store through a public test endpoint, never a test-only in-memory helper.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_test_data.py::TestOrderCommitmentBrowserSeed --collect-only -q
+pytest tests/test_test_data.py -q --basetemp .tmp/pytest-mto-seed-green -p no:cacheprovider
+git add -- sdbr/test_data.py sdbr/api.py tests/test_test_data.py
+git commit -m "test: seed MTO browser acceptance state"
+~~~
+
+Expected: four class tests and all test-data regressions pass.
+
+---
+
+### Task 15: MTO API Payloads, Auth Scope, and Test Fixture
+
+**Files and anchors**
+- Modify `sdbr/api.py:305` near `OrderPayload`.
+- Modify `sdbr/api.py:1084-1190` `create_app` aliases and auth path tuple.
+- Create `tests/test_order_commitment_api.py`.
+
+**IDs:** `BE-SDBR-010`.
+
+- [ ] **Step 1: Write API contract/auth tests**
+
+In `tests/test_order_commitment_api.py`, create `_order_commitment_store(now)` using `seed_mto_order_commitment_fixture` with fixed UTC time, plus `_intake_payload` from its returned template. Add `TestOrderCommitmentApiContracts`:
+
+- `test_intake_contract_accepts_explicit_snapshot_but_has_no_material_toggle`;
+- `test_reevaluation_contract_has_no_material_window_or_threshold_override`;
+- `test_decision_contract_accepts_all_four_acceptance_actions_and_reject`;
+- `test_mto_payloads_forbid_unknown_authority_and_window_fields`;
+- `test_auth_helper_allows_all_roles_get_and_only_planner_admin_post`.
+
+Build auth requests exactly:
+
+~~~python
+def _auth_request(method: str, role: str) -> Request:
+    return Request({
+        "type": "http",
+        "method": method,
+        "path": "/planner/workbench/order-commitments/workbench",
+        "headers": [
+            (b"x-actor-id", b"actor-1"),
+            (b"x-actor-role", role.encode("ascii")),
         ],
-        "Routings": [{
-            "ProductID": "FG-1", "RoutingID": "PRIMARY", "IsPrimary": True,
-            "Operations": [
-                {"OperationID": "CCR-CUT", "ResourceID": "CCR-1", "DurationMinutes": 60, "Sequence": 10, "AlternateResourceIDs": []},
-                {"OperationID": "PACK", "ResourceID": "NCR-1", "DurationMinutes": 30, "Sequence": 20, "AlternateResourceIDs": []},
-            ],
-        }],
-        "Orders": [{
-            "OrderID": "WO-EXISTING", "ProductID": "FG-1", "Quantity": 1,
-            "DueDate": "2026-07-20T18:00:00+00:00", "TargetStartDate": "2026-07-20",
-        }],
-        "InventoryBuffers": [],
-        "MaterialRequirements": [],
-        "Validation": {"IsValid": True},
-    }
-    store.operational_state_snapshots["OPS-MTO"] = create_operational_state_snapshot(
-        snapshot_id="OPS-MTO",
-        captured_at=datetime(2026, 7, 11, 7, 30, tzinfo=timezone.utc),
-        inventory_buffers=[InventoryBufferPolicy("RM-1", "MAIN", 20, 2, 4, 8)],
-        material_availability=[MaterialAvailability("RM-1", "MAIN", allocated_qty=0)],
-        wip_limits=[],
-    )
-    store.planning_runs["RUN-MTO-BASELINE"] = {
-        "RunID": "RUN-MTO-BASELINE", "Status": "Completed", "PublicationStatus": "Published",
-        "MasterDataVersionID": "MDV-MTO", "OperationalStateSnapshotID": "OPS-MTO",
-        "ScheduleStartAt": "2026-07-20T00:00:00+00:00", "TimeBufferMinutes": 60,
-        "FrozenBaseCalendars": [], "FrozenResourceCalendarAssignments": [],
-        "FrozenCalendarOverrides": [], "FrozenOperatingModelConfiguration": None,
-        "OperatingModelConfigurationID": None,
-        "Schedule": {
-            "GeneratedAt": "2026-07-11T07:45:00+00:00",
-            "GanttRows": [{
-                "ResourceID": "CCR-1",
-                "Bars": [{
-                    "BarType": "Processing", "OrderID": "WO-EXISTING",
-                    "OperationID": "WO-EXISTING:CCR-CUT",
-                    "Start": "2026-07-20T08:00:00+00:00",
-                    "End": "2026-07-20T11:00:00+00:00",
-                }],
-            }],
-        },
-    }
-    return store
+    })
+~~~
 
+Call `_planning_run_authorization_error` directly for GET/POST role assertions; later endpoint tests prove middleware coverage.
 
-def _mto_intake_payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "SourceSystem": "MockERP", "SourceObjectType": "CustomerOrder",
-        "OrderID": "SO-100", "OrderVersion": "1", "DemandLineID": "10",
-        "ProductID": "FG-1", "LocationID": "MAIN", "Quantity": 1,
-        "Uom": "EA", "RequestedDueAt": "2026-07-20T18:00:00+00:00",
-        "BusinessPriority": 10, "ReceivedAt": "2026-07-11T08:00:00+00:00",
-        "TraceID": "TRACE-SO-100-10", "BaselinePlanningRunID": "RUN-MTO-BASELINE",
-        "RoutingID": "PRIMARY",
-        "MaterialRequirements": [{
-            "RequirementLineID": "SO-100:10:RM-1", "ItemID": "RM-1",
-            "LocationID": "MAIN", "RequiredQty": 5, "Uom": "EA",
-        }],
-    }
-    payload.update(overrides)
-    return payload
-```
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiContracts -q --basetemp .tmp/pytest-mto-api-contract-red -p no:cacheprovider
+~~~
 
-Add these tests with `utc_now=lambda: datetime(2026, 7, 11, 8, tzinfo=timezone.utc)`:
+Expected: five failures because the MTO models and protected-path registration are absent.
 
-```python
-# BE-SDBR-006 through BE-SDBR-010
-def test_order_intake_automatically_evaluates_but_creates_no_commitment_or_reservation():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, tzinfo=timezone.utc)))
+- [ ] **Step 2: Add exact Pydantic models**
 
-    response = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-
-    assert response.status_code == 200
-    data = response.json()["Data"]
-    assert data["RegistrationStatus"] == "Created"
-    assert data["Evaluation"]["Status"] == "AwaitingPlannerDecision"
-    assert data["Evaluation"]["Recommendation"] == "PlannerConfirmationRequired"
-    assert data["Evaluation"]["ProtectionThresholdSource"] == "ReferenceFallback"
-    assert store.planning_demand_commitments == {}
-    assert store.planning_reservation_batches == {}
-    assert store.ccr_capacity_reservations == {}
-    assert store.material_planning_allocations == {}
-    assert store.planning_runs.keys() == {"RUN-MTO-BASELINE"}
-    assert store.integration_messages == []
-
-
-def test_order_intake_defaults_material_check_to_enabled():
-    client = TestClient(create_app(state_store=_order_commitment_test_store(), utc_now=lambda: datetime(2026, 7, 11, 8, tzinfo=timezone.utc)))
-
-    response = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-
-    detail_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
-    detail = client.get(f"/planner/workbench/order-commitments/{detail_id}").json()["Data"]
-    assert detail["MaterialEvidence"]["CheckEnabled"] is True
-    assert detail["MaterialEvidence"]["Status"] == "Feasible"
-
-
-def test_duplicate_order_message_returns_same_evaluation_and_one_event():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, tzinfo=timezone.utc)))
-
-    first = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-    second = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-
-    assert second.json()["Data"]["RegistrationStatus"] == "Duplicate"
-    assert second.json()["Data"]["Evaluation"]["EvaluationID"] == first.json()["Data"]["Evaluation"]["EvaluationID"]
-    assert len(store.order_commitment_evaluations) == 1
-    assert len(store.order_commitment_events) == 1
-
-
-def test_order_commitment_workbench_and_detail_are_sanitized():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, tzinfo=timezone.utc)))
-    intake = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-    evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
-
-    workbench = client.get("/planner/workbench/order-commitments/workbench")
-    detail = client.get(f"/planner/workbench/order-commitments/{evaluation_id}")
-
-    assert workbench.status_code == detail.status_code == 200
-    assert "X-Workbench-Revision" in workbench.headers
-    assert "Basis" not in workbench.json()["Data"]["Rows"][0]
-    assert detail.json()["Data"]["TechnicalDetails"]["EvaluationFingerprint"]
-    assert "RawPayload" not in detail.text
-
-
-def test_material_opt_out_reevaluation_requires_reason_and_supersedes_open_evidence():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    intake = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-    evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
-
-    missing_reason = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
-        json={"RequestedBy": "planner-1", "CheckMaterialAvailability": False, "MaterialCheckSkipReason": ""},
-    )
-    assert missing_reason.status_code == 409
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
-        json={
-            "RequestedBy": "planner-1", "CheckMaterialAvailability": False,
-            "MaterialCheckSkipReason": "Capacity-only customer discussion.",
-        },
-    )
-
-    assert response.status_code == 200
-    new_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
-    assert new_id != evaluation_id
-    assert store.order_commitment_evaluations[evaluation_id]["Status"] == "Superseded"
-    assert response.json()["Data"]["Evaluation"]["MaterialStatus"] == "SkippedPendingConfirmation"
-```
-
-Also test 404/409 for missing, non-completed, or Draft baseline run, missing master version, missing operational snapshot, and unknown evaluation detail. Test malformed route/resource/calendar as a persisted `DoNotRecommendAccept` evaluation with structured issues, not a 500.
-
-Run:
-
-```powershell
-pytest tests/test_api.py -q -k "order_commitment and not decision" --basetemp .tmp/pytest-mto-intake-api-red -p no:cacheprovider
-```
-
-Expected: FAIL because payloads, state aliases, helpers, and endpoints do not exist.
-
-- [ ] **Step 2: Add exact Pydantic request contracts**
-
-Add near `OrderPayload`:
-
-```python
+~~~python
 class MtoMaterialRequirementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     RequirementLineID: str
     ItemID: str
     LocationID: str
     RequiredQty: float = Field(gt=0)
     Uom: str = "EA"
 
-
 class MtoOrderCommitmentIntakePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     SourceSystem: str = "MockERP"
     SourceObjectType: str = "CustomerOrder"
     OrderID: str
@@ -1637,330 +2228,27 @@ class MtoOrderCommitmentIntakePayload(BaseModel):
     TraceID: str
     BaselinePlanningRunID: str
     RoutingID: str = "PRIMARY"
-    MaterialRequirements: list[MtoMaterialRequirementPayload] = Field(default_factory=list)
-
+    OperationalStateSnapshotID: str | None = None
+    MaterialRequirements: list[MtoMaterialRequirementPayload] = Field(
+        default_factory=list
+    )
 
 class MtoOrderCommitmentReevaluationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     RequestedBy: str
     BaselinePlanningRunID: str | None = None
+    OperationalStateSnapshotID: str | None = None
     CheckMaterialAvailability: bool = True
     MaterialCheckSkipReason: str | None = None
-```
 
-Use server-owned `server_utc_now()` for evaluation/event time. Automatic intake always calls material evaluation with `check_material_availability=True`; only the authenticated planner/admin re-evaluation endpoint may turn it off. Resolve `MaterialCheckWindowMinutes` from the baseline run's frozen release policy (`MaterialCheckWindowMinutes`, then `MaterialLookaheadMinutes`, then `0`) rather than accepting a UI/API override. Do not accept a threshold, approved flag, configuration payload, external acceptance flag, or production mutation flag from clients.
-
-- [ ] **Step 3: Wire state, auth, and one orchestration helper**
-
-Inside `create_app`, alias the two Task 4 collections. Extend the `require_auth` protected-path tuple with `/planner/workbench/order-commitments`; existing role behavior then allows Viewer/Planner/Worker/Admin GET and only Planner/Admin POST.
-
-Add `_build_order_commitment_evaluation_from_state` as a nested helper so it can safely use store aliases and the existing API conversion functions. It must:
-
-1. Resolve a baseline run with `Status="Completed"` and `PublicationStatus` in `{"Approved", "Published"}`, a valid master version, and an operational snapshot or return the repository's standard 404/409 response shape.
-2. Rehydrate `Resource` and `Routing` from the frozen master version.
-3. Apply the baseline run's `FrozenBaseCalendars`, `FrozenResourceCalendarAssignments`, and `FrozenCalendarOverrides` through existing calendar helpers.
-4. Select the exact primary route matching `ProductID` and `RoutingID`. First scope rejects a non-primary route as structured `ROUTING_NOT_PRIMARY`; it does not alter routing governance or solver routing semantics.
-5. Build aware capacity buckets using the master `CalendarTimezone`; when the version has only date buckets and no timezone, use the order's request timezone and record that source in basis evidence.
-6. Parse the baseline run's frozen `SetupTransitions` through the existing payload converter and pass them, completed `Schedule.GanttRows`, and copied active shared capacity rows to Task 2. A relevant unresolved setup rule remains a structured no-accept recommendation.
-7. Derive the prospective MTO `DemandCommitmentID` through a Task 3 `candidate_demand_commitment_id(order)` helper, then call material evaluation so self-allocation exclusion is stable on replay.
-8. Build relevant-state fingerprints from sorted immutable projections. Do not fingerprint the complete store, raw master payload, or unrelated audit/events.
-9. Always inject `REFERENCE_CCR_PROTECTION_POLICY`. Do not inspect an uncontracted DDAE field.
-10. Return the immutable evaluation plus a sanitized error response only for missing top-level repository references.
-
-- [ ] **Step 4: Implement idempotent intake and audited re-evaluation**
-
-For intake:
-
-```python
-@app.post("/planner/workbench/order-commitments/intake")
-def planner_workbench_order_commitment_intake(
-    payload: MtoOrderCommitmentIntakePayload,
-    request: Request,
-):
-    endpoint = "/planner/workbench/order-commitments/intake"
-    evaluation_or_response = _build_order_commitment_evaluation_from_state(
-        order=_mto_order_from_payload(payload),
-        evaluated_at=server_utc_now(),
-        check_material_availability=True,
-        material_check_skip_reason=None,
-        material_check_window_minutes=_material_check_window_minutes_for_run(
-            payload.BaselinePlanningRunID
-        ),
-    )
-    if isinstance(evaluation_or_response, JSONResponse):
-        return evaluation_or_response
-    registration, evaluation = register_order_commitment_evaluation(
-        order_commitment_evaluations,
-        evaluation_or_response,
-    )
-    if registration == "Created":
-        order_commitment_evaluations[str(evaluation["EvaluationID"])] = deepcopy(evaluation)
-        _append_order_commitment_event(
-            events=order_commitment_events,
-            evaluation=evaluation,
-            event_type="OrderCommitmentEvaluated",
-            actor_id=_effective_actor_id(request, str(evaluation["Order"]["SourceSystem"])),
-            occurred_at=server_utc_now(),
-        )
-    return {
-        "Endpoint": endpoint,
-        "StatusCode": 200,
-        "Data": {
-            "RegistrationStatus": registration,
-            "Evaluation": _order_commitment_row(evaluation),
-            "Boundary": _order_commitment_boundary(),
-        },
-    }
-```
-
-The final implementation may call the Task 4 view function instead of a private `_order_commitment_row`, but must use one sanitizer only.
-
-Re-evaluation copies the canonical order from the source evaluation, optionally replaces `BaselinePlanningRunID`, resolves the material window from that baseline run, applies the planner's material-check toggle/reason, recomputes against current relevant state, registers the new evaluation, supersedes only prior open evidence, writes `OrderCommitmentReevaluated` and `OrderCommitmentEvaluationSuperseded` events, and returns the new sanitized row. If relevant state and policy are unchanged, it returns `Duplicate` without a second event.
-
-Stable event IDs must be derived from evaluation ID, event type, and decision/superseding identity. Duplicate intake/re-evaluation must not append duplicate events. Every event uses this envelope and omits raw payloads:
-
-```python
-{
-    "EventID": str,
-    "EventType": str,
-    "EvaluationID": str,
-    "OccurredAt": str,
-    "ActorID": str,
-    "TraceID": str,
-    "CausationID": str,
-    "CorrelationID": str,
-    "DecisionID": str | None,
-    "ReservationBatchID": str | None,
-    "Details": dict[str, object],
-}
-```
-
-`Details` may contain status transitions, recommendation code, superseding evaluation ID, and non-sensitive reservation IDs. It must not contain `Basis`, master data, operational-state rows, or a source order payload.
-
-- [ ] **Step 5: Implement sanitized GET endpoints**
-
-The workbench GET passes copied store values to `build_order_commitment_workbench`. Detail resolves any decision-linked demand/batch, filters events by `EvaluationID`, and calls `build_order_commitment_detail`. Missing evaluation returns `404 OrderCommitmentEvaluationNotFound`.
-
-Keep store locking consistent with existing GET middleware. Do not add a second lock around the two collections; `state_admission` already captures body and revision in one boundary.
-
-- [ ] **Step 6: Run API, persistence, and domain tests**
-
-Run:
-
-```powershell
-pytest tests/test_api.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_state_store.py -q -k "order_commitment" --basetemp .tmp/pytest-mto-intake-api-green -p no:cacheprovider
-```
-
-Expected: PASS. Intake creates one evaluation and event only; all shared planning and external integration collections remain unchanged.
-
-- [ ] **Step 7: Commit automatic intake and read APIs**
-
-```powershell
-git add -- sdbr/api.py tests/test_api.py
-git commit -m "feat: add automatic MTO commitment intake"
-```
-
----
-
-### Task 6: Revision-Guarded Option-2 Planner Decision
-
-**Files:**
-- Modify: `sdbr/api.py`
-- Modify: `tests/test_api.py`
-
-**Interfaces:**
-- Produces `MtoOrderCommitmentDecisionPayload`.
-- Produces `POST /planner/workbench/order-commitments/{evaluation_id}/decision`.
-- Consumes the exact `EvaluationFingerprint`, `If-Match` state revision, Task 3 `prepare_mto_acceptance`, and Phase 0 `apply_reservation_write_set`.
-- Acceptance output is `AcceptedPendingFormalSchedule`; rejection output is `Rejected`.
-
-- [ ] **Step 1: Write failing decision, stale-state, and no-mutation tests**
-
-Add:
-
-```python
-def _decision_payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "DecisionID": "DEC-SO-100-10-1",
-        "Decision": "AcceptRequestedDate",
-        "DecidedBy": "planner-1",
-        "Reason": "Reviewed capacity and customer priority.",
-        "ExpectedEvaluationFingerprint": "",
-        "CcrRiskAcknowledged": True,
-        "MaterialRiskAcknowledged": False,
-    }
-    payload.update(overrides)
-    return payload
-
-
-def _intake_for_decision(client: TestClient) -> tuple[str, str, str]:
-    response = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-    row = response.json()["Data"]["Evaluation"]
-    detail = client.get(f"/planner/workbench/order-commitments/{row['EvaluationID']}")
-    return row["EvaluationID"], detail.json()["Data"]["TechnicalDetails"]["EvaluationFingerprint"], detail.headers["X-Workbench-Revision"]
-
-
-def test_option2_acceptance_atomically_creates_shared_mto_reservations_only():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    evaluation_id, fingerprint, revision = _intake_for_decision(client)
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": revision},
-        json=_decision_payload(ExpectedEvaluationFingerprint=fingerprint),
-    )
-
-    assert response.status_code == 200
-    data = response.json()["Data"]
-    assert data["Evaluation"]["Status"] == "AcceptedPendingFormalSchedule"
-    assert data["Evaluation"]["ExternalOrderAcceptance"] == "NotPerformed"
-    assert data["Evaluation"]["ProductionMutation"] == "NotPerformed"
-    assert len(store.planning_demand_commitments) == 1
-    assert len(store.planning_reservation_batches) == 1
-    assert len(store.ccr_capacity_reservations) == 1
-    assert len(store.material_planning_allocations) == 1
-    assert store.planning_runs.keys() == {"RUN-MTO-BASELINE"}
-    assert store.integration_messages == []
-    assert store.ddsop_feedback_outbound_messages == []
-
-
-def test_reference_or_exceeded_threshold_cannot_accept_without_ccr_acknowledgement():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    evaluation_id, fingerprint, revision = _intake_for_decision(client)
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": revision},
-        json=_decision_payload(ExpectedEvaluationFingerprint=fingerprint, CcrRiskAcknowledged=False),
-    )
-
-    assert response.status_code == 409
-    assert response.json()["Data"]["Status"] == "OrderCommitmentConflict"
-    assert store.planning_demand_commitments == {}
-    assert store.planning_reservation_batches == {}
-
-
-def test_conditional_acceptance_keeps_material_pending_and_creates_no_allocation():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    initial = client.post("/planner/workbench/order-commitments/intake", json=_mto_intake_payload())
-    source_id = initial.json()["Data"]["Evaluation"]["EvaluationID"]
-    reevaluated = client.post(
-        f"/planner/workbench/order-commitments/{source_id}/reevaluate",
-        json={
-            "RequestedBy": "planner-1", "CheckMaterialAvailability": False,
-            "MaterialCheckSkipReason": "Capacity-only decision.",
-        },
-    )
-    evaluation_id = reevaluated.json()["Data"]["Evaluation"]["EvaluationID"]
-    detail = client.get(f"/planner/workbench/order-commitments/{evaluation_id}")
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": detail.headers["X-Workbench-Revision"]},
-        json=_decision_payload(
-            Decision="ConditionallyAcceptRequestedDate",
-            ExpectedEvaluationFingerprint=detail.json()["Data"]["TechnicalDetails"]["EvaluationFingerprint"],
-            MaterialRiskAcknowledged=True,
-        ),
-    )
-
-    assert response.status_code == 200
-    demand = next(iter(store.planning_demand_commitments.values()))
-    assert demand["MaterialCommitmentStatus"] == "PendingConfirmation"
-    assert demand["PendingMaterialRequirements"]
-    assert store.material_planning_allocations == {}
-
-
-def test_decision_requires_if_match_and_exact_evaluation_fingerprint():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    evaluation_id, fingerprint, revision = _intake_for_decision(client)
-
-    no_precondition = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        json=_decision_payload(ExpectedEvaluationFingerprint=fingerprint),
-    )
-    wrong_fingerprint = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": revision},
-        json=_decision_payload(ExpectedEvaluationFingerprint="sha256:wrong"),
-    )
-
-    assert no_precondition.status_code == 428
-    assert wrong_fingerprint.status_code == 409
-    assert store.planning_demand_commitments == {}
-
-
-def test_relevant_capacity_change_marks_evaluation_stale_before_confirmation():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    evaluation_id, fingerprint, _revision = _intake_for_decision(client)
-    store.ccr_capacity_reservations["CCR-COMPETING"] = {
-        "CapacityReservationID": "CCR-COMPETING", "ReservationBatchID": "PRB-OTHER",
-        "DemandCommitmentID": "DC-OTHER", "DemandClass": "MTA", "ResourceID": "CCR-1",
-        "WindowStartAt": "2026-07-20T00:00:00+00:00", "WindowEndAt": "2026-07-21T00:00:00+00:00",
-        "ReservedMinutes": 120, "Status": "ActivePlanReservation", "RecordVersion": 1,
-    }
-    store.save()
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": str(store.current_revision())},
-        json=_decision_payload(ExpectedEvaluationFingerprint=fingerprint),
-    )
-
-    assert response.status_code == 409
-    assert response.json()["Data"]["Status"] == "OrderCommitmentEvaluationStale"
-    assert store.planning_reservation_batches == {}
-
-
-def test_reject_records_decision_without_shared_reservations():
-    store = _order_commitment_test_store()
-    client = TestClient(create_app(state_store=store, utc_now=lambda: datetime(2026, 7, 11, 8, 5, tzinfo=timezone.utc)))
-    evaluation_id, fingerprint, revision = _intake_for_decision(client)
-
-    response = client.post(
-        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
-        headers={"If-Match": revision},
-        json=_decision_payload(Decision="Reject", ExpectedEvaluationFingerprint=fingerprint, CcrRiskAcknowledged=False),
-    )
-
-    assert response.status_code == 200
-    assert response.json()["Data"]["Evaluation"]["Status"] == "Rejected"
-    assert store.planning_demand_commitments == {}
-    assert store.planning_reservation_batches == {}
-```
-
-Add exact tests for:
-
-- idempotent replay of the same `DecisionID` and payload returns the same batch without duplicate events;
-- same `DecisionID` with changed action/reason/fingerprint returns 409;
-- two clients using one revision to accept competing evaluations produce one 200 and one `StateStoreRevisionConflict` 409;
-- a forced `save()` failure restores evaluation, demand, batch, capacity, material, events, processed keys, and revision;
-- accepted/rejected/superseded evaluation cannot be decided again except exact accepted-decision replay;
-- `MaterialEvidenceRequired` and `DoNotRecommendAccept` reject all acceptance action codes;
-- `AcceptRecommendedDate` uses the later safe promise and matching reservation rows;
-- auth mode allows Viewer GET, forbids Viewer/Worker decision, and allows Planner/Admin decision.
-
-Run:
-
-```powershell
-pytest tests/test_api.py -q -k "order_commitment and (decision or concurrent or rollback or auth)" --basetemp .tmp/pytest-mto-decision-red -p no:cacheprovider
-```
-
-Expected: FAIL because the decision payload/endpoint does not exist.
-
-- [ ] **Step 2: Add the decision payload and precondition contract**
-
-```python
 class MtoOrderCommitmentDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     DecisionID: str
     Decision: Literal[
         "AcceptRequestedDate",
-        "AcceptRecommendedDate",
         "ConditionallyAcceptRequestedDate",
+        "AcceptRecommendedDate",
+        "ConditionallyAcceptRecommendedDate",
         "Reject",
     ]
     DecidedBy: str
@@ -1968,49 +2256,963 @@ class MtoOrderCommitmentDecisionPayload(BaseModel):
     ExpectedEvaluationFingerprint: str
     CcrRiskAcknowledged: bool = False
     MaterialRiskAcknowledged: bool = False
-```
+~~~
 
-The endpoint must return `428 OrderCommitmentPreconditionRequired` when `If-Match` is absent. Let existing middleware reject a stale numeric revision before endpoint code runs. Do not silently reread/retry a failed planner decision.
+Intake has no material opt-out. None of the three models accepts protection threshold, approved flag, material-window minutes, external acceptance, Planning Run creation, production mutation, DDAE configuration payload, or raw master/snapshot content.
 
-- [ ] **Step 3: Recompute relevant evidence before any mutation**
+- [ ] **Step 3: Alias state and extend existing role middleware**
 
-For acceptance actions, rebuild the candidate evaluation from the persisted order and its exact material policy against current relevant state. Compare its `BasisFingerprint` and capacity/material policy to the persisted evaluation. If any relevant fact changed, return:
+Inside `create_app`:
 
-```python
-JSONResponse(
-    status_code=409,
-    content={
-        "Endpoint": endpoint,
-        "StatusCode": 409,
-        "Data": {
-            "Status": "OrderCommitmentEvaluationStale",
-            "EvaluationID": evaluation_id,
-            "Message": "Capacity, material, schedule, calendar, or reference evidence changed; re-evaluate before deciding.",
+~~~python
+order_commitment_evaluations = (
+    active_store.order_commitment_evaluations
+)
+order_commitment_events = active_store.order_commitment_events
+~~~
+
+Add `/planner/workbench/order-commitments` to the same protected-path tuple as planning runs/reservations. Existing `_planning_run_authorization_error` gives Viewer/Planner/Worker/Admin GET and Planner/Admin non-GET. Tasks 17-21 add each real route once; Task 15 adds no interim endpoint.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiContracts --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiContracts -q --basetemp .tmp/pytest-mto-api-contract-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: define MTO commitment API contracts"
+~~~
+
+Expected: five tests pass; unknown fields return 422.
+
+---
+
+### Task 16: State-to-Evaluation Orchestration
+
+**Files and anchors**
+- Modify `sdbr/api.py` inside `create_app` before route declarations; add `_build_order_commitment_evaluation_from_state`.
+- Modify `tests/test_order_commitment_api.py` after contract tests.
+
+**IDs:** `BE-SDBR-006` through `BE-SDBR-010`.
+
+**Produces**
+
+~~~python
+def _order_commitment_error(
+    *,
+    endpoint: str,
+    status_code: int,
+    status: str,
+    message: str,
+    details: Mapping[str, object] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "Endpoint": endpoint,
+            "StatusCode": status_code,
+            "Data": {
+                "Status": status,
+                "Message": message,
+                **deepcopy(dict(details or {})),
+            },
         },
+    )
+
+def _not_assessable_shadow(
+    *,
+    order: Mapping[str, object],
+    code: str,
+    message: str,
+) -> dict[str, object]:
+    return {
+        "Algorithm": deepcopy(SHADOW_ALGORITHM),
+        "Status": "NotAssessable",
+        "RequestedDueAt": order["RequestedDueAt"],
+        "LatestCcrCompletionAt": None,
+        "RequestedDateAssessment": {"Feasible": False},
+        "EarliestSafeAssessment": None,
+        "SelectedAssessment": None,
+        "RelevantCapacityWindowKeys": [],
+        "Issues": [{"Code": code, "Message": message}],
+        "Summary": {
+            "CcrOperationCount": 0,
+            "SelectedWindowCount": 0,
+            "MaximumLoadAfterPercent": None,
+        },
+    }
+
+def _build_order_commitment_evaluation_from_state(
+    *,
+    order: Mapping[str, object],
+    evaluated_at: datetime,
+    check_material_availability: bool,
+    material_check_skip_reason: str | None,
+    requested_operational_state_snapshot_id: str | None,
+) -> dict[str, object] | JSONResponse:
+~~~
+
+- [ ] **Step 1: Write resolver tests**
+
+Add `TestOrderCommitmentApiOrchestration`:
+
+- `test_resolver_requires_completed_approved_or_published_baseline`;
+- `test_resolver_requires_master_schedule_and_primary_route_references`;
+- `test_resolver_selects_latest_current_snapshot_by_default`;
+- `test_resolver_preserves_explicit_stale_and_future_as_insufficient_evidence`;
+- `test_resolver_freezes_all_configuration_release_route_calendar_references`;
+- `test_resolver_uses_only_reference_protection_policy`;
+- `test_resolver_fingerprints_only_exact_relevant_capacity_and_material_rows`;
+- `test_resolver_rejects_missing_calendar_timezone_conservatively`.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiOrchestration -q --basetemp .tmp/pytest-mto-orchestration-red -p no:cacheprovider
+~~~
+
+Expected: eight failures because resolver is absent.
+
+- [ ] **Step 2: Resolve baseline, route, calendar, and frozen policies**
+
+Exact top-level failures:
+
+~~~python
+run = planning_runs.get(order["BaselinePlanningRunID"])
+if run is None:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=404,
+        status="PlanningRunNotFound",
+        message="Baseline Planning Run was not found.",
+    )
+if run.get("Status") != "Completed":
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="PlanningRunNotCompleted",
+        message="Baseline Planning Run must be completed.",
+    )
+if publication_state(run) not in {"Approved", "Published"}:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="PlanningRunNotApprovedOrPublished",
+        message="Baseline plan must be approved or published.",
+    )
+schedule = run.get("Schedule")
+if not isinstance(schedule, dict):
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="PlanningRunScheduleMissing",
+        message="Baseline schedule evidence is missing.",
+    )
+master = master_data_versions.get(run.get("MasterDataVersionID"))
+if not isinstance(master, dict):
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=404,
+        status="MasterDataVersionNotFound",
+        message="Baseline master-data version was not found.",
+    )
+orchestration_issue = None
+if not isinstance(master.get("CalendarTimezone"), str) or not str(
+    master["CalendarTimezone"]
+).strip():
+    orchestration_issue = (
+        "CALENDAR_TIMEZONE_REQUIRED",
+        "A calendar timezone is required for MTO shadow capacity.",
+    )
+~~~
+
+Rehydrate with current helpers:
+
+~~~python
+resources = _resources_from_payload([
+    ResourcePayload(**row) for row in master["Resources"]
+])
+resources = apply_base_calendar_assignments(
+    resources=resources,
+    calendars=run.get("FrozenBaseCalendars") or [],
+    assignments=run.get("FrozenResourceCalendarAssignments") or [],
+).resources
+resources = apply_calendar_overrides(
+    resources=resources,
+    overrides=run.get("FrozenCalendarOverrides") or [],
+).resources
+routings = _routings_from_payload([
+    RoutingPayload(**row) for row in master["Routings"]
+])
+routing_matches = [
+    row for row in routings
+    if row.product_id == order["ProductID"]
+    and row.routing_id == order["RoutingID"]
+    and row.is_primary is True
+]
+routing = routing_matches[0] if len(routing_matches) == 1 else None
+if routing is None:
+    orchestration_issue = (
+        "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
+        "Exactly one matching primary route is required.",
+    )
+capacity_buckets = (
+    []
+    if orchestration_issue is not None
+    else build_capacity_buckets_from_resources(
+        resources, tzinfo=ZoneInfo(master["CalendarTimezone"])
+    )
+)
+frozen_release_policy = _release_policy_for_evaluation(
+    planning_run=run,
+    dbr_release_policies=dbr_release_policies,
+)
+material_window = release_policy_settings(
+    frozen_release_policy
+).material_lookahead_minutes
+~~~
+
+Route/resource/calendar/setup defects become a persisted `NotAssessable` shadow issue, not a 500. Missing top-level IDs use standard 404/409 responses.
+
+- [ ] **Step 3: Evaluate and build exact basis**
+
+~~~python
+selection = select_order_commitment_operational_snapshot(
+    snapshots=operational_state_snapshots,
+    evaluated_at=evaluated_at,
+    requested_snapshot_id=requested_operational_state_snapshot_id,
+)
+shadow = (
+    _not_assessable_shadow(
+        order=order,
+        code=orchestration_issue[0],
+        message=orchestration_issue[1],
+    )
+    if orchestration_issue is not None
+    else evaluate_ccr_shadow_schedule(
+        order_id=order["PlanningOrderID"],
+        quantity=order["Quantity"],
+        routing=routing,
+        resources=resources,
+        capacity_buckets=capacity_buckets,
+        setup_transitions=_setup_transitions_from_payload([
+            SetupTransitionPayload(**row)
+            for row in run.get("SetupTransitions", [])
+        ]),
+        gantt_rows=deepcopy(schedule.get("GanttRows", [])),
+        active_capacity_reservations=list(
+            ccr_capacity_reservations.values()
+        ),
+        requested_due_at=parse_aware(order["RequestedDueAt"]),
+        evaluated_at=evaluated_at,
+        downstream_protection_minutes=int(
+            run.get("TimeBufferMinutes", 0)
+        ),
+        protection_threshold_percent=80.0,
+    )
+)
+material = evaluate_mto_material_availability(
+    order=order,
+    snapshot_selection=selection,
+    active_material_allocations=list(
+        material_planning_allocations.values()
+    ),
+    current_demand_commitment_id=candidate_demand_commitment_id(order),
+    evaluated_at=evaluated_at,
+    material_check_window_minutes=material_window,
+    check_material_availability=check_material_availability,
+    skip_reason=material_check_skip_reason,
+)
+~~~
+
+Compute schedule fingerprint with `plan_publication.schedule_fingerprint(run)` and fallback to `canonical_fingerprint(schedule)` only if absent. Calendar fingerprint covers sorted effective bucket projections and frozen calendar rows. Route fingerprint covers the selected canonical route. Frozen release fingerprint covers `FrozenReleasePolicy` (or resolved version), including `None`.
+
+Call `build_order_commitment_basis` with all exact run/config fields, `shadow["RelevantCapacityWindowKeys"]`, requirement item/location keys, selected snapshot rows, and live ledgers. Then call `create_order_commitment_evaluation` with `REFERENCE_CCR_PROTECTION_POLICY`.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiOrchestration --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiOrchestration -q --basetemp .tmp/pytest-mto-orchestration-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: orchestrate MTO commitment evidence"
+~~~
+
+Expected: eight resolver tests pass.
+
+---
+
+### Task 17: Idempotent Intake and Sanitized Reads
+
+**Files and anchors**
+- Modify `sdbr/api.py` inside `create_app`; replace intake/read stubs.
+- Modify `tests/test_order_commitment_api.py` after orchestration tests.
+
+**IDs:** `BE-SDBR-010`.
+
+- [ ] **Step 1: Write intake/read tests**
+
+Add `TestOrderCommitmentApiIntakeAndReads`:
+
+- `test_intake_automatically_evaluates_with_material_check_enabled`;
+- `test_duplicate_intake_returns_same_evaluation_and_one_event`;
+- `test_intake_with_stale_evidence_has_no_acceptance_action`;
+- `test_intake_malformed_route_persists_do_not_recommend_with_issue`;
+- `test_workbench_and_detail_return_exact_sanitized_contract_and_revision`;
+- `test_unknown_detail_returns_order_commitment_not_found`;
+- `test_intake_creates_no_phase0_or_planning_run_objects`.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiIntakeAndReads -q --basetemp .tmp/pytest-mto-intake-red -p no:cacheprovider
+~~~
+
+Expected: seven failures because real routes are absent.
+
+- [ ] **Step 2: Add stable safe event append**
+
+Use one sanitizer and one boundary helper for every response:
+
+~~~python
+def _order_commitment_row(
+    evaluation: Mapping[str, object],
+) -> dict[str, object]:
+    workbench = build_order_commitment_workbench(
+        evaluations=[deepcopy(dict(evaluation))],
+        demand_commitments=planning_demand_commitments,
+        reservation_batches=planning_reservation_batches,
+    )
+    return deepcopy(workbench["Rows"][0])
+
+def _order_commitment_boundary() -> dict[str, object]:
+    return {
+        "RecommendationOnly": True,
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+        "ReleaseMaterialGateStillRequired": True,
+    }
+~~~
+
+~~~python
+def _append_order_commitment_event(
+    *,
+    evaluation,
+    event_type,
+    actor_id,
+    occurred_at,
+    decision_id=None,
+    reservation_batch_id=None,
+    causation_id,
+    details,
+):
+    safe_details = {
+        key: deepcopy(value)
+        for key, value in details.items()
+        if key in INTERNAL_ORDER_COMMITMENT_EVENT_DETAIL_FIELDS
+    }
+    identity = {
+        "EvaluationID": evaluation["EvaluationID"],
+        "EventType": event_type,
+        "DecisionID": decision_id,
+        "ReservationBatchID": reservation_batch_id,
+        "CausationID": causation_id,
+    }
+    event = {
+        "EventID": "OCEV-" + sha256(
+            canonical_json(identity).encode("utf-8")
+        ).hexdigest()[:20],
+        "EventType": event_type,
+        "EvaluationID": evaluation["EvaluationID"],
+        "OccurredAt": occurred_at.isoformat(),
+        "ActorID": actor_id,
+        "TraceID": evaluation["Order"]["TraceID"],
+        "CausationID": causation_id,
+        "CorrelationID": evaluation["Order"]["LogicalOrderKey"],
+        "DecisionID": decision_id,
+        "ReservationBatchID": reservation_batch_id,
+        "Details": safe_details,
+    }
+    existing = next(
+        (
+            row for row in order_commitment_events
+            if row.get("EventID") == event["EventID"]
+        ),
+        None,
+    )
+    if existing is None:
+        order_commitment_events.append(event)
+    elif canonical_fingerprint(existing) != canonical_fingerprint(event):
+        raise OrderCommitmentConflict(
+            "Order commitment event identity/content conflict."
+        )
+    return event
+~~~
+
+Allowed internal detail fields are exactly the `SAFE_AUDIT_DETAIL_FIELDS` set; event metadata remains internal and is sanitized by Task 13.
+
+- [ ] **Step 3: Implement intake**
+
+~~~python
+@app.post("/planner/workbench/order-commitments/intake")
+def planner_workbench_order_commitment_intake(
+    payload: MtoOrderCommitmentIntakePayload,
+    request: Request,
+):
+    evaluated_at = server_utc_now()
+    order = normalize_mto_order(_mto_order_from_payload(payload))
+    candidate = _build_order_commitment_evaluation_from_state(
+        order=order,
+        evaluated_at=evaluated_at,
+        check_material_availability=True,
+        material_check_skip_reason=None,
+        requested_operational_state_snapshot_id=(
+            payload.OperationalStateSnapshotID
+        ),
+    )
+    if isinstance(candidate, JSONResponse):
+        return candidate
+    registration, persisted = register_order_commitment_evaluation(
+        order_commitment_evaluations, candidate
+    )
+    if registration == "Created":
+        order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+            persisted
+        )
+        _append_order_commitment_event(
+            evaluation=persisted,
+            event_type="OrderCommitmentEvaluated",
+            actor_id=_effective_actor_id(
+                request, persisted["Order"]["SourceSystem"]
+            ),
+            occurred_at=evaluated_at,
+            causation_id=persisted["Order"]["OrderKey"],
+            details={
+                "ToStatus": "AwaitingPlannerDecision",
+                "Recommendation": persisted["Recommendation"]["Decision"],
+                "MaterialCheckEnabled": True,
+                "MaterialEvidenceFreshnessStatus": persisted[
+                    "MaterialAssessment"
+                ]["OperationalStateFreshnessStatus"],
+            },
+        )
+    return {
+        "Endpoint": endpoint,
+        "StatusCode": 200,
+        "Data": {
+            "RegistrationStatus": registration,
+            "Evaluation": _order_commitment_row(persisted),
+            "Boundary": _order_commitment_boundary(),
+        },
+    }
+~~~
+
+Do not call `server_utc_now()` twice. Duplicate registration writes nothing and appends no event.
+
+- [ ] **Step 4: Implement GET endpoints**
+
+Workbench passes copied evaluations/demands/batches to `build_order_commitment_workbench`. Detail resolves decision-linked demand/batch and matching events, then calls `build_order_commitment_detail`. Return `404 OrderCommitmentEvaluationNotFound` for an unknown ID. Existing middleware captures body and `X-Workbench-Revision` under one state admission; add no extra lock.
+
+- [ ] **Step 5: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiIntakeAndReads --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiIntakeAndReads tests/test_order_commitment_view.py -q --basetemp .tmp/pytest-mto-intake-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: add recommendation-only MTO intake"
+~~~
+
+Expected: seven API tests and view tests pass.
+
+---
+
+### Task 18: Audited Re-evaluation with Current Evidence
+
+**Files and anchors**
+- Modify `sdbr/api.py` inside `create_app`; replace re-evaluation stub.
+- Modify `tests/test_order_commitment_api.py` after intake/read tests.
+
+**IDs:** `BE-SDBR-010`.
+
+- [ ] **Step 1: Write re-evaluation tests**
+
+Add `TestOrderCommitmentApiReevaluation`:
+
+- `test_reevaluation_defaults_material_check_on_and_selects_new_latest_snapshot`;
+- `test_explicit_stale_or_future_snapshot_persists_insufficient_evidence`;
+- `test_material_opt_out_requires_reason_and_has_no_allocations`;
+- `test_reevaluation_payload_cannot_override_material_window`;
+- `test_new_evaluation_supersedes_only_open_source_and_preserves_events`;
+- `test_unchanged_replay_returns_duplicate_without_second_event`;
+- `test_terminal_or_superseded_source_has_no_reevaluation`;
+- `test_reevaluation_creates_no_phase0_or_planning_run_objects`.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiReevaluation -q --basetemp .tmp/pytest-mto-reevaluation-red -p no:cacheprovider
+~~~
+
+Expected: eight failures because route is absent.
+
+- [ ] **Step 2: Implement exact re-evaluation transaction**
+
+~~~python
+source = order_commitment_evaluations.get(evaluation_id)
+if source is None:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=404,
+        status="OrderCommitmentEvaluationNotFound",
+        message="Order commitment evaluation was not found.",
+    )
+if source["Status"] != "AwaitingPlannerDecision":
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="OrderCommitmentEvaluationNotReevaluatable",
+        message="Only an open evaluation may be re-evaluated.",
+    )
+observed_at = server_utc_now()
+actor_id = _effective_actor_id(request, payload.RequestedBy)
+order = deepcopy(source["Order"])
+if payload.BaselinePlanningRunID is not None:
+    order["BaselinePlanningRunID"] = (
+        payload.BaselinePlanningRunID.strip()
+    )
+order = normalize_mto_order(order)
+candidate = _build_order_commitment_evaluation_from_state(
+    order=order,
+    evaluated_at=observed_at,
+    check_material_availability=payload.CheckMaterialAvailability,
+    material_check_skip_reason=payload.MaterialCheckSkipReason,
+    requested_operational_state_snapshot_id=(
+        payload.OperationalStateSnapshotID
+    ),
+)
+if isinstance(candidate, JSONResponse):
+    return candidate
+registration, persisted = register_order_commitment_evaluation(
+    order_commitment_evaluations, candidate
+)
+if registration == "Duplicate":
+    return {
+        "Endpoint": endpoint,
+        "StatusCode": 200,
+        "Data": {
+            "RegistrationStatus": "Duplicate",
+            "Evaluation": _order_commitment_row(persisted),
+            "Boundary": _order_commitment_boundary(),
+        },
+    }
+updates = supersede_open_order_commitment_evaluations(
+    evaluations=order_commitment_evaluations,
+    candidate=persisted,
+    superseded_at=observed_at,
+)
+for updated_id, updated_row in updates.items():
+    order_commitment_evaluations[updated_id] = deepcopy(updated_row)
+    _append_order_commitment_event(
+        evaluation=updated_row,
+        event_type="OrderCommitmentEvaluationSuperseded",
+        actor_id=actor_id,
+        occurred_at=observed_at,
+        causation_id=persisted["EvaluationID"],
+        details={
+            "FromStatus": "AwaitingPlannerDecision",
+            "ToStatus": "Superseded",
+            "SupersededByEvaluationID": persisted["EvaluationID"],
+        },
+    )
+order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+    persisted
+)
+_append_order_commitment_event(
+    evaluation=persisted,
+    event_type="OrderCommitmentReevaluated",
+    actor_id=actor_id,
+    occurred_at=observed_at,
+    causation_id=source["EvaluationID"],
+    details={
+        "ToStatus": "AwaitingPlannerDecision",
+        "Recommendation": persisted["Recommendation"]["Decision"],
+        "MaterialCheckEnabled": persisted["MaterialAssessment"][
+            "CheckEnabled"
+        ],
+        "MaterialEvidenceFreshnessStatus": persisted[
+            "MaterialAssessment"
+        ]["OperationalStateFreshnessStatus"],
     },
 )
-```
+~~~
 
-Do not mark the old row stale in this failing request; a 409 write is rolled back by middleware. The next explicit re-evaluation preserves history and supersedes it.
+Both events use `observed_at` and `actor_id` captured once. Event details are limited to from/to status, superseding ID, recommendation, material-check enabled, and freshness status. There is no material-window request field; `_build_order_commitment_evaluation_from_state` resolves it from the selected baseline's frozen policy.
 
-- [ ] **Step 4: Implement rejection and exact replay before new acceptance**
+- [ ] **Step 3: Verify and commit**
 
-If status is `Rejected`, return the existing result only when the persisted decision fingerprint equals the incoming decision fingerprint. If status is `AcceptedPendingFormalSchedule`, return the existing decision/batch only on the same exact decision fingerprint and a verifiable persisted Phase 0 result; otherwise return 409. This preserves Phase 0's lifetime one-batch-per-demand rule.
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiReevaluation --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiReevaluation -q --basetemp .tmp/pytest-mto-reevaluation-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: re-evaluate MTO commitment evidence"
+~~~
 
-For a new `Reject`, call `rejected_evaluation_record`, replace only the evaluation row, append one stable `OrderCommitmentRejected` event, and return sanitized detail. Create no shared planning objects.
+Expected: eight tests pass.
 
-- [ ] **Step 5: Apply option-2 acceptance inside the existing write boundary**
+---
 
-For a new acceptance:
+### Task 19: Decision Preconditions, Rejection, and Exact Replay
 
-```python
+**Files and anchors**
+- Modify `sdbr/api.py` inside `create_app`; begin real decision route.
+- Modify `tests/test_order_commitment_api.py` after re-evaluation tests.
+
+**IDs:** `BE-SDBR-010`.
+
+- [ ] **Step 1: Write precondition/replay tests**
+
+Add `TestOrderCommitmentApiDecisionReplay`:
+
+- `test_decision_requires_if_match_and_exact_evaluation_fingerprint`;
+- `test_reject_records_server_actor_and_time_without_phase0_rows`;
+- `test_exact_reject_replay_returns_same_record_without_duplicate_event`;
+- `test_exact_accepted_replay_returns_same_verified_phase0_result`;
+- `test_same_decision_id_one_field_at_a_time_change_conflicts`;
+- `test_terminal_row_rejects_new_decision_id`;
+- `test_decision_event_and_record_share_one_server_time_and_actor`.
+
+Parameterize the one-field test over decision code, expected fingerprint, effective actor header, trimmed reason, CCR acknowledgement, and material acknowledgement.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay -q --basetemp .tmp/pytest-mto-decision-replay-red -p no:cacheprovider
+~~~
+
+Expected: seven logical tests fail because decision route is incomplete.
+
+- [ ] **Step 2: Enforce preconditions and one captured decision observation**
+
+~~~python
+if request.headers.get("if-match") is None:
+    return JSONResponse(
+        status_code=428,
+        content={
+            "Endpoint": endpoint,
+            "StatusCode": 428,
+            "Data": {
+                "Status": "OrderCommitmentPreconditionRequired"
+            },
+        },
+    )
+evaluation = order_commitment_evaluations.get(evaluation_id)
+if evaluation is None:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=404,
+        status="OrderCommitmentEvaluationNotFound",
+        message="Order commitment evaluation was not found.",
+    )
+if payload.ExpectedEvaluationFingerprint != evaluation[
+    "EvaluationFingerprint"
+]:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="OrderCommitmentEvaluationFingerprintMismatch",
+        message="Expected evaluation fingerprint does not match.",
+    )
+decision_at = server_utc_now()
+actor_id = _effective_actor_id(request, payload.DecidedBy)
+incoming_fingerprint = canonical_decision_fingerprint(
+    evaluation=evaluation,
+    decision_id=payload.DecisionID,
+    decision=payload.Decision,
+    actor_id=actor_id,
+    reason=payload.Reason,
+    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+)
+~~~
+
+Existing middleware handles numeric revision mismatch before route code. Do not reread/retry.
+
+- [ ] **Step 3: Implement exact terminal replay and rejection**
+
+For terminal status:
+
+~~~python
+persisted_decision = evaluation.get("Decision")
+if not isinstance(persisted_decision, dict):
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="OrderCommitmentDecisionEvidenceMissing",
+        message="Persisted decision evidence is missing.",
+    )
+if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
+    return _order_commitment_error(
+        endpoint=endpoint, status_code=409,
+        status="OrderCommitmentDecisionReplayConflict",
+        message="Decision replay content differs from persisted content.",
+    )
+if evaluation["Status"] == "AcceptedPendingFormalSchedule":
+    demand_id = str(evaluation["Decision"]["DemandCommitmentID"])
+    batch_id = str(evaluation["Decision"]["ReservationBatchID"])
+    demand = planning_demand_commitments.get(demand_id)
+    batch = planning_reservation_batches.get(batch_id)
+    if demand is None or batch is None:
+        return _order_commitment_error(
+            endpoint=endpoint, status_code=409,
+            status="OrderCommitmentDecisionReplayEvidenceMissing",
+            message="Persisted acceptance demand or batch is missing.",
+        )
+    if batch.get("DemandCommitmentID") != demand_id:
+        return _order_commitment_error(
+            endpoint=endpoint, status_code=409,
+            status="OrderCommitmentDecisionReplayEvidenceMismatch",
+            message="Persisted acceptance batch/demand linkage differs.",
+        )
+    if any(
+        capacity_id not in ccr_capacity_reservations
+        for capacity_id in batch.get("CapacityReservationIDs", [])
+    ):
+        return _order_commitment_error(
+            endpoint=endpoint, status_code=409,
+            status="OrderCommitmentDecisionReplayEvidenceMissing",
+            message="Persisted capacity reservation evidence is missing.",
+        )
+    if any(
+        allocation_id not in material_planning_allocations
+        for allocation_id in batch.get("MaterialAllocationIDs", [])
+    ):
+        return _order_commitment_error(
+            endpoint=endpoint, status_code=409,
+            status="OrderCommitmentDecisionReplayEvidenceMissing",
+            message="Persisted material allocation evidence is missing.",
+        )
+    processed_key = (
+        "PlanningReservationActivated:"
+        + str(persisted_decision["DecisionID"])
+    )
+    if processed_key not in processed_planning_event_keys:
+        return _order_commitment_error(
+            endpoint=endpoint, status_code=409,
+            status="OrderCommitmentDecisionReplayEvidenceMissing",
+            message="Persisted Phase 0 idempotency evidence is missing.",
+        )
+return {
+    "Endpoint": endpoint,
+    "StatusCode": 200,
+    "Data": {
+        "Evaluation": _order_commitment_row(evaluation),
+        "Status": evaluation["Status"],
+        "DemandCommitmentID": persisted_decision.get(
+            "DemandCommitmentID"
+        ),
+        "ReservationBatchID": persisted_decision.get(
+            "ReservationBatchID"
+        ),
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    },
+}
+~~~
+
+For new `Reject`:
+
+~~~python
+updated = rejected_evaluation_record(
+    evaluation=evaluation,
+    decision_id=payload.DecisionID,
+    decision="Reject",
+    decided_by=actor_id,
+    decided_at=decision_at,
+    reason=payload.Reason,
+    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+)
+order_commitment_evaluations[evaluation_id] = updated
+_append_order_commitment_event(
+    evaluation=updated,
+    event_type="OrderCommitmentRejected",
+    actor_id=actor_id,
+    occurred_at=decision_at,
+    decision_id=payload.DecisionID.strip(),
+    causation_id=payload.DecisionID.strip(),
+    details={
+        "FromStatus": "AwaitingPlannerDecision",
+        "ToStatus": "Rejected",
+        "DecisionCode": "Reject",
+        "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+        "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+    },
+)
+~~~
+
+Rejection creates no shared demand/reservation or external state.
+
+- [ ] **Step 4: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiDecisionReplay -q --basetemp .tmp/pytest-mto-decision-replay-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: record replay-safe MTO decisions"
+~~~
+
+Expected: exact replay is stable and every one-field change returns 409.
+
+---
+
+### Task 20: Relevant-State Staleness Gate
+
+**Files and anchors**
+- Modify `sdbr/api.py` in the acceptance branch of the decision route.
+- Modify `tests/test_order_commitment_api.py` after replay tests.
+
+**IDs:** `BE-SDBR-008` through `BE-SDBR-010`.
+
+- [ ] **Step 1: Write exact relevant/unrelated change tests**
+
+Add `TestOrderCommitmentApiStaleness`:
+
+- `test_exact_assessed_0800_1600_capacity_change_marks_evaluation_stale`;
+- `test_same_resource_different_window_does_not_mark_evaluation_stale`;
+- `test_unrelated_resource_change_does_not_mark_evaluation_stale`;
+- `test_relevant_requirement_item_location_change_marks_stale`;
+- `test_unrelated_item_location_change_remains_eligible_after_revision_refresh`;
+- `test_new_latest_snapshot_marks_latest-mode_evaluation_stale`;
+- `test_explicit_snapshot_remains_selected_until_its_freshness_changes`;
+- `test_fresh_to_stale_time_boundary_blocks_acceptance`.
+
+For unrelated tests, mutate/save store, fetch the current revision, and submit that current revision. This isolates business staleness from global revision staleness.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiStaleness -q --basetemp .tmp/pytest-mto-stale-red -p no:cacheprovider
+~~~
+
+Expected: eight failures because acceptance does not re-evaluate.
+
+- [ ] **Step 2: Rebuild the exact persisted policy before any mutation**
+
+~~~python
+material = evaluation["MaterialAssessment"]
+requested_snapshot_id = (
+    material.get("RequestedOperationalStateSnapshotID")
+    if material["SnapshotSelectionMode"] == "Explicit"
+    else None
+)
+current = _build_order_commitment_evaluation_from_state(
+    order=evaluation["Order"],
+    evaluated_at=decision_at,
+    check_material_availability=material["CheckEnabled"],
+    material_check_skip_reason=material.get("SkipReason"),
+    requested_operational_state_snapshot_id=requested_snapshot_id,
+)
+if isinstance(current, JSONResponse):
+    return current
+stale = any((
+    current["BasisFingerprint"] != evaluation["BasisFingerprint"],
+    current["OrderContentFingerprint"] != evaluation[
+        "OrderContentFingerprint"
+    ],
+    current["ProtectionPolicy"] != evaluation["ProtectionPolicy"],
+    current["ShadowSchedule"]["Algorithm"] != evaluation[
+        "ShadowSchedule"
+    ]["Algorithm"],
+    current["MaterialAssessment"]["CheckEnabled"] != material[
+        "CheckEnabled"
+    ],
+    current["MaterialAssessment"].get("SkipReason") != material.get(
+        "SkipReason"
+    ),
+))
+if stale:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "Endpoint": endpoint,
+            "StatusCode": 409,
+            "Data": {
+                "Status": "OrderCommitmentEvaluationStale",
+                "EvaluationID": evaluation_id,
+                "Message": (
+                    "Relevant capacity, material, schedule, calendar, "
+                    "configuration, release, or snapshot evidence changed."
+                ),
+            },
+        },
+    )
+~~~
+
+Do not modify the old row on a stale request. Middleware rollback preserves all state. Only explicit re-evaluation creates/supersedes evidence.
+
+- [ ] **Step 3: Verify and commit**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiStaleness --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiStaleness -q --basetemp .tmp/pytest-mto-stale-green -p no:cacheprovider
+git add -- sdbr/api.py tests/test_order_commitment_api.py
+git commit -m "feat: reject stale MTO commitment decisions"
+~~~
+
+Expected: only exact relevant state invalidates an evaluation.
+
+---
+
+### Task 21: Atomic Option-2 Acceptance and Deep Authority Boundaries
+
+**Files and anchors**
+- Modify `sdbr/api.py` in the acceptance branch and `planning_reservation_workbench`.
+- Modify `tests/test_order_commitment_api.py` after staleness tests.
+
+**IDs:** `BE-SDBR-006` through `BE-SDBR-010`.
+
+- [ ] **Step 1: Write atomicity, concurrency, and authority tests**
+
+Add this exact test helper:
+
+~~~python
+AUTHORITY_GUARD_FIELDS = (
+    "master_data_versions",
+    "planning_runs",
+    "operating_model_configurations",
+    "ddsop_config_inbound_messages",
+    "ddsop_feedback_outbound_messages",
+    "ddsop_runtime_planning_input_messages",
+    "ddsop_runtime_planning_input_packages",
+    "ddsop_runtime_feedback_correlations",
+    "supplier_identity_source_inbound_messages",
+    "production_inventory_quality_inbound_messages",
+    "execution_object_evidence_inbound_messages",
+    "integration_messages",
+    "release_authorizations",
+    "release_decision_packages",
+    "execution_events",
+)
+
+def _authority_state_snapshot(store):
+    return {
+        field: deepcopy(getattr(store, field))
+        for field in AUTHORITY_GUARD_FIELDS
+    }
+~~~
+
+Add `TestOrderCommitmentApiAcceptance`:
+
+- `test_acceptance_atomically_creates_only_mto_phase0_rows`;
+- `test_conditional_recommended_date_creates_pending_material_and_zero_allocations`;
+- `test_decision_record_phase0_event_and_mto_event_share_server_actor_and_time`;
+- `test_acceptance_response_is_accepted_pending_formal_schedule_and_not_performed_boundaries`;
+- `test_acceptance_creates_no_planning_run_and_does_not_change_existing_publication`;
+- `test_intake_reevaluation_rejection_and_acceptance_deep_preserve_authority_state`;
+- `test_two_clients_one_revision_yield_one_success_one_revision_conflict`;
+- `test_forced_save_failure_restores_all_mto_phase0_event_key_and_revision_state`;
+- `test_phase0_shared_read_row_exposes_only_evaluation_promise_and_material_status`;
+- `test_viewer_worker_forbidden_and_planner_admin_allowed_to_accept`.
+
+The deep test snapshots before each of the four operations and asserts equality after. For acceptance, only MTO evaluation/event and Phase 0 collections may differ; every `AUTHORITY_GUARD_FIELDS` value must remain deeply equal.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiAcceptance -q --basetemp .tmp/pytest-mto-acceptance-api-red -p no:cacheprovider
+~~~
+
+Expected: ten failures because acceptance write is absent.
+
+- [ ] **Step 2: Apply one write set with one actor/time**
+
+~~~python
 write_set = prepare_mto_acceptance(
     evaluation=evaluation,
     existing_commitments=planning_demand_commitments,
     decision_id=payload.DecisionID,
     decision=payload.Decision,
-    decided_by=_effective_actor_id(request, payload.DecidedBy),
-    decided_at=server_utc_now(),
+    decided_by=actor_id,
+    decided_at=decision_at,
     reason=payload.Reason,
     ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
     material_risk_acknowledged=payload.MaterialRiskAcknowledged,
@@ -2029,516 +3231,1337 @@ updated = accepted_evaluation_record(
     write_set=write_set,
     decision_id=payload.DecisionID,
     decision=payload.Decision,
-    decided_by=_effective_actor_id(request, payload.DecidedBy),
-    decided_at=server_utc_now(),
+    decided_by=actor_id,
+    decided_at=decision_at,
     reason=payload.Reason,
     ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
     material_risk_acknowledged=payload.MaterialRiskAcknowledged,
 )
 order_commitment_evaluations[evaluation_id] = updated
-```
+_append_order_commitment_event(
+    evaluation=updated,
+    event_type="OrderCommitmentAccepted",
+    actor_id=actor_id,
+    occurred_at=decision_at,
+    decision_id=payload.DecisionID.strip(),
+    reservation_batch_id=write_set.batch["ReservationBatchID"],
+    causation_id=payload.DecisionID.strip(),
+    details={
+        "FromStatus": "AwaitingPlannerDecision",
+        "ToStatus": "AcceptedPendingFormalSchedule",
+        "DecisionCode": payload.Decision,
+        "AcceptedPromiseAt": updated["Decision"]["AcceptedPromiseAt"],
+        "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+        "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+    },
+)
+~~~
 
-Append `OrderCommitmentAccepted` after the shared write-set call. If any domain error occurs, map its `.status` to a structured 409. Existing middleware's complete snapshot/restore and SQLite save transaction guarantee all-or-nothing persistence; do not add a nested `atomic_update` while `state_admission` holds the store lock.
+Map domain errors by `.status` to 409. Do not add nested `atomic_update`; `persist_successful_writes` already holds the state admission, snapshots complete state, saves once, and restores on error.
 
 Return:
 
-```python
+~~~python
 {
     "Endpoint": endpoint,
     "StatusCode": 200,
     "Data": {
-        "Evaluation": sanitized_row,
-        "DemandCommitmentID": write_set.demand_commitment["DemandCommitmentID"],
+        "Evaluation": _order_commitment_row(updated),
+        "DemandCommitmentID": write_set.demand_commitment[
+            "DemandCommitmentID"
+        ],
         "ReservationBatchID": write_set.batch["ReservationBatchID"],
-        "CapacityReservationIDs": list(write_set.batch["CapacityReservationIDs"]),
-        "MaterialAllocationIDs": list(write_set.batch["MaterialAllocationIDs"]),
+        "CapacityReservationIDs": list(
+            write_set.batch["CapacityReservationIDs"]
+        ),
+        "MaterialAllocationIDs": list(
+            write_set.batch["MaterialAllocationIDs"]
+        ),
         "Status": "AcceptedPendingFormalSchedule",
         "ExternalOrderAcceptance": "NotPerformed",
         "PlanningRunCreation": "NotPerformed",
         "ProductionMutation": "NotPerformed",
     },
 }
-```
+~~~
 
-- [ ] **Step 6: Expose MTO linkage in the existing shared reservation read model**
+- [ ] **Step 3: Extend only the shared sanitized reservation row**
 
-When `planning_reservation_workbench()` enriches a batch from its demand commitment, add sanitized `OrderCommitmentEvaluationID`, `AcceptedPromiseAt`, and `MaterialCommitmentStatus`. Do not add `PendingMaterialRequirements`, fingerprints, or raw order content to the shared list row.
+At `planning_reservation_workbench`, when a batch resolves its demand, add:
 
-- [ ] **Step 7: Run the complete API transaction slice**
+~~~python
+{
+    "OrderCommitmentEvaluationID": demand.get(
+        "OrderCommitmentEvaluationID"
+    ),
+    "AcceptedPromiseAt": demand.get("AcceptedPromiseAt"),
+    "MaterialCommitmentStatus": demand.get(
+        "MaterialCommitmentStatus"
+    ),
+}
+~~~
 
-Run:
+Do not expose pending requirements, order payload, basis, or fingerprints.
 
-```powershell
-pytest tests/test_api.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_state_store.py -q -k "order_commitment or planning_reservation" --basetemp .tmp/pytest-mto-decision-green -p no:cacheprovider
-```
+- [ ] **Step 4: Verify focused transaction and full API regressions**
 
-Expected: PASS. Acceptance is atomic and internal; no test observes a new Planning Run, master-data mutation, integration message, DDAE feedback, ERP/WMS allocation claim, or MES output.
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiAcceptance --collect-only -q
+pytest tests/test_order_commitment_api.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_state_store.py -q --basetemp .tmp/pytest-mto-acceptance-api-green -p no:cacheprovider
+pytest tests/test_api.py -q --basetemp .tmp/pytest-mto-existing-api-regression -p no:cacheprovider
+~~~
 
-- [ ] **Step 8: Commit the planner-decision transaction**
+Expected: ten class tests and both regression commands pass.
 
-```powershell
-git add -- sdbr/api.py tests/test_api.py
+- [ ] **Step 5: Commit**
+
+~~~powershell
+git add -- sdbr/api.py tests/test_order_commitment_api.py
 git commit -m "feat: activate MTO reservations on planner decision"
-```
+~~~
 
 ---
 
-### Task 7: Backend Integration Verification and Evidence
+### Task 22: Real MTO Acceptance-to-Planning-Run Bridge Compatibility
 
-**Files:**
-- Modify: `docs/backend-specification.md`
+**Files and anchors**
+- Modify `tests/test_planning_run_reservation_bridge.py` after existing completed/failed transition tests.
+- No production code change.
 
-**Interfaces:**
-- Verifies the complete `BE-SDBR-006` through `BE-SDBR-010` path and preserved `BE-RUN-011` bridge.
-- Does not implement UI in this task.
+**IDs:** `BE-SDBR-006` through `BE-SDBR-010`, `BE-RUN-011`.
 
-- [ ] **Step 1: Run compile and focused backend suites**
+- [ ] **Step 1: Write a test starting from the real MTO write set**
 
-Run:
+Add `TestMtoAcceptancePlanningRunBridge` with:
 
-```powershell
+- `test_explicit_planning_run_selection_freezes_and_converts_mto_acceptance`;
+- `test_explicit_planning_run_failure_preserves_mto_reservation_as_held`.
+
+Fixture flow:
+
+~~~python
+evaluation = {
+    "EvaluationID": "OCE-MTO-BRIDGE",
+    "EvaluationFingerprint": "sha256:mto-bridge",
+    "Status": "AwaitingPlannerDecision",
+    "Order": {
+        "SourceSystem": "MockERP",
+        "SourceObjectType": "CustomerOrder",
+        "OrderID": "SO-BRIDGE",
+        "OrderVersion": "1",
+        "DemandLineID": "10",
+        "PlanningOrderID": "SO-BRIDGE:10",
+        "ProductID": "FG-1",
+        "LocationID": "MAIN",
+        "Quantity": 1.0,
+        "Uom": "EA",
+        "RequestedDueAt": "2026-07-20T18:00:00+00:00",
+        "BusinessPriority": 10,
+        "RoutingID": "PRIMARY",
+        "TraceID": "TRACE-SO-BRIDGE-10",
+    },
+    "Basis": {
+        "BaselinePlanningRunID": "RUN-BASELINE",
+        "OperatingModelConfigurationID": None,
+    },
+    "ShadowSchedule": {
+        "Status": "OnTime",
+        "RequestedDateAssessment": {
+            "Feasible": True,
+            "PromiseAt": "2026-07-20T18:00:00+00:00",
+            "ReservationRequests": [{
+                "ReservationLineID": (
+                    "SO-BRIDGE:10:CCR-CUT:"
+                    "2026-07-20T08:00:00+00:00"
+                ),
+                "OrderID": "SO-BRIDGE:10",
+                "OperationID": "SO-BRIDGE:10:CCR-CUT",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": "2026-07-20T08:00:00+00:00",
+                "WindowEndAt": "2026-07-20T16:00:00+00:00",
+                "ReservedMinutes": 60,
+                "LatestAllowedCompletionAt": (
+                    "2026-07-20T16:00:00+00:00"
+                ),
+            }],
+        },
+    },
+    "MaterialAssessment": {
+        "Status": "Feasible",
+        "AllocationRequests": [{
+            "RequirementLineID": "SO-BRIDGE:10:RM-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "Uom": "EA",
+            "AllocatedQty": 5.0,
+            "SupplySourceType": "OnHand",
+            "MaterialSnapshotID": "OPS-BRIDGE",
+        }],
+        "PendingRequirements": [],
+    },
+    "Recommendation": {
+        "AllowedActions": [
+            "AcceptRequestedDate", "Reevaluate", "Reject"
+        ],
+        "RequiresCcrAcknowledgement": False,
+        "RequiresMaterialAcknowledgement": False,
+    },
+}
+write_set = prepare_mto_acceptance(
+    evaluation=evaluation,
+    existing_commitments={},
+    decision_id="DEC-MTO-BRIDGE",
+    decision="AcceptRequestedDate",
+    decided_by="planner-bridge",
+    decided_at=datetime(2026, 7, 11, 8, tzinfo=UTC),
+    reason="Bridge compatibility acceptance.",
+    ccr_risk_acknowledged=False,
+    material_risk_acknowledged=False,
+)
+commitments = {}
+batches = {}
+capacities = {}
+materials = {}
+events = []
+processed_keys = set()
+planning_runs = {}
+apply_reservation_write_set(
+    write_set=write_set,
+    commitments=commitments,
+    batches=batches,
+    capacity_reservations=capacities,
+    material_allocations=materials,
+    events=events,
+    processed_event_keys=processed_keys,
+)
+assert planning_runs == {}
+planning_run = {
+    "RunID": "RUN-MTO-BRIDGE",
+    "PlanningReservationBatchIDs": [
+        write_set.batch["ReservationBatchID"]
+    ],
+}
+frozen = freeze_planning_reservations(
+    batch_ids=planning_run["PlanningReservationBatchIDs"],
+    demand_commitments=commitments,
+    batches=batches,
+    capacity_reservations=capacities,
+    material_allocations=materials,
+)
+~~~
+
+Completed schedule evidence is:
+
+~~~python
+{
+    "GanttRows": [{
+        "ResourceID": "CCR-1",
+        "Bars": [{
+            "OrderID": "SO-BRIDGE:10",
+            "OperationID": "SO-BRIDGE:10:CCR-CUT",
+            "Start": "2026-07-20T08:00:00+00:00",
+            "End": "2026-07-20T09:00:00+00:00",
+            "DurationMinutes": 60,
+        }],
+    }],
+}
+~~~
+
+Call `transition_planning_reservations_for_run` with explicit batch IDs, frozen graph, and schedule; assert batch/capacity become `ConvertedToScheduledOccupancy`, material remains active, and correlations match. In a separate deep-copied graph call status `Failed` with no schedule; assert batch/capacity/material are `HeldForPlanningError`.
+
+Also assert acceptance itself created no `planning_run`; the test's local `planning_run` dict is the first and only explicit Planning Run bridge action.
+
+~~~powershell
+pytest tests/test_planning_run_reservation_bridge.py::TestMtoAcceptancePlanningRunBridge -q --basetemp .tmp/pytest-mto-bridge-red -p no:cacheprovider
+~~~
+
+Expected: both compatibility tests PASS against the already implemented MTO domain and Phase 0 bridge. If either fails, correct the earlier MTO correlation/write-set implementation before committing this test; do not add automatic Planning Run creation.
+
+- [ ] **Step 2: Run the real compatibility test and bridge regressions**
+
+~~~powershell
+pytest tests/test_planning_run_reservation_bridge.py::TestMtoAcceptancePlanningRunBridge --collect-only -q
+pytest tests/test_planning_run_reservation_bridge.py -q --basetemp .tmp/pytest-mto-bridge-green -p no:cacheprovider
+~~~
+
+Expected: two class tests and the entire bridge file pass. No application edit is needed.
+
+- [ ] **Step 3: Commit**
+
+~~~powershell
+git add -- tests/test_planning_run_reservation_bridge.py
+git commit -m "test: prove MTO Planning Run bridge compatibility"
+~~~
+
+---
+
+### Task 23: Backend Verification and Evidence at Version 2.81
+
+**Files and anchors**
+- Modify `docs/backend-specification.md` at `BE-SDBR-010`, its acceptance record, header, and change-log head.
+
+**IDs:** all backend IDs in this plan.
+
+- [ ] **Step 1: Run syntax and exact focused collection**
+
+~~~powershell
 python -m compileall -q sdbr
-pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py tests/test_api.py -q -k "order_commitment or ccr_shadow or planning_commitment or planning_reservation or ccr_planned_load" --basetemp .tmp/pytest-mto-order-commitment-backend -p no:cacheprovider
-```
+pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_order_commitment_api.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_order_commitment_api.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py -q --basetemp .tmp/pytest-mto-backend-focused -p no:cacheprovider
+~~~
 
-Expected: compile exits 0 with no output; focused tests pass. The only acceptable warning is the repository's existing Starlette `TestClient` / `httpx` deprecation warning, if still present.
+Expected: compile exits 0; collection names every class in Tasks 2-22; focused tests pass.
 
-- [ ] **Step 2: Run preserved business-path regressions**
+- [ ] **Step 2: Run preserved business paths**
 
-Run:
+~~~powershell
+pytest tests/test_scheduling_solver.py tests/test_schedule_output.py tests/test_release_candidates.py tests/test_release_authorization.py tests/test_material_state.py tests/test_sdbr_market_control.py tests/test_sdbr_what_if.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_planning_run_reservation_bridge.py tests/test_api.py -q --basetemp .tmp/pytest-mto-preserved-paths -p no:cacheprovider
+~~~
 
-```powershell
-pytest tests/test_scheduling_solver.py tests/test_schedule_output.py tests/test_release_candidates.py tests/test_release_authorization.py tests/test_material_state.py tests/test_sdbr_market_control.py tests/test_sdbr_what_if.py tests/test_planning_run_reservation_bridge.py tests/test_api.py -q --basetemp .tmp/pytest-mto-preserved-business-paths -p no:cacheprovider
-```
+Expected: all pass; only the repository's known Starlette/httpx warning is acceptable if still emitted.
 
-Expected: PASS. Light-MRP material coverage remains in `tests/test_material_state.py` and `tests/test_api.py`; this repository does not have a separate `tests/test_light_mrp.py` file.
+- [ ] **Step 3: Verify scope and forbidden mutations**
 
-- [ ] **Step 3: Verify scope and citation hygiene**
-
-Run:
-
-```powershell
-rg -n "BE-SDBR-010|UI-COMMIT-001" tests sdbr docs/backend-specification.md docs/ui-specification.md
-rg -n "ExternalOrderAcceptance|PlanningRunCreation|ProductionMutation|ReferenceFallback" sdbr tests
+~~~powershell
+rg -n "BE-SDBR-010|BE-RUN-011|UI-COMMIT-001" tests sdbr docs/backend-specification.md docs/ui-specification.md
+rg -n "ExternalOrderAcceptance|PlanningRunCreation|ProductionMutation|ReferenceFallback|ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES" sdbr tests
+rg -n "MaterialCheckWindowMinutes" sdbr/web/planner-workbench.js
 git diff --check
 git status --short
-```
+~~~
 
-Expected:
+Expected: first two scans find required citations/boundaries; the JavaScript material-window scan has no MTO request occurrence; no changed path is under the prohibited directories; diff check is clean.
 
-- new backend tests cite `BE-SDBR-010` and shared-ledger IDs where applicable;
-- no changed path is under `nofinish/` or `DDAE_INTERFACE_CONTRACT`;
-- no changed code adds a DDAE threshold field or external-order mutation;
-- `git diff --check` exits 0;
-- only intended MTO workflow files are modified.
+- [ ] **Step 4: Record only observed evidence**
 
-- [ ] **Step 4: Update backend status and repeatable evidence**
+Advance backend header to `2.81`, set `BE-SDBR-010` to `[PARTIAL]`, replace planned evidence with exact implemented paths/endpoints/tests, and append a `2.81` row. In the acceptance record, copy the exact commands and terminal summaries actually observed; do not predeclare counts.
 
-Change `BE-SDBR-010` from `[NOT-STARTED]` to `[PARTIAL]` and replace planned evidence with exact implemented files/endpoints/tests. Keep `[PARTIAL]` because the current adapter has only the reference threshold, external order authority is absent, formal Planning Run creation is explicit and separate, and production ERP/MES mutation is out of scope.
+Keep `[PARTIAL]` because approved CCR threshold intake, external formal-order authority, explicit later Planning Run, and ERP/MES authority remain outside this implementation.
 
-Update the dated acceptance record with:
+- [ ] **Step 5: Commit**
 
-- exact compile command and exit result;
-- exact focused and preserved-suite commands with observed pass/deselect/warning counts and elapsed time;
-- implemented endpoint list;
-- explicit proof that intake produced no demand/reservation and acceptance produced no Planning Run/integration message;
-- remaining `ReferenceFallback`, external authority, and formal scheduling boundaries.
-
-Do not invent counts before the commands run.
-
-- [ ] **Step 5: Commit backend evidence**
-
-```powershell
+~~~powershell
 git add -- docs/backend-specification.md
 git commit -m "docs: record MTO commitment backend evidence"
-```
+~~~
 
 ---
 
-### Task 8: UI-COMMIT-001 Order Commitment Workbench and Confirmation Gate
+### Task 24: UI Specification Development State and Semantic Shell
 
-**Files:**
-- Modify: `sdbr/web/planner-workbench.html`
-- Modify: `sdbr/web/planner-workbench.js`
-- Modify: `sdbr/web/planner-workbench.css`
-- Modify: `tests/test_api.py`
-- Modify: `docs/ui-specification.md`
+**Files and anchors**
+- Modify `docs/ui-specification.md` at `UI-COMMIT-001` and record 17.13.
+- Modify `sdbr/web/planner-workbench.html:20-62` nav, after `material-planning-view`, and near existing drawers/dialogs.
+- Modify `tests/test_api.py:5653` `test_planner_workbench_page_returns_semantic_application_shell`; add a focused MTO shell test nearby.
 
-**Interfaces:**
-- Consumes Task 5/6 list, detail, re-evaluation, and decision endpoints.
-- Captures `X-Workbench-Revision` from GET/detail and sends it as `If-Match` on decision.
-- Produces hash route `#order-commitments`, independent view `order-commitments-view`, detail drawer `order-commitment-detail`, and dialog `order-commitment-decision-dialog`.
-- This task is UI acceptance unit 13. After verification and the evidence commit, stop and request user confirmation; do not mark `用户已确认` without the user's response.
+**IDs:** `UI-COMMIT-001`, `BE-SDBR-010`.
 
-- [ ] **Step 1: Change UI status to development before UI code**
+- [ ] **Step 1: Move only unit 13 to development**
 
-In `docs/ui-specification.md`, change only `UI-COMMIT-001` and the 17.13 record from `未开始` to `开发中`. Do not change any unrelated pending UI item.
+Change `UI-COMMIT-001` and record 17.13 from `未开始` to `开发中`. Do not change any other UI status.
 
-- [ ] **Step 2: Write failing static UI acceptance tests**
+- [ ] **Step 2: Replace the brittle nav count with exact sequence assertions**
 
-Add to `tests/test_api.py`:
+Add `import re` and update the existing shell test:
 
-```python
-# UI-COMMIT-001 / BE-SDBR-010
-def test_planner_workbench_page_exposes_order_commitment_option2_workflow():
-    client = TestClient(create_app())
+~~~python
+routes = re.findall(
+    r'<a class="nav-item"[^>]+data-route="([^"]+)"[^>]+data-nav-help>',
+    html,
+)
+indices = re.findall(
+    r'<span class="nav-index" aria-hidden="true">([^<]+)</span>',
+    html,
+)
+assert routes == [
+    "overview", "operational-metrics", "data-readiness",
+    "material-planning", "order-commitments", "planning-runs",
+    "schedule-results", "release-management", "buffer-board",
+    "dispatch-suggestions", "exceptions", "calendar",
+    "administration", "public-demo",
+]
+assert indices == [
+    "01", "02", "03", "04", "05", "06", "07",
+    "08", "09", "10", "11", "12", "13", "D1",
+]
+assert routes.count("order-commitments") == 1
+assert len(routes) == len(set(routes))
+~~~
 
-    html = client.get("/planner/workbench").text
-    script = client.get("/planner/assets/planner-workbench.js").text
-    css = client.get("/planner/assets/planner-workbench.css").text
+Add `TestOrderCommitmentUiShell.test_shell_has_independent_view_exact_columns_drawer_and_dialog` asserting IDs and all table headers, including `ReservationStatus` and `ExceptionStatus`.
 
-    assert 'data-route="order-commitments"' in html
-    assert 'id="order-commitments-view"' in html
-    assert 'id="order-commitment-table-body"' in html
-    assert 'id="order-commitment-empty"' in html
-    assert 'id="order-commitment-detail"' in html
-    assert 'id="order-commitment-material-check"' in html
-    assert 'id="order-commitment-material-skip-reason"' in html
-    assert 'id="order-commitment-decision-dialog"' in html
-    assert 'id="order-commitment-ccr-ack"' in html
-    assert 'id="order-commitment-material-ack"' in html
-    assert 'id="order-commitment-decision-reason"' in html
-    assert "/planner/workbench/order-commitments/workbench" in script
-    assert "/reevaluate`" in script
-    assert "/decision`" in script
-    assert '"If-Match": orderCommitmentRevision' in script
-    assert "AcceptedPendingFormalSchedule" in script
-    assert 'orderCommitmentMaterialGateReminder: "释放阶段仍执行物料硬门控"' in script
-    assert 'orderCommitmentExternalBoundary: "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES"' in script
-    assert "JSON.stringify(detail" not in script
-    assert ".order-commitment-workbench" in css
-    assert ".order-commitment-decision-grid" in css
+~~~powershell
+pytest tests/test_api.py::test_planner_workbench_page_returns_semantic_application_shell tests/test_api.py::TestOrderCommitmentUiShell::test_shell_has_independent_view_exact_columns_drawer_and_dialog -q --basetemp .tmp/pytest-mto-ui-shell-red -p no:cacheprovider
+~~~
 
+Expected: failures because route and view are absent.
 
-def test_semantic_shell_includes_order_commitment_route_and_updated_nav_count():
-    html = TestClient(create_app()).get("/planner/workbench").text
+- [ ] **Step 3: Add the exact route and workbench markup**
 
-    assert 'data-route="order-commitments"' in html
-    assert html.count("data-nav-help") == 14
-```
+Insert after material planning and renumber later numeric indices; preserve `D1`:
 
-Add an API-driven UI contract test that creates an evaluation, reads workbench/detail, conditionally accepts it, and asserts every field referenced by JavaScript exists. This prevents a static-only UI from drifting from the backend response.
-
-Run:
-
-```powershell
-pytest tests/test_api.py -q -k "order_commitment_option2 or semantic_shell_includes_order_commitment or order_commitment_ui_contract" --basetemp .tmp/pytest-mto-ui-red -p no:cacheprovider
-```
-
-Expected: FAIL because route/view/drawer/dialog/scripts/styles do not exist.
-
-- [ ] **Step 3: Add the independent navigation route and dense workbench markup**
-
-Insert the navigation item after Materials Planning and renumber subsequent numeric visual indices by one; keep `D1` unchanged:
-
-```html
-<a class="nav-item" href="#order-commitments" data-route="order-commitments" data-nav-help>
+~~~html
+<a class="nav-item" href="#order-commitments"
+   data-route="order-commitments" data-nav-help>
   <span class="nav-index" aria-hidden="true">05</span>
   <span data-i18n="navOrderCommitments">订单承诺</span>
 </a>
-```
+~~~
 
-Insert the view between material planning and Planning Runs:
+Add:
 
-```html
+~~~html
 <div id="order-commitments-view" class="order-commitments-view" hidden>
-  <section class="order-commitment-summary" aria-label="订单承诺摘要" data-i18n-aria-label="orderCommitmentSummary">
-    <div><span data-i18n="awaitingDecision">待决定</span><strong data-order-commitment-summary="AwaitingDecisionCount">0</strong></div>
-    <div><span data-i18n="confirmationRequired">需确认</span><strong data-order-commitment-summary="ConfirmationRequiredCount">0</strong></div>
-    <div><span data-i18n="materialPending">物料待确认</span><strong data-order-commitment-summary="MaterialPendingCount">0</strong></div>
-    <div><span data-i18n="acceptedPendingSchedule">已接受，待正式排程</span><strong data-order-commitment-summary="AcceptedPendingScheduleCount">0</strong></div>
+  <section class="order-commitment-summary"
+           aria-label="订单承诺摘要"
+           data-i18n-aria-label="orderCommitmentSummary">
+    <div><span data-i18n="awaitingDecision">待决定</span>
+      <strong data-order-commitment-summary="AwaitingDecisionCount">0</strong></div>
+    <div><span data-i18n="confirmationRequired">需确认</span>
+      <strong data-order-commitment-summary="ConfirmationRequiredCount">0</strong></div>
+    <div><span data-i18n="materialPending">物料待确认</span>
+      <strong data-order-commitment-summary="MaterialPendingCount">0</strong></div>
+    <div><span data-i18n="acceptedPendingSchedule">已接受，待正式排程</span>
+      <strong data-order-commitment-summary="AcceptedPendingScheduleCount">0</strong></div>
   </section>
-  <div id="order-commitment-error" class="persistent-error" role="alert" hidden>
-    <strong data-i18n="orderCommitmentLoadFailed">无法读取订单承诺评估</strong>
-    <span data-i18n="orderCommitmentRetryAdvice">请刷新最新评估证据后重试。</span>
-  </div>
-  <section id="order-commitment-content" class="order-commitment-workbench" hidden>
+  <div id="order-commitment-error" class="persistent-error"
+       role="alert" hidden></div>
+  <section id="order-commitment-content"
+           class="order-commitment-workbench" hidden>
     <div class="compact-toolbar">
-      <label><span data-i18n="searchOrderOrProduct">搜索订单或产品</span><input id="order-commitment-search" type="search"></label>
-      <label><span data-i18n="status">状态</span><select id="order-commitment-status-filter"><option value="" data-i18n="allStatuses">全部状态</option></select></label>
-      <button id="refresh-order-commitments" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+      <label><span data-i18n="searchOrderOrProduct">搜索订单或产品</span>
+        <input id="order-commitment-search" type="search"></label>
+      <label><span data-i18n="status">状态</span>
+        <select id="order-commitment-status-filter">
+          <option value="" data-i18n="allStatuses">全部状态</option>
+        </select></label>
+      <button id="refresh-order-commitments" class="button secondary"
+              type="button" data-i18n="refresh">刷新</button>
     </div>
     <div class="table-scroll">
       <table id="order-commitment-table" class="data-table">
         <thead><tr>
-          <th data-i18n="order">订单</th><th data-i18n="product">产品</th>
-          <th data-i18n="requestedDueAt">请求交期</th><th data-i18n="earliestSafePromise">建议安全日期</th>
-          <th data-i18n="ccrLoadBeforeAfter">CCR 负荷前后</th><th data-i18n="protectionThresholdSource">保护线来源</th>
-          <th data-i18n="materialStatus">物料状态</th><th data-i18n="recommendation">建议</th>
-          <th data-i18n="reservationStatus">预留状态</th><th data-i18n="actions">操作</th>
+          <th data-i18n="order">订单</th>
+          <th data-i18n="product">产品</th>
+          <th data-i18n="requestedDueAt">请求交期</th>
+          <th data-i18n="earliestSafePromise">建议安全日期</th>
+          <th data-i18n="ccrLoadBeforeAfter">CCR 负荷前后</th>
+          <th data-i18n="protectionThresholdSource">保护线来源</th>
+          <th data-i18n="materialStatus">物料状态</th>
+          <th data-i18n="recommendation">建议</th>
+          <th data-i18n="reservationStatus">预留状态</th>
+          <th data-i18n="exceptionStatus">异常状态</th>
+          <th data-i18n="actions">操作</th>
         </tr></thead>
         <tbody id="order-commitment-table-body"></tbody>
       </table>
     </div>
   </section>
-  <div id="order-commitment-empty" class="table-empty" hidden>
-    <strong data-i18n="noOrderCommitments">尚无订单承诺评估</strong>
-    <span data-i18n="orderCommitmentIntakeHint">新订单通过 Mock API 进入后会自动评估。</span>
-  </div>
+  <div id="order-commitment-empty" class="table-empty" hidden></div>
 </div>
-```
+~~~
 
-Do not add an order-entry form to this UI scope. New orders enter through the canonical Mock API; the page is the planner's assessment and decision workbench.
+- [ ] **Step 4: Add detail and decision containers**
 
-- [ ] **Step 4: Add detail, material re-evaluation, and option-2 decision markup**
+Add one `aside#order-commitment-detail` with:
 
-Add one standard side drawer:
+~~~html
+<div class="drawer-heading">
+  <div><span class="panel-kicker"
+             data-i18n="orderCommitmentEvaluation">订单承诺评估</span>
+    <h2 id="order-commitment-detail-title">-</h2></div>
+  <button id="close-order-commitment-detail" class="icon-button"
+          type="button" data-i18n-aria-label="close">&#10005;</button>
+</div>
+<div id="order-commitment-detail-content"
+     class="run-detail-content"></div>
+<form id="order-commitment-reevaluation-form"
+      class="order-commitment-reevaluation" hidden>
+  <label class="capability-toggle">
+    <input id="order-commitment-material-check" type="checkbox" checked>
+    <span data-i18n="checkMaterialAvailability">检查物料计划可用性</span>
+  </label>
+  <label id="order-commitment-material-skip-field" hidden>
+    <span data-i18n="materialSkipReason">跳过原因</span>
+    <textarea id="order-commitment-material-skip-reason" rows="3"></textarea>
+  </label>
+  <p data-i18n="orderCommitmentMaterialGateReminder">
+    释放阶段仍执行物料硬门控
+  </p>
+  <button id="reevaluate-order-commitment" class="button secondary"
+          type="submit" data-i18n="reevaluate">重新评估</button>
+</form>
+<div id="order-commitment-actions" class="wizard-actions"></div>
+~~~
 
-```html
-<aside id="order-commitment-detail" class="issues-drawer run-detail" aria-labelledby="order-commitment-detail-title" aria-hidden="true" hidden>
-  <div class="drawer-heading">
-    <div><span class="panel-kicker" data-i18n="orderCommitmentEvaluation">订单承诺评估</span><h2 id="order-commitment-detail-title">-</h2></div>
-    <button id="close-order-commitment-detail" class="icon-button" type="button" aria-label="关闭" data-i18n-aria-label="close">&#10005;</button>
-  </div>
-  <div id="order-commitment-detail-content" class="run-detail-content"></div>
-  <form id="order-commitment-reevaluation-form" class="order-commitment-reevaluation">
-    <label class="capability-toggle"><input id="order-commitment-material-check" type="checkbox" checked><span data-i18n="checkMaterialAvailability">检查物料计划可用性</span></label>
-    <label id="order-commitment-material-skip-field" hidden><span data-i18n="materialSkipReason">跳过原因</span><textarea id="order-commitment-material-skip-reason" rows="3"></textarea></label>
-    <p data-i18n="orderCommitmentMaterialGateReminder">释放阶段仍执行物料硬门控</p>
-    <button id="reevaluate-order-commitment" class="button secondary" type="submit" data-i18n="reevaluate">重新评估</button>
-  </form>
-  <div id="order-commitment-actions" class="wizard-actions"></div>
-</aside>
-```
+Add:
 
-Add a dedicated dialog rather than reusing the generic yes/no dialog because acknowledgements are conditional and auditable:
-
-```html
-<dialog id="order-commitment-decision-dialog" class="run-wizard compact-dialog" aria-labelledby="order-commitment-decision-title">
+~~~html
+<dialog id="order-commitment-decision-dialog"
+        class="run-wizard compact-dialog"
+        aria-labelledby="order-commitment-decision-title">
   <form id="order-commitment-decision-form" method="dialog">
-    <div class="drawer-heading"><div><span class="panel-kicker" data-i18n="plannerDecision">计划员决定</span><h2 id="order-commitment-decision-title">-</h2></div></div>
-    <div id="order-commitment-decision-summary" class="order-commitment-decision-grid"></div>
-    <label id="order-commitment-ccr-ack-field" hidden><input id="order-commitment-ccr-ack" type="checkbox"><span data-i18n="acknowledgeCcrRisk">我已复核 CCR 保护负荷风险</span></label>
-    <label id="order-commitment-material-ack-field" hidden><input id="order-commitment-material-ack" type="checkbox"><span data-i18n="acknowledgeMaterialPending">我确认物料仍待处理，且释放阶段继续硬门控</span></label>
-    <label><span data-i18n="decisionReason">决定原因</span><textarea id="order-commitment-decision-reason" rows="3" required></textarea></label>
-    <p class="inline-note" data-i18n="orderCommitmentExternalBoundary">不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES</p>
+    <div class="drawer-heading">
+      <div><span class="panel-kicker"
+                 data-i18n="plannerDecision">计划员决定</span>
+        <h2 id="order-commitment-decision-title">-</h2></div>
+    </div>
+    <div id="order-commitment-decision-summary"
+         class="order-commitment-decision-grid"></div>
+    <label id="order-commitment-ccr-ack-field" hidden>
+      <input id="order-commitment-ccr-ack" type="checkbox">
+      <span data-i18n="acknowledgeCcrRisk">
+        我已复核 CCR 保护负荷风险
+      </span>
+    </label>
+    <label id="order-commitment-material-ack-field" hidden>
+      <input id="order-commitment-material-ack" type="checkbox">
+      <span data-i18n="acknowledgeMaterialPending">
+        我确认物料仍待处理，且释放阶段继续硬门控
+      </span>
+    </label>
+    <label><span data-i18n="decisionReason">决定原因</span>
+      <textarea id="order-commitment-decision-reason"
+                rows="3" required></textarea>
+    </label>
+    <div id="order-commitment-decision-error"
+         class="persistent-error" role="alert" hidden></div>
+    <p class="inline-note"
+       data-i18n="orderCommitmentExternalBoundary">
+      不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES
+    </p>
     <div class="wizard-actions">
-      <button id="cancel-order-commitment-decision" class="button secondary" type="button" data-i18n="cancel">取消</button>
-      <button id="submit-order-commitment-decision" class="button primary" type="submit" data-i18n="confirm">确认</button>
+      <button id="cancel-order-commitment-decision"
+              class="button secondary" type="button"
+              data-i18n="cancel">取消</button>
+      <button id="submit-order-commitment-decision"
+              class="button primary" type="submit"
+              data-i18n="confirm">确认</button>
     </div>
   </form>
 </dialog>
-```
+~~~
 
-Increment the planner-workbench asset query version to `v=20260711-mto-order-commitment`.
+Increment HTML asset query versions to `v=20260711-mto-order-commitment`.
 
-- [ ] **Step 5: Add route, translations, state, and rendering**
+- [ ] **Step 5: Verify and commit**
 
-Add both Chinese and English keys for every new `data-i18n` value plus all backend statuses/decisions. At minimum include:
+~~~powershell
+pytest tests/test_api.py::test_planner_workbench_page_returns_semantic_application_shell tests/test_api.py::TestOrderCommitmentUiShell --collect-only -q
+pytest tests/test_api.py::test_planner_workbench_page_returns_semantic_application_shell tests/test_api.py::TestOrderCommitmentUiShell -q --basetemp .tmp/pytest-mto-ui-shell-green -p no:cacheprovider
+git add -- docs/ui-specification.md sdbr/web/planner-workbench.html tests/test_api.py
+git commit -m "feat: add MTO commitment workbench shell"
+~~~
 
-```javascript
-navOrderCommitments: "订单承诺",
-pageOrderCommitments: "订单承诺评估",
-descriptionOrderCommitments: "自动评估新订单的 CCR 与物料影响，由计划员决定是否接受。",
-orderCommitmentMaterialGateReminder: "释放阶段仍执行物料硬门控",
-orderCommitmentExternalBoundary: "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES",
-recommendation_RecommendAccept: "建议接受",
-recommendation_PlannerConfirmationRequired: "需计划员确认",
-recommendation_CapacityAcceptableMaterialPending: "产能可接受，物料待确认",
-recommendation_MaterialEvidenceRequired: "待物料确认",
-recommendation_RecommendLaterPromise: "建议调整交期",
-recommendation_DoNotRecommendAccept: "暂不建议接受",
-thresholdSource_ApprovedOperatingModel: "批准的运行模型保护线",
-thresholdSource_ReferenceFallback: "80% 默认参考，需确认",
-status_AcceptedPendingFormalSchedule: "已接受，待正式排程",
-status_AwaitingPlannerDecision: "待计划员决定",
-status_Superseded: "已由新评估替代",
-```
+Expected: exact route/index sequence and shell tests pass.
 
-Add corresponding English strings. Add the route:
+---
 
-```javascript
-"order-commitments": ["pageOrderCommitments", "descriptionOrderCommitments"],
-```
+### Task 25: Bilingual Read Flow, Exact Rows, and Safe Details
 
-Add state:
+**Files and anchors**
+- Modify `sdbr/web/planner-workbench.js:1-850` translations, `:859` `ROUTES`, `:900` state, `:979` `renderRoute`, and before `DOMContentLoaded`.
+- Modify `sdbr/web/planner-workbench.css` near existing data-table/drawer responsive rules.
+- Modify `tests/test_api.py` after `TestOrderCommitmentUiShell`.
+- Modify `tests/test_order_commitment_api.py` with a UI response-contract test.
 
-```javascript
+**IDs:** `UI-COMMIT-001`, `BE-SDBR-010`.
+
+- [ ] **Step 1: Write read-flow and translation tests**
+
+Add `TestOrderCommitmentUiReadFlow`:
+
+- `test_script_uses_workbench_detail_endpoints_and_revision_header`;
+- `test_every_backend_enum_has_exact_chinese_and_english_label`;
+- `test_render_uses_reservation_exception_and_allowed_actions_fields`;
+- `test_detail_renderer_has_no_json_stringify_or_raw_payload_path`.
+
+In `tests/test_order_commitment_api.py`, add
+`TestOrderCommitmentUiContract.test_api_ui_contract_contains_every_field_consumed_by_javascript`.
+Create one evaluation through intake, read workbench/detail, and assert
+`set(row) == set(ORDER_COMMITMENT_ROW_FIELDS)`,
+`set(detail) == set(DETAIL_FIELDS)`, and that every nested field read by
+the JavaScript whitelists is present.
+
+~~~powershell
+pytest tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_order_commitment_api.py::TestOrderCommitmentUiContract -q --basetemp .tmp/pytest-mto-ui-read-red -p no:cacheprovider
+~~~
+
+Expected: read-flow tests fail because JS/CSS are absent.
+
+- [ ] **Step 2: Add exact bilingual enum labels**
+
+Both language maps must cover this table; fallback renders localized `unknownStatus`, never the raw enum:
+
+| Enum | Chinese | English |
+| --- | --- | --- |
+| `RecommendAccept` | 建议接受 | Recommend accept |
+| `PlannerConfirmationRequired` | 需计划员确认 | Planner confirmation required |
+| `CapacityAcceptableMaterialPending` | 产能可接受，物料待确认 | Capacity acceptable, material pending |
+| `MaterialEvidenceRequired` | 待物料确认 | Material evidence required |
+| `RecommendLaterPromise` | 建议调整交期 | Recommend later promise |
+| `DoNotRecommendAccept` | 暂不建议接受 | Do not recommend acceptance |
+| `Feasible` | 物料可行 | Material feasible |
+| `SkippedPendingConfirmation` | 物料待确认（已跳过检查） | Material pending (check skipped) |
+| `EvidenceInsufficient` | 物料证据不足 | Material evidence insufficient |
+| `Shortage` | 物料短缺 | Material shortage |
+| `AwaitingPlannerDecision` | 待计划员决定 | Awaiting planner decision |
+| `AcceptedPendingFormalSchedule` | 已接受，待正式排程 | Accepted, pending formal schedule |
+| `Rejected` | 已拒绝 | Rejected |
+| `Superseded` | 已由新评估替代 | Superseded by newer evaluation |
+| `NotReserved` | 尚未预留 | Not reserved |
+| `ActivePlanReservation` | 计划预留有效 | Active plan reservation |
+| `LinkedToFormalOrder` | 已关联正式订单 | Linked to formal order |
+| `ConvertedToScheduledOccupancy` | 已转正式排程占用 | Converted to scheduled occupancy |
+| `HeldForPlanningError` | 排程异常待处理 | Held for planning error |
+| `ReservationEvidenceMissing` | 预留证据缺失 | Reservation evidence missing |
+| `None` | 无异常 | No exception |
+| `AssessmentBlocked` | 评估受阻 | Assessment blocked |
+| `MaterialEvidenceBlocked` | 物料证据受阻 | Material evidence blocked |
+| `PlanningErrorPending` | 排程异常待处理 | Planning error pending |
+| `ReferenceFallback` | 80% 默认参考，需确认 | 80% reference fallback; confirmation required |
+| `ApprovedOperatingModel` | 批准的运行模型保护线 | Approved operating-model threshold |
+| four acceptance actions | 接受请求日期 / 条件接受请求日期 / 接受建议日期 / 条件接受建议日期 | Accept requested / conditionally accept requested / accept recommended / conditionally accept recommended |
+| `Reevaluate` / `Reject` | 重新评估 / 拒绝 | Re-evaluate / Reject |
+
+- [ ] **Step 3: Add route/state/load/render**
+
+~~~javascript
+ROUTES["order-commitments"] = [
+  "pageOrderCommitments", "descriptionOrderCommitments"
+];
 let orderCommitmentData = null;
 let orderCommitmentRevision = null;
 let selectedOrderCommitment = null;
 let selectedOrderCommitmentAction = null;
-```
 
-Update `renderRoute` to hide/show/load `order-commitments-view`. Add `order-commitments` to navigation help automatically through `ROUTES`.
-
-Implement:
-
-```javascript
 async function loadOrderCommitments() {
-  const response = await fetch("/planner/workbench/order-commitments/workbench", { headers: { Accept: "application/json" } });
-  orderCommitmentRevision = response.headers.get("X-Workbench-Revision");
-  if (!response.ok) throw new Error("Order commitment workbench unavailable");
+  const response = await fetch(
+    "/planner/workbench/order-commitments/workbench",
+    { headers: { Accept: "application/json" } }
+  );
+  orderCommitmentRevision = response.headers.get(
+    "X-Workbench-Revision"
+  );
+  if (!response.ok) throw new Error("order-commitment-load-failed");
   orderCommitmentData = (await response.json()).Data;
   renderOrderCommitments();
 }
 
 async function openOrderCommitmentDetail(evaluationId) {
-  const response = await fetch(`/planner/workbench/order-commitments/${encodeURIComponent(evaluationId)}`);
-  orderCommitmentRevision = response.headers.get("X-Workbench-Revision") || orderCommitmentRevision;
-  if (!response.ok) throw new Error("Order commitment detail unavailable");
+  const response = await fetch(
+    "/planner/workbench/order-commitments/"
+      + encodeURIComponent(evaluationId),
+    { headers: { Accept: "application/json" } }
+  );
+  orderCommitmentRevision = response.headers.get(
+    "X-Workbench-Revision"
+  ) || orderCommitmentRevision;
+  if (!response.ok) throw new Error("order-commitment-detail-failed");
   selectedOrderCommitment = (await response.json()).Data;
   renderOrderCommitmentDetail();
   openSideDrawer("order-commitment-detail");
 }
-```
+~~~
 
-`renderOrderCommitments` must filter by order/product/status, use text plus status classes, render an explicit `ViewDetails` button, and show a real empty state. `renderOrderCommitmentDetail` must render business sections for capacity, material, recommendation, accepted reservation, audit, and a collapsed `<details class="technical-detail">`; it must never call `JSON.stringify` on the detail.
+`renderRoute` shows/loads this independent view. `renderOrderCommitments` filters order/product/status and renders every exact row column, including reservation and exception status plus a `ViewDetails` button. Use `textContent`/existing `textCell`, never `innerHTML` with server values.
 
-- [ ] **Step 6: Implement re-evaluation and revision-guarded decision UI**
+`renderOrderCommitmentDetail` creates business sections from whitelisted `Order`, `CapacityEvidence`, `MaterialEvidence`, `Recommendation`, `Decision`, `Reservation`, and `AuditHistory`, and a collapsed `<details class="technical-detail">` from `TechnicalDetails`. Do not call `JSON.stringify` on detail or any subsection.
 
-Material toggle behavior:
+- [ ] **Step 4: Add restrained responsive styles**
 
-```javascript
-function updateOrderCommitmentMaterialSkipField() {
-  const enabled = document.getElementById("order-commitment-material-check").checked;
-  document.getElementById("order-commitment-material-skip-field").hidden = enabled;
-  document.getElementById("order-commitment-material-skip-reason").required = !enabled;
+~~~css
+.order-commitment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
-```
-
-Re-evaluation sends the selected evaluation's baseline run, current toggle, reason, and window. If material checking is off and reason is blank, show an inline/error notification and do not call the API. On success, close/reopen the new detail and refresh the list; capture the new response revision.
-
-Decision submission must use:
-
-```javascript
-const response = await fetch(
-  `/planner/workbench/order-commitments/${encodeURIComponent(selectedOrderCommitment.EvaluationID)}/decision`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "If-Match": orderCommitmentRevision
-    },
-    body: JSON.stringify({
-      DecisionID: `DEC-${selectedOrderCommitment.EvaluationID}-${selectedOrderCommitmentAction}`,
-      Decision: selectedOrderCommitmentAction,
-      DecidedBy: "planner-1",
-      Reason: document.getElementById("order-commitment-decision-reason").value.trim(),
-      ExpectedEvaluationFingerprint: selectedOrderCommitment.TechnicalDetails.EvaluationFingerprint,
-      CcrRiskAcknowledged: document.getElementById("order-commitment-ccr-ack").checked,
-      MaterialRiskAcknowledged: document.getElementById("order-commitment-material-ack").checked
-    })
+.order-commitment-workbench .table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.order-commitment-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .order-commitment-summary,
+  .order-commitment-decision-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-);
-```
+  .order-commitment-workbench .compact-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #order-commitment-decision-dialog {
+    width: min(calc(100% - 24px), 640px);
+  }
+}
+~~~
 
-Before fetch, require a reason and any visible acknowledgement. On `409 StateStoreRevisionConflict` or `OrderCommitmentEvaluationStale`, keep the dialog state, show the localized stale message, refresh list/detail, and require the planner to choose again. Never auto-retry a decision. On success, close the dialog, refresh, and show `AcceptedPendingFormalSchedule` or `Rejected`.
+Use existing variables/radius. Add no gradients, blobs, negative letter spacing, nested cards, or page-level horizontal overflow.
 
-Bind all new controls in `DOMContentLoaded`, include `order-commitment-detail` in the drawer close list, and re-render the current workbench/detail on language change.
+- [ ] **Step 5: Verify and commit**
 
-- [ ] **Step 7: Add restrained responsive styles**
-
-Add selectors for `.order-commitments-view`, `.order-commitment-summary`, `.order-commitment-workbench`, `.order-commitment-reevaluation`, `.order-commitment-decision-grid`, and compact status/action rows. Follow existing variables and radius limits. Do not add gradients, decorative blobs, nested cards, negative letter spacing, or a new one-hue palette.
-
-Required layout behavior:
-
-- desktop summary uses four stable columns and the table scrolls inside its container;
-- drawer controls never overlap the fixed header;
-- labels wrap before controls shrink;
-- at `max-width: 900px`, summary becomes two columns, toolbar becomes one column, dialog width is `min(100% - 24px, 640px)`, and no page-level horizontal overflow appears;
-- status colors always include visible text.
-
-- [ ] **Step 8: Run static, syntax, focused, and full automated verification**
-
-Run:
-
-```powershell
+~~~powershell
 node --check sdbr/web/planner-workbench.js
-python -m compileall -q sdbr
-pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_state_store.py tests/test_sdbr_market_control.py tests/test_api.py -q -k "order_commitment or ccr_shadow" --basetemp .tmp/pytest-mto-ui-focused -p no:cacheprovider
-pytest -q --basetemp .tmp/pytest-full-mto-order-commitment -p no:cacheprovider
-git diff --check
-```
+pytest tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_order_commitment_api.py::TestOrderCommitmentUiContract --collect-only -q
+pytest tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_order_commitment_api.py::TestOrderCommitmentUiContract -q --basetemp .tmp/pytest-mto-ui-read-green -p no:cacheprovider
+git add -- sdbr/web/planner-workbench.js sdbr/web/planner-workbench.css tests/test_api.py tests/test_order_commitment_api.py
+git commit -m "feat: render MTO commitment evidence"
+~~~
 
-Expected: JavaScript/Python checks exit 0, focused and full suites pass, and diff check is clean. Record actual counts and the existing warning accurately.
-
-- [ ] **Step 9: Perform browser verification on test state**
-
-Use the browser-control skill. Start a test-only server on an unused port (8765 unless occupied):
-
-```powershell
-$env:SDBR_ENVIRONMENT = "test"
-python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
-```
-
-Open `http://127.0.0.1:8765/planner/workbench#order-commitments`. Verify:
-
-1. 1280x720: navigation, title, summary, table, empty/error states, and drawer do not overlap or clip.
-2. 390x844: navigation drawer, summary, table container, detail, material controls, and decision dialog stay within viewport; page `scrollWidth` equals client width.
-3. Chinese/English switching updates route, table, statuses, acknowledgements, boundary copy, and detail labels while IDs remain unchanged.
-4. Keyboard focus can open the route and detail actions; dialog labels/checkboxes have visible focus.
-5. With an API-created evaluation, ordinary list/detail works, reference-threshold warning is visible, material opt-out requires reason, required acknowledgements block submit, and stale 409 is shown rather than retried.
-6. Accepted result reads “已接受，待正式排程” and still states that no external order, Planning Run, or ERP/MES mutation occurred.
-7. Browser console has no uncaught errors.
-
-Capture desktop and narrow screenshots in `.tmp/` for local evidence only; do not commit them unless the user separately requests durable visual artifacts. Stop the server after checks.
-
-- [ ] **Step 10: Update UI evidence and hold for user confirmation**
-
-Change `UI-COMMIT-001` and record 17.13 from `开发中` to `已验证待用户确认`. Add:
-
-- exact focused/full test commands and observed counts;
-- `node --check` and compile results;
-- desktop/narrow viewport results;
-- bilingual, keyboard, stale-state, material-toggle, and option-2 decision observations;
-- the local URL used;
-- unchanged boundary: no DDAE contract expansion, external acceptance, Planning Run creation, or production ERP/MES mutation.
-
-Do not write `用户已确认`.
-
-- [ ] **Step 11: Commit the UI acceptance unit and evidence**
-
-```powershell
-git add -- sdbr/web/planner-workbench.html sdbr/web/planner-workbench.js sdbr/web/planner-workbench.css tests/test_api.py docs/ui-specification.md
-git commit -m "feat: add MTO order commitment workbench"
-```
-
-- [ ] **Step 12: Stop at the repository confirmation gate**
-
-Report `UI-COMMIT-001`, commits, test evidence, and the view URL. Ask the user to confirm acceptance unit 13. Do not begin MTA workflow, external-order integration, formal-order scheduling injection, or any subsequent UI acceptance unit until the user responds.
+Expected: JS syntax and five read-flow/contract tests pass.
 
 ---
 
-## Requirement Coverage Map
+### Task 26: Re-evaluation Controls and Terminal Action Gating
 
-| Approved requirement | Implementation task | Repeatable evidence |
-|---|---|---|
-| New order triggers assessment automatically | Task 5 intake endpoint | `test_order_intake_automatically_evaluates_but_creates_no_commitment_or_reservation` |
-| System recommends; planner decides | Tasks 3, 5, 6 | recommendation matrix, no-write intake assertions, option-2 decision endpoint |
-| On-time but protected-load threshold exceeded requires confirmation | Tasks 2, 3, 6, 8 | threshold test, acknowledgement rejection test, UI checkbox test |
-| Current missing DDAE threshold uses marked 80% reference only | Tasks 1, 3, 5, 7 | pure reference-policy test, API fallback assertion, scope scan |
-| Material check is default | Tasks 3 and 5 | default material API/domain tests |
-| Planner may opt out with reason | Tasks 3, 5, 6, 8 | re-evaluation reason test, conditional acceptance test, UI required field |
-| Material opt-out cannot claim feasibility or bypass release | Tasks 3, 6, 7, 8 | zero-allocation/pending-requirement assertions and preserved release regressions |
-| Accepted option-2 action creates shared CCR reservation | Task 6 | atomic acceptance API test and Phase 0 suites |
-| Material pass creates shared planning allocation | Tasks 3 and 6 | Phase 0 write-set and API allocation assertions |
-| Stale evaluation cannot confirm | Task 6 | relevant-ledger drift and `If-Match` tests |
-| Concurrent confirmations cannot double promise | Task 6 | one-success/one-revision-conflict concurrency test |
-| Duplicate messages/clicks are idempotent | Tasks 3, 5, 6 | duplicate intake and exact decision replay tests |
-| Planning success converts; failure preserves reservation | Task 7 | existing `tests/test_planning_run_reservation_bridge.py` in focused regression |
-| No DDAE contract expansion | Tasks 1, 5, 7 | reference-only adapter plus changed-path/content scans |
-| No automatic external acceptance | Tasks 5, 6, 8 | store assertions and explicit `NotPerformed` response/UI boundary |
-| No production ERP/MES mutation | Tasks 5, 6, 7, 8 | integration collections unchanged, full regression, boundary copy |
-| Independent planner workbench and user confirmation gate | Task 8 | static/UI contract tests, browser checks, `已验证待用户确认` stop |
+**Files and anchors**
+- Modify `sdbr/web/planner-workbench.js` at detail rendering and `DOMContentLoaded`.
+- Modify `tests/test_api.py` after UI read-flow tests.
+- Modify `tests/test_order_commitment_view.py` terminal-action coverage.
+
+**IDs:** `UI-COMMIT-001`, `BE-SDBR-010`.
+
+- [ ] **Step 1: Write action-gating and request-shape tests**
+
+Add `TestOrderCommitmentUiReevaluation`:
+
+- `test_reevaluation_form_is_driven_only_by_allowed_actions`;
+- `test_terminal_detail_has_no_reevaluation_or_decision_controls`;
+- `test_material_toggle_requires_reason_when_disabled`;
+- `test_reevaluation_request_contains_no_material_window`;
+- `test_success_refreshes_revision_list_and_new_detail`.
+
+Static assertions require the script to read `selectedOrderCommitment.Recommendation.AllowedActions`, and assert `MaterialCheckWindowMinutes` and `MaterialLookaheadMinutes` are absent from the MTO request builder.
+
+~~~powershell
+pytest tests/test_api.py::TestOrderCommitmentUiReevaluation tests/test_order_commitment_view.py::TestOrderCommitmentViewContract::test_terminal_rows_have_empty_allowed_actions -q --basetemp .tmp/pytest-mto-ui-reeval-red -p no:cacheprovider
+~~~
+
+Expected: UI tests fail because handlers/gates are absent.
+
+- [ ] **Step 2: Render controls from `AllowedActions` only**
+
+~~~javascript
+function orderCommitmentAllowedActions() {
+  return new Set(
+    selectedOrderCommitment?.Recommendation?.AllowedActions || []
+  );
+}
+
+function renderOrderCommitmentActions() {
+  const allowed = orderCommitmentAllowedActions();
+  const reevaluationForm = document.getElementById(
+    "order-commitment-reevaluation-form"
+  );
+  reevaluationForm.hidden = !allowed.has("Reevaluate");
+  const actions = document.getElementById("order-commitment-actions");
+  actions.replaceChildren();
+  [
+    "AcceptRequestedDate",
+    "ConditionallyAcceptRequestedDate",
+    "AcceptRecommendedDate",
+    "ConditionallyAcceptRecommendedDate",
+    "Reject"
+  ].filter((action) => allowed.has(action)).forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "Reject"
+      ? "button danger" : "button primary";
+    button.textContent = enumLabel("action", action);
+    button.addEventListener("click", () => {
+      openOrderCommitmentDecision(action);
+    });
+    actions.append(button);
+  });
+}
+~~~
+
+Because terminal backend details return `AllowedActions=[]`, accepted, rejected, and superseded details are read-only. Exact replay remains an API behavior and is never shown as an active UI action.
+
+- [ ] **Step 3: Implement material toggle and exact re-evaluation body**
+
+~~~javascript
+function updateOrderCommitmentMaterialSkipField() {
+  const enabled = document.getElementById(
+    "order-commitment-material-check"
+  ).checked;
+  const field = document.getElementById(
+    "order-commitment-material-skip-field"
+  );
+  const reason = document.getElementById(
+    "order-commitment-material-skip-reason"
+  );
+  field.hidden = enabled;
+  reason.required = !enabled;
+}
+
+async function reevaluateOrderCommitment(event) {
+  event.preventDefault();
+  if (!orderCommitmentAllowedActions().has("Reevaluate")) return;
+  const enabled = document.getElementById(
+    "order-commitment-material-check"
+  ).checked;
+  const reason = document.getElementById(
+    "order-commitment-material-skip-reason"
+  ).value.trim();
+  if (!enabled && !reason) {
+    showOrderCommitmentError(
+      translate("materialSkipReasonRequired")
+    );
+    return;
+  }
+  const response = await fetch(
+    "/planner/workbench/order-commitments/"
+      + encodeURIComponent(selectedOrderCommitment.EvaluationID)
+      + "/reevaluate",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        RequestedBy: "planner-1",
+        OperationalStateSnapshotID: null,
+        CheckMaterialAvailability: enabled,
+        MaterialCheckSkipReason: enabled ? null : reason
+      })
+    }
+  );
+  orderCommitmentRevision = response.headers.get(
+    "X-Workbench-Revision"
+  ) || orderCommitmentRevision;
+  if (!response.ok) {
+    showOrderCommitmentError(await responseErrorMessage(response));
+    return;
+  }
+  const newId = (await response.json()).Data.Evaluation.EvaluationID;
+  await loadOrderCommitments();
+  await openOrderCommitmentDetail(newId);
+}
+~~~
+
+No baseline or material-window override is sent; the source baseline and frozen release policy remain server-owned.
+
+- [ ] **Step 4: Bind, verify, and commit**
+
+Bind toggle `change`, form `submit`, drawer close, search/filter/refresh, route load, and language re-render in `DOMContentLoaded`.
+
+~~~powershell
+node --check sdbr/web/planner-workbench.js
+pytest tests/test_api.py::TestOrderCommitmentUiReevaluation tests/test_order_commitment_view.py::TestOrderCommitmentViewContract::test_terminal_rows_have_empty_allowed_actions --collect-only -q
+pytest tests/test_api.py::TestOrderCommitmentUiReevaluation tests/test_order_commitment_view.py::TestOrderCommitmentViewContract::test_terminal_rows_have_empty_allowed_actions -q --basetemp .tmp/pytest-mto-ui-reeval-green -p no:cacheprovider
+git add -- sdbr/web/planner-workbench.js tests/test_api.py
+git commit -m "feat: gate MTO reevaluation actions"
+~~~
+
+Expected: five UI tests and terminal view test pass.
+
+---
+
+### Task 27: Revision-Guarded Decision Dialog
+
+**Files and anchors**
+- Modify `sdbr/web/planner-workbench.js` at decision dialog functions and `DOMContentLoaded`.
+- Modify `tests/test_api.py` after re-evaluation UI tests.
+
+**IDs:** `UI-COMMIT-001`, `BE-SDBR-010`.
+
+- [ ] **Step 1: Write decision-flow tests**
+
+Add `TestOrderCommitmentUiDecisionFlow`:
+
+- `test_dialog_shows_ccr_ack_for_reference_and_exceeded_candidates`;
+- `test_dialog_shows_material_ack_for_both_conditional_actions`;
+- `test_dialog_requires_reason_and_visible_acknowledgements`;
+- `test_decision_sends_if_match_fingerprint_and_all_canonical_fields`;
+- `test_conflict_refreshes_without_automatic_decision_retry`;
+- `test_success_renders_accepted_pending_formal_schedule_boundaries`.
+
+~~~powershell
+pytest tests/test_api.py::TestOrderCommitmentUiDecisionFlow -q --basetemp .tmp/pytest-mto-ui-decision-red -p no:cacheprovider
+~~~
+
+Expected: six failures because decision functions are absent.
+
+- [ ] **Step 2: Open the dialog from the selected action**
+
+~~~javascript
+function openOrderCommitmentDecision(action) {
+  if (!orderCommitmentAllowedActions().has(action)) return;
+  selectedOrderCommitmentAction = action;
+  const recommendation = selectedOrderCommitment.Recommendation;
+  document.getElementById(
+    "order-commitment-ccr-ack-field"
+  ).hidden = !recommendation.RequiresCcrAcknowledgement;
+  document.getElementById(
+    "order-commitment-material-ack-field"
+  ).hidden = !recommendation.RequiresMaterialAcknowledgement;
+  document.getElementById("order-commitment-ccr-ack").checked = false;
+  document.getElementById(
+    "order-commitment-material-ack"
+  ).checked = false;
+  document.getElementById(
+    "order-commitment-decision-reason"
+  ).value = "";
+  renderOrderCommitmentDecisionSummary(
+    selectedOrderCommitment, action
+  );
+  document.getElementById(
+    "order-commitment-decision-dialog"
+  ).showModal();
+}
+~~~
+
+Summary shows action, requested/selected promise, CCR load/threshold source, material status, and three `NotPerformed` boundaries.
+
+- [ ] **Step 3: Submit exact canonical decision and handle conflicts**
+
+~~~javascript
+async function submitOrderCommitmentDecision(event) {
+  event.preventDefault();
+  const detail = selectedOrderCommitment;
+  const action = selectedOrderCommitmentAction;
+  if (!detail || !orderCommitmentAllowedActions().has(action)) return;
+  const reason = document.getElementById(
+    "order-commitment-decision-reason"
+  ).value.trim();
+  const ccrRequired = !document.getElementById(
+    "order-commitment-ccr-ack-field"
+  ).hidden;
+  const materialRequired = !document.getElementById(
+    "order-commitment-material-ack-field"
+  ).hidden;
+  const ccrAck = document.getElementById(
+    "order-commitment-ccr-ack"
+  ).checked;
+  const materialAck = document.getElementById(
+    "order-commitment-material-ack"
+  ).checked;
+  if (!reason || (ccrRequired && !ccrAck)
+      || (materialRequired && !materialAck)) {
+    showOrderCommitmentDecisionError(
+      translate("requiredDecisionEvidenceMissing")
+    );
+    return;
+  }
+  const decisionId = [
+    "DEC", detail.EvaluationID, detail.RecordVersion, action
+  ].join("-");
+  const response = await fetch(
+    "/planner/workbench/order-commitments/"
+      + encodeURIComponent(detail.EvaluationID) + "/decision",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": orderCommitmentRevision
+      },
+      body: JSON.stringify({
+        DecisionID: decisionId,
+        Decision: action,
+        DecidedBy: "planner-1",
+        Reason: reason,
+        ExpectedEvaluationFingerprint:
+          detail.TechnicalDetails.EvaluationFingerprint,
+        CcrRiskAcknowledged: ccrAck,
+        MaterialRiskAcknowledged: materialAck
+      })
+    }
+  );
+  orderCommitmentRevision = response.headers.get(
+    "X-Workbench-Revision"
+  ) || orderCommitmentRevision;
+  const payload = await response.json();
+  const status = payload?.Data?.Status;
+  if (!response.ok && [
+    "StateStoreRevisionConflict",
+    "OrderCommitmentEvaluationStale"
+  ].includes(status)) {
+    showOrderCommitmentDecisionError(
+      translate("orderCommitmentEvidenceChanged")
+    );
+    await loadOrderCommitments();
+    await openOrderCommitmentDetail(detail.EvaluationID);
+    selectedOrderCommitmentAction = null;
+    document.getElementById(
+      "submit-order-commitment-decision"
+    ).disabled = true;
+    return;
+  }
+  if (!response.ok) {
+    showOrderCommitmentDecisionError(
+      payload?.Data?.Message || translate("requestFailed")
+    );
+    return;
+  }
+  document.getElementById(
+    "order-commitment-decision-dialog"
+  ).close();
+  selectedOrderCommitmentAction = null;
+  await loadOrderCommitments();
+  await openOrderCommitmentDetail(detail.EvaluationID);
+}
+~~~
+
+There is exactly one fetch whose path ends in `/decision` in this function and no retry loop/call. Conflict refresh requires a new planner choice.
+
+- [ ] **Step 4: Bind, verify, and commit**
+
+~~~powershell
+node --check sdbr/web/planner-workbench.js
+pytest tests/test_api.py::TestOrderCommitmentUiDecisionFlow --collect-only -q
+pytest tests/test_api.py::TestOrderCommitmentUiDecisionFlow -q --basetemp .tmp/pytest-mto-ui-decision-green -p no:cacheprovider
+git add -- sdbr/web/planner-workbench.js tests/test_api.py
+git commit -m "feat: confirm option2 MTO decisions"
+~~~
+
+Expected: six decision-flow tests pass.
+
+---
+
+### Task 28: Reproducible API Seed, Browser Acceptance, and UI Evidence
+
+**Files and anchors**
+- Create `scripts/seed_mto_order_commitment_browser.ps1`.
+- Modify `tests/test_order_commitment_api.py` after acceptance tests.
+- Modify `docs/ui-specification.md` at `UI-COMMIT-001`, record 17.13, header, and change-log head.
+
+**IDs:** `UI-COMMIT-001`, `BE-SDBR-010`.
+
+- [ ] **Step 1: Write an in-process acceptance-sequence test**
+
+Add `TestOrderCommitmentBrowserSequence.test_public_sequence_creates_ordinary_skipped_accepted_and_stale_states`. It calls only public endpoints:
+
+1. test-data MTO reset;
+2. four distinct intakes (`ORDINARY`, `SKIP`, `STALE`, `ACCEPT`);
+3. re-evaluate `SKIP` with material disabled/reason;
+4. accept `ACCEPT` with current revision and CCR acknowledgement;
+5. submit `STALE` with the refreshed global revision and its old fingerprint;
+6. assert ordinary awaiting, skipped material pending, accepted pending formal schedule with batch, and stale 409.
+
+Also assert no automatic Planning Run beyond the seeded baseline and deep authority snapshot unchanged after steps 2-5.
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentBrowserSequence -q --basetemp .tmp/pytest-mto-browser-sequence-red -p no:cacheprovider
+~~~
+
+Expected: the sequence test fails until the repeatable script/response assumptions are aligned.
+
+- [ ] **Step 2: Create the complete API-only PowerShell seeder**
+
+Create:
+
+~~~powershell
+param(
+  [string]$BaseUrl = "http://127.0.0.1:8765",
+  [string]$OutputPath = ".tmp/mto-order-commitment-browser-fixture.json"
+)
+
+$ErrorActionPreference = "Stop"
+
+function Invoke-SdbrJson {
+  param(
+    [string]$Method,
+    [string]$Path,
+    [object]$Body = $null,
+    [hashtable]$Headers = @{}
+  )
+  $arguments = @{
+    Uri = "$BaseUrl$Path"
+    Method = $Method
+    Headers = $Headers
+    SkipHttpErrorCheck = $true
+  }
+  if ($null -ne $Body) {
+    $arguments.ContentType = "application/json"
+    $arguments.Body = $Body | ConvertTo-Json -Depth 30
+  }
+  $response = Invoke-WebRequest @arguments
+  $payload = $response.Content | ConvertFrom-Json
+  return [pscustomobject]@{
+    StatusCode = [int]$response.StatusCode
+    Revision = [string]$response.Headers["X-Workbench-Revision"]
+    Payload = $payload
+  }
+}
+
+function Copy-JsonObject {
+  param([object]$Value)
+  return $Value | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+}
+
+$reset = Invoke-SdbrJson `
+  -Method "POST" `
+  -Path "/planner/workbench/test-data/order-commitment/reset"
+if ($reset.StatusCode -ne 200) {
+  throw "MTO fixture reset failed: $($reset.StatusCode)"
+}
+$template = $reset.Payload.Data.IntakePayloadTemplate
+
+function New-MtoEvaluation {
+  param([string]$Suffix)
+  $body = Copy-JsonObject $template
+  $body.OrderID = "TST-MTO-SO-$Suffix"
+  $body.TraceID = "TRACE-TST-MTO-$Suffix"
+  $body.MaterialRequirements[0].RequirementLineID = (
+    "{0}:10:TST-MTO-RM-1" -f $body.OrderID
+  )
+  $response = Invoke-SdbrJson `
+    -Method "POST" `
+    -Path "/planner/workbench/order-commitments/intake" `
+    -Body $body
+  if ($response.StatusCode -ne 200) {
+    throw "MTO intake $Suffix failed: $($response.StatusCode)"
+  }
+  return $response
+}
+
+$ordinary = New-MtoEvaluation "ORDINARY"
+$skipSource = New-MtoEvaluation "SKIP"
+$stale = New-MtoEvaluation "STALE"
+$acceptSource = New-MtoEvaluation "ACCEPT"
+
+$skipSourceId = $skipSource.Payload.Data.Evaluation.EvaluationID
+$skipped = Invoke-SdbrJson `
+  -Method "POST" `
+  -Path (
+    "/planner/workbench/order-commitments/{0}/reevaluate" -f
+    $skipSourceId
+  ) `
+  -Body @{
+    RequestedBy = "planner-browser"
+    OperationalStateSnapshotID = $null
+    CheckMaterialAvailability = $false
+    MaterialCheckSkipReason = "Browser capacity-only acceptance evidence."
+  }
+if ($skipped.StatusCode -ne 200) {
+  throw "MTO skipped-material re-evaluation failed."
+}
+
+$acceptId = $acceptSource.Payload.Data.Evaluation.EvaluationID
+$acceptDetail = Invoke-SdbrJson `
+  -Method "GET" `
+  -Path (
+    "/planner/workbench/order-commitments/{0}" -f $acceptId
+  )
+$accepted = Invoke-SdbrJson `
+  -Method "POST" `
+  -Path (
+    "/planner/workbench/order-commitments/{0}/decision" -f $acceptId
+  ) `
+  -Headers @{ "If-Match" = $acceptDetail.Revision } `
+  -Body @{
+    DecisionID = "DEC-TST-MTO-BROWSER-ACCEPT"
+    Decision = "AcceptRequestedDate"
+    DecidedBy = "planner-browser"
+    Reason = "Browser acceptance evidence."
+    ExpectedEvaluationFingerprint = (
+      $acceptDetail.Payload.Data.TechnicalDetails.EvaluationFingerprint
+    )
+    CcrRiskAcknowledged = $true
+    MaterialRiskAcknowledged = $false
+  }
+if ($accepted.StatusCode -ne 200) {
+  throw "MTO acceptance failed."
+}
+
+$staleId = $stale.Payload.Data.Evaluation.EvaluationID
+$staleDetail = Invoke-SdbrJson `
+  -Method "GET" `
+  -Path (
+    "/planner/workbench/order-commitments/{0}" -f $staleId
+  )
+$staleDecision = Invoke-SdbrJson `
+  -Method "POST" `
+  -Path (
+    "/planner/workbench/order-commitments/{0}/decision" -f $staleId
+  ) `
+  -Headers @{ "If-Match" = $staleDetail.Revision } `
+  -Body @{
+    DecisionID = "DEC-TST-MTO-BROWSER-STALE"
+    Decision = "AcceptRequestedDate"
+    DecidedBy = "planner-browser"
+    Reason = "Must be rejected as stale."
+    ExpectedEvaluationFingerprint = (
+      $staleDetail.Payload.Data.TechnicalDetails.EvaluationFingerprint
+    )
+    CcrRiskAcknowledged = $true
+    MaterialRiskAcknowledged = $false
+  }
+if (
+  $staleDecision.StatusCode -ne 409 -or
+  $staleDecision.Payload.Data.Status -ne "OrderCommitmentEvaluationStale"
+) {
+  throw "MTO stale-decision fixture did not produce the expected 409."
+}
+
+$result = [ordered]@{
+  BaselinePlanningRunID = $reset.Payload.Data.BaselinePlanningRunID
+  OperationalStateSnapshotID = (
+    $reset.Payload.Data.OperationalStateSnapshotID
+  )
+  OrdinaryEvaluationID = (
+    $ordinary.Payload.Data.Evaluation.EvaluationID
+  )
+  SkippedEvaluationID = (
+    $skipped.Payload.Data.Evaluation.EvaluationID
+  )
+  AcceptedEvaluationID = $acceptId
+  AcceptedReservationBatchID = (
+    $accepted.Payload.Data.ReservationBatchID
+  )
+  StaleEvaluationID = $staleId
+  StaleDecisionStatus = $staleDecision.Payload.Data.Status
+  FinalRevision = $staleDecision.Revision
+}
+$directory = Split-Path -Parent $OutputPath
+if ($directory) {
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+}
+$result | ConvertTo-Json -Depth 10 |
+  Set-Content -LiteralPath $OutputPath -Encoding utf8
+$result
+~~~
+
+This script never imports a test helper or writes SQLite directly.
+
+- [ ] **Step 3: Verify script assumptions in pytest**
+
+~~~powershell
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentBrowserSequence --collect-only -q
+pytest tests/test_order_commitment_api.py::TestOrderCommitmentBrowserSequence -q --basetemp .tmp/pytest-mto-browser-sequence-green -p no:cacheprovider
+~~~
+
+Expected: one sequence test passes with the four visible states and stale 409.
+
+- [ ] **Step 4: Run automated UI and full regressions**
+
+~~~powershell
+node --check sdbr/web/planner-workbench.js
+python -m compileall -q sdbr
+pytest tests/test_api.py::TestOrderCommitmentUiShell tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_api.py::TestOrderCommitmentUiReevaluation tests/test_api.py::TestOrderCommitmentUiDecisionFlow tests/test_order_commitment_api.py::TestOrderCommitmentUiContract tests/test_order_commitment_api.py::TestOrderCommitmentBrowserSequence -q --basetemp .tmp/pytest-mto-ui-focused -p no:cacheprovider
+pytest -q --basetemp .tmp/pytest-full-mto-order-commitment -p no:cacheprovider
+git diff --check
+~~~
+
+Expected: syntax, focused, full, and diff checks pass. Record actual counts only after observing output.
+
+- [ ] **Step 5: Start a real SQLite-backed server and seed it through APIs**
+
+In terminal 1:
+
+~~~powershell
+New-Item -ItemType Directory -Path ".tmp" -Force | Out-Null
+if (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) {
+  throw "Port 8765 is already in use; choose one unused port and pass it to both commands."
+}
+$env:SDBR_ENVIRONMENT = "test"
+$env:SDBR_WORKBENCH_DB_PATH = (
+  Join-Path (Resolve-Path ".tmp") "mto-order-commitment-browser.db"
+)
+python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
+~~~
+
+Expected: uvicorn reports `http://127.0.0.1:8765`.
+
+In terminal 2:
+
+~~~powershell
+pwsh -File scripts/seed_mto_order_commitment_browser.ps1 `
+  -BaseUrl "http://127.0.0.1:8765" `
+  -OutputPath ".tmp/mto-order-commitment-browser-fixture.json"
+Get-Content -LiteralPath ".tmp/mto-order-commitment-browser-fixture.json"
+~~~
+
+Expected fixed source IDs:
+
+- baseline `TST-MTO-RUN-BASELINE`;
+- snapshot `TST-MTO-OPS-CURRENT`;
+- one ordinary, skipped, accepted, and stale evaluation ID;
+- one accepted reservation batch ID;
+- `StaleDecisionStatus = OrderCommitmentEvaluationStale`;
+- a numeric final revision.
+
+- [ ] **Step 6: Perform browser-control acceptance**
+
+Load the `browser:control-in-app-browser` skill, then open:
+
+`http://127.0.0.1:8765/planner/workbench#order-commitments`
+
+Verify and capture:
+
+1. Desktop 1280×720: exact nav, four summaries, 11 table columns, ordinary/skipped/accepted/stale-related evidence, drawer, no overlap/clipping. Save `.tmp/mto-order-commitment-desktop.png`.
+2. Mobile 390×844: nav drawer, summary, scroll-contained table, detail, re-evaluation controls, and decision dialog remain inside viewport; `document.documentElement.scrollWidth === document.documentElement.clientWidth`. Save `.tmp/mto-order-commitment-mobile.png`.
+3. Chinese/English switching translates every recommendation/material/lifecycle/reservation/exception/action label while IDs remain unchanged.
+4. Keyboard focus opens route, detail, and dialog; labels/checkboxes have visible focus.
+5. Reference threshold warning is visible. Material opt-out blocks blank reason. CCR/material acknowledgements block submission when required.
+6. Terminal accepted/rejected/superseded rows have no active controls. Accepted text is `已接受，待正式排程`; boundaries still say no external order, Planning Run, or ERP/MES mutation.
+7. A stale decision displays the localized stale message and is not retried.
+8. Browser console has no uncaught error.
+
+Stop terminal 1 with Ctrl+C after screenshots/checks; do not leave the server running.
+
+- [ ] **Step 7: Record UI evidence at 5.36 and stop at confirmation gate**
+
+Advance UI header to `5.36`. Change only `UI-COMMIT-001` and record 17.13 from `开发中` to `已验证待用户确认`. Append a 5.36 change row and record exact automated commands/results, URL, desktop/mobile screenshots, bilingual/keyboard/stale/action observations, and unchanged authority boundaries. Do not write `用户已确认`.
+
+- [ ] **Step 8: Commit and request unit-13 confirmation**
+
+~~~powershell
+git add -- scripts/seed_mto_order_commitment_browser.ps1 tests/test_order_commitment_api.py docs/ui-specification.md sdbr/web/planner-workbench.html sdbr/web/planner-workbench.js sdbr/web/planner-workbench.css tests/test_api.py
+git commit -m "docs: record MTO commitment UI evidence"
+~~~
+
+Report commits, observed tests, URL, and `UI-COMMIT-001`. Stop. Do not begin MTA, external-order integration, automatic Planning Run creation, DDAE changes, or another UI unit.
+
+---
+
+## Final Verification Matrix
+
+| Review / requirement | Closing task(s) | Exact evidence |
+| --- | --- | --- |
+| C1 complete implementation instructions | Tasks 2-28 | Each code-changing task has signature/control-flow pseudocode, exact symbol anchor, selector, and commit |
+| C2 no double multiplication; deadline truncation; exact inequality; per-resource windows | Tasks 3-5 | `TestCcrShadowCapacityParity`, `TestCcrShadowPromiseSelection`, Phase 0 regression |
+| C3 total matrix including later-safe + skipped and all CCR acknowledgements | Tasks 9, 11, 27 | exhaustive matrix plus conditional recommended action/domain/UI tests |
+| C4 exact current snapshot freshness | Tasks 1, 7, 8, 16, 18, 20 | 60-minute boundary, latest/explicit/stale/future/re-evaluation tests |
+| C5 exact selectors and bite-sized TDD | Every task | explicit `path::TestClass`/node commands and one reviewable commit per slice |
+| C6 reproducible server/browser state | Tasks 14, 28 | public test reset, API-only PowerShell script, SQLite uvicorn, fixed output file/screenshots |
+| I1 backend 2.80 and UI 5.35 next | Task 1 | ledger/header scans preserving 2.74-2.79 and 5.34 |
+| I2 complete policy/config/algorithm identity | Tasks 6, 10, 16 | policy/config change identity tests and exact basis fields |
+| I3 narrowly relevant state | Tasks 5, 10, 16, 20 | exact 08:00-16:00 stale row and unrelated-row eligible tests |
+| I4 one server time/actor and canonical decision fingerprint | Tasks 11, 19, 21 | one-field replay conflicts and shared time/actor assertions |
+| I5 real MTO Planning Run bridge | Task 22 | real `prepare_mto_acceptance` write set, explicit `PlanningReservationBatchIDs`, completed/failed transitions |
+| I6 deep no-external-authority mutation | Tasks 17-21, 28 | `AUTHORITY_GUARD_FIELDS` deep snapshots across intake/re-evaluation/rejection/acceptance |
+| I7 complete UI spec/row contract | Tasks 1, 13, 24-25 | section 6.1/11 updates; exact row keys including reservation/exception |
+| I8 terminal gating and safe audit | Tasks 13, 26-27 | terminal `AllowedActions=[]`, audit whitelist, no raw payload tests |
+| M1 unused normalizer | Task 11 | acceptance explicitly calls `normalize_demand_commitment` |
+| M2 exact edit anchors | Every task | file line/symbol anchors in every Files block |
+| M3 brittle nav count | Task 24 | exact ordered route/index set and unique route assertion |
+| Recommendation only; planner final | Tasks 17-21 | intake no-write tests; authenticated decision endpoint |
+| Material default on; planner may disable | Tasks 8, 15, 18, 26 | default, reason, pending/no-allocation, UI request tests |
+| AcceptedPendingFormalSchedule; no automatic run | Tasks 11, 21-22, 27-28 | terminal response and explicit-only bridge |
+| No DDAE/ERP/MES/master authority mutation | Tasks 1, 21, 23, 28 | deep guards, scans, UI boundary |
 
 ## Final Execution Checklist
 
-- [ ] Specification rows and change logs were committed before code.
-- [ ] Intake is automatic and idempotent but recommendation-only.
-- [ ] Approved-threshold exceedance and all reference-fallback results require planner CCR acknowledgement.
-- [ ] Material check defaults on; skip requires reason and produces zero material allocations.
-- [ ] Material shortage/evidence gaps cannot be accepted as feasible.
-- [ ] Acceptance uses the existing canonical demand and Phase 0 reservation functions.
-- [ ] Capacity/material/evaluation/decision writes are atomic across save failures and revision conflicts.
-- [ ] Competing confirmations cannot both consume one revision/capacity view.
-- [ ] Intake and acceptance create no external acceptance, production integration message, master-data mutation, or automatic Planning Run.
-- [ ] Accepted result is `AcceptedPendingFormalSchedule` with a traceable batch ID.
-- [ ] Existing Planning Run bridge, P1 market control, What-if, release material gate, and full suite remain green.
-- [ ] UI exposes no raw JSON and passes desktop/narrow/bilingual/keyboard/stale-state checks.
-- [ ] UI status stops at `已验证待用户确认` until explicit user confirmation.
-- [ ] `nofinish/` and DDAE contract files remain untouched.
+- [ ] Backend specification starts at 2.80 and later evidence uses 2.81; UI starts at 5.35 and later evidence uses 5.36.
+- [ ] `CapacityBucket.capacity_minutes` is never multiplied by `capacity_units`.
+- [ ] Both full-bucket aggregate and deadline-truncated temporal limits are enforced.
+- [ ] Every Phase 0 row satisfies `WindowStartAt < LatestAllowedCompletionAt <= WindowEndAt`.
+- [ ] Matrix covers all capacity/material/threshold states and four acceptance actions.
+- [ ] Current snapshot selection, explicit selection, exactly-60, stale, future, and no-current cases are tested.
+- [ ] Basis contains all frozen configuration/release references and only exact relevant ledger/snapshot rows.
+- [ ] Decision fingerprint covers exact canonical fields, excludes server observation time, and replays exactly.
+- [ ] Intake, re-evaluation, rejection, and acceptance deep-preserve every external-authority collection.
+- [ ] Acceptance creates only shared Phase 0 rows and `AcceptedPendingFormalSchedule`.
+- [ ] A real MTO write set freezes/converts/holds through an explicitly selected Planning Run batch.
+- [ ] Workbench rows include `ReservationStatus`, `ExceptionStatus`, and lifecycle-safe `AllowedActions`.
+- [ ] Audit/detail projection is whitelisted; no raw JSON or client material window exists.
+- [ ] API-only browser seed produces ordinary/skipped/accepted/stale states in the actual SQLite server.
+- [ ] Automated/full/browser checks pass and UI stops at `已验证待用户确认`.
+- [ ] DDAE contract files, `nofinish/`, and application authority boundaries remain untouched.
 
 ## Execution Handoff
 
-Use `superpowers:subagent-driven-development` for task-by-task implementation with review after each commit, or `superpowers:executing-plans` for checkpointed inline execution. Because Task 8 is a repository-mandated UI acceptance gate, either execution mode must stop after Task 8 and wait for explicit user confirmation.
+Use `superpowers:subagent-driven-development` for one fresh implementer and review gate per task, or `superpowers:executing-plans` for checkpointed inline execution. In either mode, commit each numbered task separately and stop after Task 28 for explicit UI acceptance-unit confirmation.

@@ -13,6 +13,7 @@ from sdbr.ccr_shadow_scheduler import (
     _route_deadlines,
     _validate_shadow_request,
     _window_metrics,
+    evaluate_ccr_shadow_schedule,
 )
 from sdbr.planner_workbench import Operation, Resource, Routing
 from sdbr.planning_commitments import create_demand_commitment
@@ -666,3 +667,56 @@ class TestCcrShadowPromiseSelection:
         assert result["Status"] == "NotAssessable"
         assert result["SelectedAssessment"] is None
         assert result["Summary"]["SelectedWindowCount"] == 0
+
+    def test_selected_evidence_lists_exact_relevant_capacity_window_keys(self):
+        elapsed_start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        cutoff = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        first_end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+        selected_start = first_end
+        selected_end = datetime(2026, 7, 20, 20, tzinfo=UTC)
+        requested_due_at = datetime(2026, 7, 20, 18, tzinfo=UTC)
+        resource = Resource("CCR-1", "CCR", True, {})
+        routing = Routing(
+            product_id="FG-1",
+            operations=[Operation("CUT", "CCR-1", 10, 60)],
+        )
+
+        result = evaluate_ccr_shadow_schedule(
+            order_id="SO-1:10",
+            quantity=1.0,
+            routing=routing,
+            resources=[resource],
+            capacity_buckets=[
+                CapacityBucket("CCR-1", elapsed_start, cutoff, 240),
+                CapacityBucket("CCR-1", elapsed_start, first_end, 480),
+                CapacityBucket("CCR-1", selected_start, selected_end, 240),
+                CapacityBucket("UNRELATED", cutoff, first_end, 240),
+            ],
+            setup_transitions=[],
+            gantt_rows=[],
+            active_capacity_reservations=[],
+            requested_due_at=requested_due_at,
+            evaluated_at=cutoff,
+            downstream_protection_minutes=60,
+            protection_threshold_percent=80.0,
+        )
+
+        assert result["Status"] == "OnTime"
+        assert result["SelectedAssessment"]["PromiseAt"] == (
+            requested_due_at.isoformat()
+        )
+        assert result["RelevantCapacityWindowKeys"] == [
+            (
+                "CCR-1",
+                elapsed_start.isoformat(),
+                first_end.isoformat(),
+            ),
+            (
+                "CCR-1",
+                selected_start.isoformat(),
+                selected_end.isoformat(),
+            ),
+        ]
+        assert result["SelectedAssessment"]["ReservationRequests"][0][
+            "WindowStartAt"
+        ] == selected_start.isoformat()

@@ -617,3 +617,128 @@ def _not_assessable_result(
             "MaximumLoadAfterPercent": None,
         },
     }
+
+
+def evaluate_ccr_shadow_schedule(
+    *,
+    order_id: str,
+    quantity: float,
+    routing: Routing | None,
+    resources: list[Resource],
+    capacity_buckets: list[CapacityBucket],
+    setup_transitions: list[SetupTransition],
+    gantt_rows: list[dict[str, object]],
+    active_capacity_reservations: list[dict[str, object]],
+    requested_due_at: datetime,
+    evaluated_at: datetime,
+    downstream_protection_minutes: int,
+    protection_threshold_percent: float,
+) -> dict[str, object]:
+    _validate_shadow_request(
+        order_id=order_id,
+        quantity=quantity,
+        requested_due_at=requested_due_at,
+        evaluated_at=evaluated_at,
+        downstream_protection_minutes=downstream_protection_minutes,
+        protection_threshold_percent=protection_threshold_percent,
+    )
+    requested_due_at = _utc(requested_due_at)
+    cutoff = _utc(evaluated_at)
+    all_operations, ccr_operations, issues = _extract_route_operations(
+        order_id=order_id,
+        quantity=quantity,
+        routing=routing,
+        resources=resources,
+        setup_transitions=setup_transitions,
+    )
+    if issues:
+        return _not_assessable_result(
+            requested_due_at=requested_due_at,
+            capacity_assessment_cutoff_at=cutoff,
+            issues=issues,
+        )
+    try:
+        states = _build_window_states(
+            resources=resources,
+            capacity_buckets=capacity_buckets,
+            ccr_resource_ids={
+                str(row["ResourceID"]) for row in ccr_operations
+            },
+            gantt_rows=gantt_rows,
+            active_capacity_reservations=active_capacity_reservations,
+        )
+    except ValueError as error:
+        return _not_assessable_result(
+            requested_due_at=requested_due_at,
+            capacity_assessment_cutoff_at=cutoff,
+            issues=[_issue("CAPACITY_EVIDENCE_INVALID", str(error))],
+        )
+    deadlines = _route_deadlines(
+        all_route_operations=all_operations,
+        requested_due_at=requested_due_at,
+        downstream_protection_minutes=downstream_protection_minutes,
+    )
+    requested = _requested_candidate(
+        order_id=order_id,
+        requested_due_at=requested_due_at,
+        capacity_assessment_cutoff_at=cutoff,
+        ccr_operations=ccr_operations,
+        deadlines=deadlines,
+        source_states=states,
+        protection_threshold_percent=protection_threshold_percent,
+    )
+    earliest_safe = None
+    status = "OnTime"
+    selected = requested
+    if not bool(requested["Feasible"]):
+        earliest_safe = _earliest_safe_candidate(
+            order_id=order_id,
+            all_route_operations=all_operations,
+            source_states=states,
+            capacity_assessment_cutoff_at=cutoff,
+            downstream_protection_minutes=downstream_protection_minutes,
+            protection_threshold_percent=protection_threshold_percent,
+        )
+        if earliest_safe is None:
+            return _not_assessable_result(
+                requested_due_at=requested_due_at,
+                capacity_assessment_cutoff_at=cutoff,
+                issues=[_issue("NO_SAFE_CCR_WINDOW")],
+            )
+        status = "LaterSafeDate"
+        selected = earliest_safe
+    considered = {
+        tuple(row)
+        for assessment in (requested, earliest_safe)
+        if isinstance(assessment, Mapping)
+        for row in assessment.get("ConsideredWindowKeys", [])
+    }
+    window_rows = list(selected["WindowAssessments"])
+    return {
+        "Algorithm": deepcopy(SHADOW_ALGORITHM),
+        "Status": status,
+        "CapacityAssessmentCutoffAt": _utc_iso(cutoff),
+        "RequestedDueAt": _utc_iso(requested_due_at),
+        "LatestCcrCompletionAt": _utc_iso(
+            requested_due_at
+            - timedelta(minutes=downstream_protection_minutes)
+        ),
+        "RequestedDateAssessment": requested,
+        "EarliestSafeAssessment": earliest_safe,
+        "SelectedAssessment": selected,
+        "RelevantCapacityWindowKeys": sorted(considered),
+        "Issues": [],
+        "Summary": {
+            "CcrOperationCount": len(ccr_operations),
+            "SelectedWindowCount": len(
+                selected["ReservationRequests"]
+            ),
+            "MaximumLoadAfterPercent": max(
+                (
+                    float(row["LoadAfterPercent"])
+                    for row in window_rows
+                ),
+                default=None,
+            ),
+        },
+    }

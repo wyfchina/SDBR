@@ -5,7 +5,9 @@ from pathlib import Path
 from threading import Event, Lock, get_ident
 from time import sleep
 
+import anyio
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 
 from sdbr.api import create_app
@@ -209,6 +211,11 @@ def _complete_paused_rejection(
     assert int(rejected.headers["X-Workbench-Revision"]) == boundary_revision
     assert store.rejection_exception_revision == boundary_revision
     return rejected
+
+
+async def _wait_for_thread_event(event: Event) -> None:
+    while not event.is_set():
+        await anyio.sleep(0.001)
 
 
 # BE-RUN-011 / BE-SDBR-007 / BE-SDBR-008 / BE-SDBR-009
@@ -1933,6 +1940,285 @@ def test_get_body_and_revision_header_are_captured_under_one_state_lock():
         read_response.json()["BodyRevision"]
     )
     assert store.current_revision() == read_response.json()["BodyRevision"] + 1
+
+
+# BE-RUN-007 / BE-RUN-011
+def test_state_store_admission_does_not_deadlock_when_anyio_worker_pool_is_saturated():
+    owner_boundary_acquired = Event()
+    allow_blocking_owner_acquire_return = Event()
+    release_owner_route = Event()
+    owner_route_started = Event()
+    cleanup_blocking_acquires = Event()
+    blocking_call_guard = Lock()
+    blocking_acquire_calls = 0
+
+    class SaturationLock:
+        def __init__(self, underlying):
+            self._underlying = underlying
+
+        def acquire(self, blocking=True, timeout=-1):
+            nonlocal blocking_acquire_calls
+            if not blocking:
+                acquired = self._underlying.acquire(False)
+                if acquired:
+                    owner_boundary_acquired.set()
+                return acquired
+
+            with blocking_call_guard:
+                blocking_acquire_calls += 1
+                call_number = blocking_acquire_calls
+            if call_number == 1:
+                self._underlying.acquire()
+                owner_boundary_acquired.set()
+                while not (
+                    allow_blocking_owner_acquire_return.is_set()
+                    or cleanup_blocking_acquires.is_set()
+                ):
+                    allow_blocking_owner_acquire_return.wait(timeout=0.01)
+                return True
+
+            while not cleanup_blocking_acquires.is_set():
+                if self._underlying.acquire(timeout=0.01):
+                    return True
+            return False
+
+        def release(self):
+            if cleanup_blocking_acquires.is_set():
+                return
+            self._underlying.release()
+
+        def abort(self):
+            cleanup_blocking_acquires.set()
+            allow_blocking_owner_acquire_return.set()
+            if self._underlying.locked():
+                try:
+                    self._underlying.release()
+                except RuntimeError:
+                    pass
+
+    class SaturationStore(WorkbenchStateStore):
+        def __init__(self):
+            super().__init__()
+            self.test_state_lock = SaturationLock(self._request_write_lock)
+
+        @property
+        def state_lock(self):
+            return self.test_state_lock
+
+    store = SaturationStore()
+    app = create_app(state_store=store)
+
+    @app.get("/test/saturated-state-admission")
+    def saturated_state_admission(request_id: str):
+        if request_id == "owner":
+            owner_route_started.set()
+            assert release_owner_route.wait(timeout=5)
+        return {"RequestID": request_id}
+
+    async def scenario():
+        waiter_entry_guard = Lock()
+        all_waiters_entered = Event()
+        all_requests_finished = Event()
+        waiter_entries = 0
+        finished_requests = 0
+        responses: dict[str, httpx.Response] = {}
+
+        async def observed_app(scope, receive, send):
+            nonlocal waiter_entries
+            if (
+                scope["type"] == "http"
+                and b"request_id=waiter-" in scope.get("query_string", b"")
+            ):
+                with waiter_entry_guard:
+                    waiter_entries += 1
+                    if waiter_entries == 3:
+                        all_waiters_entered.set()
+            await app(scope, receive, send)
+
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        original_tokens = limiter.total_tokens
+        limiter.total_tokens = 1
+        completed_without_timeout = False
+        try:
+            transport = httpx.ASGITransport(app=observed_app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+
+                async def issue(request_id: str) -> None:
+                    nonlocal finished_requests
+                    responses[request_id] = await client.get(
+                        "/test/saturated-state-admission",
+                        params={"request_id": request_id},
+                    )
+                    with waiter_entry_guard:
+                        finished_requests += 1
+                        if finished_requests == 4:
+                            all_requests_finished.set()
+
+                async with anyio.create_task_group() as task_group:
+                    try:
+                        task_group.start_soon(issue, "owner")
+                        with anyio.fail_after(2):
+                            await _wait_for_thread_event(
+                                owner_boundary_acquired
+                            )
+                        for index in range(3):
+                            task_group.start_soon(issue, f"waiter-{index}")
+                        with anyio.fail_after(2):
+                            await _wait_for_thread_event(all_waiters_entered)
+                        await anyio.sleep(0)
+                        await anyio.sleep(0)
+                        allow_blocking_owner_acquire_return.set()
+                        release_owner_route.set()
+                        with anyio.move_on_after(2) as completion_scope:
+                            await _wait_for_thread_event(all_requests_finished)
+                        completed_without_timeout = not completion_scope.cancel_called
+                    finally:
+                        if not completed_without_timeout:
+                            store.test_state_lock.abort()
+                            release_owner_route.set()
+                            task_group.cancel_scope.cancel()
+        finally:
+            limiter.total_tokens = original_tokens
+            if not completed_without_timeout:
+                store.test_state_lock.abort()
+                release_owner_route.set()
+        return completed_without_timeout, responses
+
+    completed_without_timeout, responses = anyio.run(scenario)
+
+    assert completed_without_timeout
+    assert blocking_acquire_calls == 0
+    assert owner_route_started.is_set()
+    assert set(responses) == {
+        "owner",
+        "waiter-0",
+        "waiter-1",
+        "waiter-2",
+    }
+    assert all(response.status_code == 200 for response in responses.values())
+
+
+# BE-RUN-007 / BE-RUN-011
+def test_state_store_cancelled_mutating_request_waits_for_completion_and_rolls_back():
+    route_started = Event()
+    allow_route_finish = Event()
+    route_finished = Event()
+    boundary_released = Event()
+
+    class ObservingLock:
+        def __init__(self, store, underlying):
+            self._store = store
+            self._underlying = underlying
+            self.first_release_before_route_finished = None
+            self.first_release_state = None
+
+        def acquire(self, *args, **kwargs):
+            return self._underlying.acquire(*args, **kwargs)
+
+        def release(self):
+            if not boundary_released.is_set():
+                self.first_release_before_route_finished = (
+                    not route_finished.is_set()
+                )
+                self.first_release_state = deepcopy(self._store.audit_events)
+            self._underlying.release()
+            boundary_released.set()
+
+    class CancellationStore(WorkbenchStateStore):
+        def __init__(self):
+            super().__init__()
+            self.test_state_lock = ObservingLock(
+                self,
+                self._request_write_lock,
+            )
+
+        @property
+        def state_lock(self):
+            return self.test_state_lock
+
+    store = CancellationStore()
+    store.audit_events.append({"Action": "CommittedBaseline"})
+    store.save()
+    baseline_events = deepcopy(store.audit_events)
+    baseline_revision = store.current_revision()
+    app = create_app(state_store=store)
+
+    @app.post("/test/cancelled-mutation")
+    def cancelled_mutation():
+        store.audit_events.append({"Action": "TentativeMutation"})
+        route_started.set()
+        assert allow_route_finish.wait(timeout=5)
+        store.audit_events.append({"Action": "LateMutation"})
+        route_finished.set()
+        return {"Status": "Mutated"}
+
+    @app.get("/test/cancelled-mutation")
+    def cancelled_mutation_state():
+        return {
+            "AuditEvents": deepcopy(store.audit_events),
+            "Revision": store.current_revision(),
+        }
+
+    async def scenario():
+        request_scope_ready = anyio.Event()
+        request_done = anyio.Event()
+        cancel_scopes: list[anyio.CancelScope] = []
+        early_release = False
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+
+            async def issue_mutation() -> None:
+                with anyio.CancelScope() as cancel_scope:
+                    cancel_scopes.append(cancel_scope)
+                    request_scope_ready.set()
+                    try:
+                        await client.post("/test/cancelled-mutation")
+                    finally:
+                        request_done.set()
+
+            async with anyio.create_task_group() as task_group:
+                try:
+                    task_group.start_soon(issue_mutation)
+                    with anyio.fail_after(2):
+                        await request_scope_ready.wait()
+                        await _wait_for_thread_event(route_started)
+                    cancel_scopes[0].cancel()
+                    with anyio.move_on_after(0.2) as early_release_scope:
+                        await _wait_for_thread_event(boundary_released)
+                    early_release = not early_release_scope.cancel_called
+                finally:
+                    allow_route_finish.set()
+                    with anyio.fail_after(2):
+                        await _wait_for_thread_event(route_finished)
+                        await _wait_for_thread_event(boundary_released)
+                        await request_done.wait()
+                    task_group.cancel_scope.cancel()
+
+            visible = await client.get("/test/cancelled-mutation")
+        return early_release, visible
+
+    try:
+        early_release, visible = anyio.run(scenario)
+    finally:
+        allow_route_finish.set()
+
+    assert not early_release
+    assert store.test_state_lock.first_release_before_route_finished is False
+    assert store.test_state_lock.first_release_state == baseline_events
+    assert store.audit_events == baseline_events
+    assert store.current_revision() == baseline_revision
+    assert visible.status_code == 200
+    assert visible.json() == {
+        "AuditEvents": baseline_events,
+        "Revision": baseline_revision,
+    }
+    assert visible.headers["X-Workbench-Revision"] == str(baseline_revision)
 
 
 def test_store_managed_execution_uses_exact_finalization_outcome_revision(

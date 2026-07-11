@@ -11,12 +11,12 @@ from time import monotonic
 from typing import Callable, Literal, Mapping
 from zoneinfo import ZoneInfo
 
+import anyio
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AwareDatetime, BaseModel, Field
-from starlette.concurrency import run_in_threadpool
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -1161,6 +1161,21 @@ def create_app(
 
     @app.middleware("http")
     async def persist_successful_writes(request, call_next):
+        async def call_next_after_downstream_completion():
+            response = None
+            downstream_error: BaseException | None = None
+            with anyio.CancelScope(shield=True):
+                try:
+                    response = await call_next(request)
+                except BaseException as error:
+                    downstream_error = error
+            await anyio.lowlevel.checkpoint_if_cancelled()
+            if downstream_error is not None:
+                raise downstream_error
+            if response is None:
+                raise RuntimeError("Downstream request returned no response.")
+            return response
+
         if require_auth and request.url.path.startswith(
             (
                 "/planner/workbench/planning-runs",
@@ -1172,12 +1187,9 @@ def create_app(
                 return auth_error
         is_write = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         if not is_write:
-            await run_in_threadpool(active_store.state_lock.acquire)
-            try:
-                response = await call_next(request)
+            async with active_store.state_admission():
+                response = await call_next_after_downstream_completion()
                 response_revision = active_store.current_revision()
-            finally:
-                active_store.state_lock.release()
             response.headers["X-Workbench-Revision"] = str(response_revision)
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
@@ -1188,7 +1200,7 @@ def create_app(
             ("/execute", "/process-queued", "/renew-lease")
         )
         if store_managed_execution:
-            response = await call_next(request)
+            response = await call_next_after_downstream_completion()
             response_revision = getattr(
                 request.state,
                 "store_managed_revision",
@@ -1200,8 +1212,7 @@ def create_app(
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
-        await run_in_threadpool(active_store.state_lock.acquire)
-        try:
+        async with active_store.state_admission():
             expected_revision = _client_revision_from_if_match(
                 request.headers.get("if-match")
             )
@@ -1217,35 +1228,30 @@ def create_app(
                 )
             persistence_snapshot = active_store.snapshot_state()
             try:
-                response = await call_next(request)
-            except Exception:
+                response = await call_next_after_downstream_completion()
+                if response.status_code < 400 or getattr(
+                    request.state, "persist_workbench_write", False
+                ):
+                    try:
+                        active_store.save()
+                    except StateStoreRevisionConflict as error:
+                        active_store.reload()
+                        return _revision_conflict_response(
+                            endpoint=request.url.path,
+                            expected_revision=error.expected_revision,
+                            current_revision=error.current_revision,
+                            message="Workbench state changed; reload completed and the request can be retried.",
+                        )
+                else:
+                    active_store.restore_state(persistence_snapshot)
+            except BaseException:
                 active_store.restore_state(persistence_snapshot)
                 raise
-            if response.status_code < 400 or getattr(
-                request.state, "persist_workbench_write", False
-            ):
-                try:
-                    active_store.save()
-                except StateStoreRevisionConflict as error:
-                    active_store.reload()
-                    return _revision_conflict_response(
-                        endpoint=request.url.path,
-                        expected_revision=error.expected_revision,
-                        current_revision=error.current_revision,
-                        message="Workbench state changed; reload completed and the request can be retried.",
-                    )
-                except Exception:
-                    active_store.restore_state(persistence_snapshot)
-                    raise
-            else:
-                active_store.restore_state(persistence_snapshot)
             response.headers["X-Workbench-Revision"] = str(
                 active_store.current_revision()
             )
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
-        finally:
-            active_store.state_lock.release()
 
     def resolve_release_operational_state(
         payload: ReleaseCandidatePayload,

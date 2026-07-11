@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -9,6 +11,8 @@ import shutil
 import sqlite3
 from threading import Lock, RLock
 from typing import Callable, TypeVar
+
+import anyio
 
 from sdbr.operational_state import (
     OperationalStateSnapshot,
@@ -55,6 +59,7 @@ class StateStoreSaveOutcome:
 
 
 MutationResult = TypeVar("MutationResult")
+_STATE_ADMISSION_RETRY_SECONDS = 0.001
 
 
 @dataclass(slots=True)
@@ -150,6 +155,19 @@ class WorkbenchStateStore:
     @property
     def state_lock(self) -> Lock:
         return self._request_write_lock
+
+    @asynccontextmanager
+    async def state_admission(self) -> AsyncIterator[None]:
+        lock = self.state_lock
+        acquired = False
+        try:
+            while not lock.acquire(False):
+                await anyio.sleep(_STATE_ADMISSION_RETRY_SECONDS)
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                lock.release()
 
     def snapshot_state(self) -> dict[str, object]:
         return _snapshot_complete_state(self)

@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from sdbr.ccr_shadow_scheduler import (
     _extract_route_operations,
     _validate_shadow_request,
+    _window_metrics,
 )
 from sdbr.planner_workbench import Operation, Resource, Routing
 from sdbr.scheduling_solver import SetupTransition
@@ -110,3 +111,68 @@ class TestCcrShadowInputContract:
                 setup_transitions=[],
             )
             assert [row["Code"] for row in issues] == [code]
+
+
+class TestCcrShadowCapacityParity:
+    """BE-SDBR-008, BE-SDBR-010: mirror formal solver capacity semantics."""
+
+    @staticmethod
+    def _state(*, units=1, capacity=480, scheduled=(), reserved=0):
+        return {
+            "ResourceID": "CCR-1",
+            "WindowStart": datetime(2026, 7, 20, 8, tzinfo=UTC),
+            "WindowEnd": datetime(2026, 7, 20, 16, tzinfo=UTC),
+            "CapacityMinutes": capacity,
+            "CapacityUnits": units,
+            "ProcessingIntervals": list(scheduled),
+            "ScheduledFullMinutes": sum(
+                int((end - start).total_seconds() // 60)
+                for start, end in scheduled
+            ),
+            "ExistingReservationMinutes": reserved,
+            "CandidateAssignments": [],
+        }
+
+    def test_capacity_units_never_multiply_formal_bucket_total(self):
+        state = self._state(units=2, reserved=450)
+        metrics = _window_metrics(
+            state,
+            usable_start=state["WindowStart"],
+            deadline=state["WindowEnd"],
+            candidate_minutes=60,
+        )
+        assert metrics["AggregateRemainingMinutes"] == 30
+        assert metrics["Fits"] is False
+
+    def test_deadline_truncates_temporal_but_not_aggregate_load(self):
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        state = self._state(
+            scheduled=[(start, start + timedelta(minutes=180))]
+        )
+        metrics = _window_metrics(
+            state,
+            usable_start=start,
+            deadline=datetime(2026, 7, 20, 12, tzinfo=UTC),
+            candidate_minutes=120,
+        )
+        assert metrics["UsableTemporalCapacityMinutes"] == 240
+        assert metrics["TemporalRemainingMinutes"] == 60
+        assert metrics["Fits"] is False
+
+        after_deadline = self._state(
+            scheduled=[
+                (
+                    datetime(2026, 7, 20, 13, tzinfo=UTC),
+                    datetime(2026, 7, 20, 16, tzinfo=UTC),
+                )
+            ]
+        )
+        aggregate = _window_metrics(
+            after_deadline,
+            usable_start=start,
+            deadline=datetime(2026, 7, 20, 12, tzinfo=UTC),
+            candidate_minutes=360,
+        )
+        assert aggregate["ScheduledLoadBeforeDeadlineMinutes"] == 0
+        assert aggregate["AggregateRemainingMinutes"] == 300
+        assert aggregate["Fits"] is False

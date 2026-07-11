@@ -147,3 +147,95 @@ def _extract_route_operations(
     if not ccr_operations:
         return all_operations, [], [_issue("CCR_OPERATION_NOT_FOUND")]
     return all_operations, ccr_operations, []
+
+
+def _floor_minutes(value: timedelta) -> int:
+    return floor(value.total_seconds() / 60)
+
+
+def _overlap_minutes(
+    intervals: list[tuple[datetime, datetime]],
+    start: datetime,
+    end: datetime,
+) -> int:
+    return sum(
+        max(0, _floor_minutes(min(item_end, end) - max(item_start, start)))
+        for item_start, item_end in intervals
+    )
+
+
+def _window_metrics(
+    state: Mapping[str, object],
+    *,
+    usable_start: datetime,
+    deadline: datetime,
+    candidate_minutes: int,
+) -> dict[str, object]:
+    window_start = state["WindowStart"]
+    window_end = state["WindowEnd"]
+    assert isinstance(window_start, datetime)
+    assert isinstance(window_end, datetime)
+    usable_start = max(window_start, usable_start)
+    usable_end = min(window_end, deadline)
+    if usable_end <= usable_start:
+        return {"Fits": False, "Reason": "NO_USABLE_WINDOW"}
+    assignments = list(state["CandidateAssignments"])
+    candidate_full = sum(int(row["Minutes"]) for row in assignments)
+    candidate_before_deadline = sum(
+        int(row["Minutes"])
+        for row in assignments
+        if row["LatestAllowedCompletionAt"] <= usable_end
+    )
+    scheduled_full = int(state["ScheduledFullMinutes"])
+    existing = int(state["ExistingReservationMinutes"])
+    aggregate_before = scheduled_full + existing + candidate_full
+    intervals = list(state["ProcessingIntervals"])
+    scheduled_usable = _overlap_minutes(intervals, usable_start, usable_end)
+    temporal_before = scheduled_usable + existing + candidate_before_deadline
+    capacity_minutes = int(state["CapacityMinutes"])
+    temporal_capacity = (
+        _floor_minutes(usable_end - usable_start)
+        * int(state["CapacityUnits"])
+    )
+    aggregate_remaining = capacity_minutes - aggregate_before
+    temporal_remaining = temporal_capacity - temporal_before
+    load_after = aggregate_before + candidate_minutes
+    load_percent = round(load_after / capacity_minutes * 100, 2)
+    return {
+        "Fits": candidate_minutes <= min(
+            aggregate_remaining,
+            temporal_remaining,
+        ),
+        "WindowStartAt": _utc_iso(window_start),
+        "WindowEndAt": _utc_iso(window_end),
+        "UsableWindowStartAt": _utc_iso(usable_start),
+        "UsableWindowEndAt": _utc_iso(usable_end),
+        "LatestAllowedCompletionAt": _utc_iso(usable_end),
+        "CapacityMinutes": capacity_minutes,
+        "UsableTemporalCapacityMinutes": temporal_capacity,
+        "ScheduledLoadMinutes": scheduled_full,
+        "ScheduledLoadBeforeDeadlineMinutes": scheduled_usable,
+        "ExistingReservationMinutes": existing,
+        "CandidateLoadMinutes": candidate_minutes,
+        "LoadBeforeMinutes": aggregate_before,
+        "LoadAfterMinutes": load_after,
+        "LoadAfterPercent": load_percent,
+        "AggregateRemainingMinutes": aggregate_remaining,
+        "TemporalRemainingMinutes": temporal_remaining,
+    }
+
+
+def _commit_candidate(
+    state: dict[str, object],
+    *,
+    minutes: int,
+    latest_allowed_completion_at: datetime,
+) -> None:
+    assignments = list(state["CandidateAssignments"])
+    assignments.append(
+        {
+            "Minutes": minutes,
+            "LatestAllowedCompletionAt": latest_allowed_completion_at,
+        }
+    )
+    state["CandidateAssignments"] = assignments

@@ -868,6 +868,130 @@ def test_planning_reservation_sqlite_conflict_reloads_in_place_and_discards_stal
     )
 
 
+# BE-RUN-011 / BE-SDBR-007 / BE-SDBR-008 / BE-SDBR-009
+def test_planning_reservation_workbench_blocks_during_sqlite_conflict_reload(
+    tmp_path,
+    monkeypatch,
+):
+    from threading import RLock
+
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    database_path = tmp_path / "planning-reservation-conflict-read.db"
+    seed_store = SQLiteWorkbenchStateStore(database_path)
+    seed_baseline_test_data(seed_store)
+    _seed_active_planning_reservation(seed_store, batch_id="PRB-CONFLICT-READ")
+    seed_store.save()
+
+    first_store = SQLiteWorkbenchStateStore(database_path)
+    stale_store = SQLiteWorkbenchStateStore(database_path)
+    first_client = TestClient(create_app(state_store=first_store))
+    first_store.planning_reservation_batches["PRB-CONFLICT-READ"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    first_store.ccr_capacity_reservations["CCR-RES-1"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    first_store.material_planning_allocations["MPA-1"]["Status"] = (
+        "LinkedToFormalOrder"
+    )
+    assert first_client.post(
+        "/planner/workbench/operational-state/snapshots",
+        json={
+            "SnapshotID": "OPS-RESERVATION-CONCURRENT-WRITER",
+            "CapturedAt": "2026-06-20T06:00:00+00:00",
+        },
+    ).status_code == 200
+
+    graph_cleared = Event()
+    allow_reload = Event()
+    read_attempted = Event()
+
+    class TrackingReservationGraphLock:
+        def __init__(self):
+            self._lock = RLock()
+
+        def __enter__(self):
+            if graph_cleared.is_set():
+                read_attempted.set()
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self._lock.release()
+
+    original_clear = stale_store._clear
+
+    def pause_reload_after_clear():
+        original_clear()
+        graph_cleared.set()
+        assert allow_reload.wait(timeout=2)
+
+    monkeypatch.setattr("sdbr.api.RLock", TrackingReservationGraphLock)
+    monkeypatch.setattr(stale_store, "_clear", pause_reload_after_clear)
+    stale_client = TestClient(create_app(state_store=stale_store))
+    stale_store.planning_reservation_batches["PRB-CONFLICT-READ"][
+        "Status"
+    ] = "HeldForPlanningError"
+    stale_store.ccr_capacity_reservations["CCR-RES-1"]["Status"] = (
+        "HeldForPlanningError"
+    )
+    stale_store.material_planning_allocations["MPA-1"]["Status"] = (
+        "HeldForPlanningError"
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        conflict = executor.submit(
+            stale_client.post,
+            "/planner/workbench/operational-state/snapshots",
+            json={
+                "SnapshotID": "OPS-STALE-RESERVATION-CONCURRENT-WRITER",
+                "CapturedAt": "2026-06-20T06:05:00+00:00",
+            },
+        )
+        assert graph_cleared.wait(timeout=2)
+        workbench = executor.submit(
+            stale_client.get,
+            "/planner/workbench/planning-reservations/workbench",
+        )
+        assert read_attempted.wait(timeout=2)
+        assert not workbench.done()
+        allow_reload.set()
+        conflict_response = conflict.result(timeout=2)
+        workbench_response = workbench.result(timeout=2)
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["Data"]["Status"] == "StateStoreRevisionConflict"
+    assert workbench_response.status_code == 200
+    assert workbench_response.json()["Data"] == {
+        "Summary": {
+            "BatchCount": 1,
+            "ActiveCount": 0,
+            "MTOCount": 1,
+            "MTACount": 0,
+        },
+        "Rows": [
+            {
+                "ReservationBatchID": "PRB-CONFLICT-READ",
+                "DemandCommitmentID": "DC-PHASE0",
+                "DemandClass": "MTO",
+                "Status": "LinkedToFormalOrder",
+                "ConfirmedBy": "planner-phase0",
+                "ConfirmedAt": "2026-06-22T07:45:00+00:00",
+                "CapacityReservationIDs": ["CCR-RES-1"],
+                "MaterialAllocationIDs": ["MPA-1"],
+            }
+        ],
+        "Boundary": "Shared planning reservations only; not ERP/WMS inventory authority.",
+    }
+    assert stale_store.ccr_capacity_reservations["CCR-RES-1"]["Status"] == (
+        "LinkedToFormalOrder"
+    )
+    assert stale_store.material_planning_allocations["MPA-1"]["Status"] == (
+        "LinkedToFormalOrder"
+    )
+
+
 def test_planning_reservation_workbench_summarizes_copied_business_rows_only():
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)

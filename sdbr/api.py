@@ -1167,7 +1167,8 @@ def create_app(
             try:
                 active_store.save()
             except StateStoreRevisionConflict as error:
-                active_store.reload()
+                with reservation_graph_lock:
+                    active_store.reload()
                 return _revision_conflict_response(
                     endpoint=request.url.path,
                     expected_revision=error.expected_revision,

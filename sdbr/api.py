@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
 from hmac import compare_digest
@@ -111,6 +112,11 @@ from sdbr.planner_view import (
 from sdbr.planning_run_view import (
     build_planning_run_detail,
     build_planning_run_workbench,
+)
+from sdbr.planning_run_reservation_bridge import (
+    ReservationBatchReferenceError,
+    freeze_planning_reservations,
+    transition_planning_reservations_for_run,
 )
 from sdbr.schedule_result_view import (
     build_schedule_result_workbench,
@@ -596,6 +602,7 @@ class PlanningRunPayload(BaseModel):
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
     MaxAttempts: int = Field(default=3, ge=1, le=10)
     RetryDelaySeconds: int = Field(default=60, ge=0, le=3600)
+    PlanningReservationBatchIDs: list[str] = Field(default_factory=list)
     RequestedBy: str
     RequestedAt: datetime
 
@@ -1095,6 +1102,12 @@ def create_app(
     ddmrp_open_supply = active_store.ddmrp_open_supply
     master_data_versions = active_store.master_data_versions
     planning_runs = active_store.planning_runs
+    planning_demand_commitments = active_store.planning_demand_commitments
+    planning_reservation_batches = active_store.planning_reservation_batches
+    ccr_capacity_reservations = active_store.ccr_capacity_reservations
+    material_planning_allocations = active_store.material_planning_allocations
+    planning_reservation_events = active_store.planning_reservation_events
+    processed_planning_event_keys = active_store.processed_planning_event_keys
     audit_events = active_store.audit_events
     if not simio_template_registry:
         simio_template_registry.update(default_simio_template_registry())
@@ -3147,6 +3160,61 @@ def create_app(
                         },
                     },
                 )
+        for batch_id in payload.PlanningReservationBatchIDs:
+            batch = planning_reservation_batches.get(batch_id)
+            if batch is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 404,
+                        "Data": {
+                            "ReservationBatchID": batch_id,
+                            "Status": "PlanningReservationBatchNotFound",
+                            "Message": "Requested planning reservation batch was not found.",
+                        },
+                    },
+                )
+            if isinstance(batch, dict) and batch.get("Status") not in {
+                "ActivePlanReservation",
+                "LinkedToFormalOrder",
+            }:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "ReservationBatchID": batch_id,
+                            "Status": "PlanningReservationBatchNotEligible",
+                            "Message": (
+                                "Requested planning reservation batch is not eligible "
+                                "for a planning run."
+                            ),
+                        },
+                    },
+                )
+        try:
+            frozen_planning_reservations = freeze_planning_reservations(
+                batch_ids=payload.PlanningReservationBatchIDs,
+                batches=planning_reservation_batches,
+                capacity_reservations=ccr_capacity_reservations,
+                material_allocations=material_planning_allocations,
+            )
+        except ReservationBatchReferenceError:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "Status": "PlanningReservationBatchInvalid",
+                        "Message": (
+                            "Planning reservation batch graph is incomplete or inconsistent."
+                        ),
+                    },
+                },
+            )
         planning_run = _pending_planning_run(
             payload=payload,
             master_data_version=master_data_version,
@@ -3161,6 +3229,7 @@ def create_app(
             frozen_calendar_overrides=_active_calendar_overrides(
                 calendar_overrides.values()
             ),
+            frozen_planning_reservations=frozen_planning_reservations,
         )
         planning_runs[payload.RunID] = planning_run
         _append_planning_run_audit_event(
@@ -3477,6 +3546,41 @@ def create_app(
                 planning_run=completed_run,
                 failed_at=completed_at,
             )
+        frozen_planning_reservations = completed_run.get(
+            "FrozenPlanningReservations"
+        )
+        frozen_batch_ids = (
+            frozen_planning_reservations.get("ReservationBatchIDs", [])
+            if isinstance(frozen_planning_reservations, dict)
+            else []
+        )
+        reservation_audit_details: dict[str, object] = {}
+        if frozen_batch_ids and completed_run["Status"] in {
+            "Completed",
+            "Failed",
+            "DeadLetter",
+        }:
+            transitioned = transition_planning_reservations_for_run(
+                run_id=run_id,
+                run_status=str(completed_run["Status"]),
+                batch_ids=frozen_batch_ids,
+                occurred_at=completed_at,
+                batches=planning_reservation_batches,
+                capacity_reservations=ccr_capacity_reservations,
+                material_allocations=material_planning_allocations,
+            )
+            planning_reservation_batches.clear()
+            planning_reservation_batches.update(transitioned["Batches"])
+            ccr_capacity_reservations.clear()
+            ccr_capacity_reservations.update(transitioned["CapacityReservations"])
+            material_planning_allocations.clear()
+            material_planning_allocations.update(transitioned["MaterialAllocations"])
+            detail_name = (
+                "PlanningReservationsConverted"
+                if completed_run["Status"] == "Completed"
+                else "PlanningReservationsHeldForError"
+            )
+            reservation_audit_details[detail_name] = list(frozen_batch_ids)
         status_history.append(
             {
                 "Status": completed_run["Status"],
@@ -3502,6 +3606,7 @@ def create_app(
                 "Status": completed_run["Status"],
                 "SolverStatus": completed_run.get("SolverStatus"),
                 "AttemptCount": completed_run.get("AttemptCount", 0),
+                **reservation_audit_details,
             },
         )
         return {
@@ -3948,6 +4053,51 @@ def create_app(
                 planning_runs=list(planning_runs.values()),
                 ortools_available=availability.available,
             ),
+        }
+
+    @app.get("/planner/workbench/planning-reservations/workbench")
+    def planning_reservation_workbench():
+        rows: list[dict[str, object]] = []
+        for batch in planning_reservation_batches.values():
+            row = deepcopy(batch)
+            row.pop("Resources", None)
+            row.pop("Routings", None)
+            if not row.get("DemandClass"):
+                commitment = planning_demand_commitments.get(
+                    str(row.get("DemandCommitmentID"))
+                )
+                if commitment is not None:
+                    row["DemandClass"] = commitment.get("DemandClass")
+            rows.append(row)
+        rows.sort(
+            key=lambda item: (
+                str(item.get("Status")),
+                str(item.get("ReservationBatchID")),
+            )
+        )
+        return {
+            "Endpoint": "/planner/workbench/planning-reservations/workbench",
+            "StatusCode": 200,
+            "Data": {
+                "Summary": {
+                    "BatchCount": len(rows),
+                    "ActiveCount": sum(
+                        1
+                        for row in rows
+                        if row.get("Status") == "ActivePlanReservation"
+                    ),
+                    "MTOCount": sum(
+                        1 for row in rows if row.get("DemandClass") == "MTO"
+                    ),
+                    "MTACount": sum(
+                        1 for row in rows if row.get("DemandClass") == "MTA"
+                    ),
+                },
+                "Rows": rows,
+                "Boundary": (
+                    "Shared planning reservations only; not ERP/WMS inventory authority."
+                ),
+            },
         }
 
     @app.get("/planner/workbench/planning-runs/{run_id}/workbench")
@@ -8689,6 +8839,7 @@ def _pending_planning_run(
     frozen_base_calendars: list[dict[str, object]] | None = None,
     frozen_resource_calendar_assignments: list[dict[str, object]] | None = None,
     frozen_calendar_overrides: list[dict[str, object]] | None = None,
+    frozen_planning_reservations: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "RunID": payload.RunID,
@@ -8737,6 +8888,16 @@ def _pending_planning_run(
         "SourceRunID": payload.SourceRunID,
         "ReleasePolicyVersionID": payload.ReleasePolicyVersionID,
         "FrozenReleasePolicy": dict(release_policy) if release_policy else None,
+        "PlanningReservationBatchIDs": list(payload.PlanningReservationBatchIDs),
+        "FrozenPlanningReservations": deepcopy(
+            frozen_planning_reservations
+            or {
+                "ReservationBatchIDs": [],
+                "Batches": [],
+                "CapacityReservations": [],
+                "MaterialAllocations": [],
+            }
+        ),
         "FrozenBaseCalendars": [
             dict(item) for item in (frozen_base_calendars or [])
         ],
@@ -8805,6 +8966,9 @@ def _planning_run_payload_from_record(
         TimeLimitSeconds=planning_run.get("TimeLimitSeconds", 300),
         MaxAttempts=planning_run.get("MaxAttempts", 3),
         RetryDelaySeconds=planning_run.get("RetryDelaySeconds", 60),
+        PlanningReservationBatchIDs=planning_run.get(
+            "PlanningReservationBatchIDs", []
+        ),
         RequestedBy=planning_run["RequestedBy"],
         RequestedAt=planning_run["RequestedAt"],
     )

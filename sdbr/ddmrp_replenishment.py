@@ -99,7 +99,7 @@ ISSUE_RECORD_FIELDS = (
     "IssueID", "EvaluationID", "Code", "Severity", "Message", "ItemID",
     "LocationID", "BlocksOperationalAction", "IssueFingerprint",
 )
-ISSUE_SEVERITIES = frozenset({"Blocking", "Warning", "Information"})
+ISSUE_SEVERITIES = frozenset({"Blocking", "Warning"})
 EVALUATION_RUN_FIELDS = (
     "EvaluationID", "EvaluationRequestID", "EvaluationAt", "RecordedAt", "RecordedBy",
     "EvaluationMode", "RuntimePlanningInputPackageID",
@@ -215,7 +215,11 @@ EVENT_TRANSITION_BY_TYPE = {
         frozenset({"Open", "ActiveGraph", "AdjustmentRequired"}), "Completed",
     ),
     "RecommendationSuperseded": (
-        frozenset({"Blocked", "PendingReview", "AdjustmentRequired"}), "Superseded",
+        frozenset({
+            "Blocked", "PendingReview", "Confirmed", "AdjustmentRequired", "Issued",
+            "OutputFailed", "ERPAccepted", "InExecution",
+        }),
+        "Superseded",
     ),
     "RecommendationPendingReview": (frozenset({"Blocked"}), "PendingReview"),
     "RecommendationConfirmed": (frozenset({"PendingReview"}), "Confirmed"),
@@ -928,33 +932,32 @@ def prepare_ddmrp_evaluation(
             if predecessor is not None:
                 predecessor_id = str(predecessor["RecommendationID"])
                 predecessor_status = recommendation_statuses[predecessor_id]
-                if predecessor_status in {"Blocked", "PendingReview", "AdjustmentRequired"}:
-                    aggregate_version = 1 + max(
-                        event["AggregateVersion"] for event in (*existing_events, *new_events)
-                        if event["AggregateType"] == "Recommendation"
-                        and event["AggregateID"] == predecessor_id
-                    )
-                    new_events.append(_new_event(
-                        event_type="RecommendationSuperseded",
-                        aggregate_type="Recommendation",
-                        aggregate_id=predecessor_id,
-                        aggregate_version=aggregate_version,
-                        evaluation_id=evaluation_id,
-                        logical_id=logical_id,
-                        recommendation_id=predecessor_id,
-                        related_recommendation_id=recommendation_id,
-                        status_before=predecessor_status,
-                        status_after="Superseded",
-                        occurred_at=recorded_text,
-                        actor_id=actor,
-                        causation_id=request_id,
-                        correlation_id=evaluation_id,
-                        payload={
-                            "SupersededByRecommendationID": recommendation_id,
-                            "SupersedingEvaluationID": evaluation_id,
-                        },
-                    ))
-                    recommendation_statuses[predecessor_id] = "Superseded"
+                aggregate_version = 1 + max(
+                    event["AggregateVersion"] for event in (*existing_events, *new_events)
+                    if event["AggregateType"] == "Recommendation"
+                    and event["AggregateID"] == predecessor_id
+                )
+                new_events.append(_new_event(
+                    event_type="RecommendationSuperseded",
+                    aggregate_type="Recommendation",
+                    aggregate_id=predecessor_id,
+                    aggregate_version=aggregate_version,
+                    evaluation_id=evaluation_id,
+                    logical_id=logical_id,
+                    recommendation_id=predecessor_id,
+                    related_recommendation_id=recommendation_id,
+                    status_before=predecessor_status,
+                    status_after="Superseded",
+                    occurred_at=recorded_text,
+                    actor_id=actor,
+                    causation_id=request_id,
+                    correlation_id=evaluation_id,
+                    payload={
+                        "SupersededByRecommendationID": recommendation_id,
+                        "SupersedingEvaluationID": evaluation_id,
+                    },
+                ))
+                recommendation_statuses[predecessor_id] = "Superseded"
 
         row = {
             "EvaluationRowID": evaluation_row_id,
@@ -1374,13 +1377,27 @@ def _build_issues(
 
 def _validate_issue(issue: Mapping[str, object]) -> None:
     _require_exact_fields(issue, ISSUE_RECORD_FIELDS, context="DDMRP issue")
+    if issue["ItemID"] is not None or issue["LocationID"] is not None:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP package issue must not have item/location scope."
+        )
+    blocks_operational_action = issue["BlocksOperationalAction"]
+    if not isinstance(blocks_operational_action, bool):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP issue blocking state must be boolean."
+        )
     if issue["Severity"] not in ISSUE_SEVERITIES:
         raise DdmrpReplenishmentConflict("Unsupported DDMRP issue severity.")
+    expected_severity = "Blocking" if blocks_operational_action else "Warning"
+    if issue["Severity"] != expected_severity:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP issue severity differs from blocking state."
+        )
     expected_id = canonical_stable_id("DRI", {
         "EvaluationID": issue["EvaluationID"],
         "Code": issue["Code"],
-        "ItemID": issue["ItemID"],
-        "LocationID": issue["LocationID"],
+        "ItemID": None,
+        "LocationID": None,
     })
     if issue["IssueID"] != expected_id:
         raise DdmrpReplenishmentConflict("DDMRP issue canonical ID mismatch.")
@@ -1543,18 +1560,17 @@ def _validate_existing_recommendations(
                 if expected_predecessor in successors:
                     raise DdmrpReplenishmentConflict("Recommendation has multiple successors.")
                 successors.add(expected_predecessor)
-                if recommendation["AdjustmentOfRecommendationID"] is None:
-                    reverse = [
-                        event for event in events
-                        if event.get("EventType") == "RecommendationSuperseded"
-                        and event.get("AggregateID") == expected_predecessor
-                        and event.get("RelatedRecommendationID")
-                        == recommendation["RecommendationID"]
-                    ]
-                    if len(reverse) != 1:
-                        raise DdmrpReplenishmentConflict(
-                            "Recommendation supersession reverse event is missing."
-                        )
+                reverse = [
+                    event for event in events
+                    if event.get("EventType") == "RecommendationSuperseded"
+                    and event.get("AggregateID") == expected_predecessor
+                    and event.get("RelatedRecommendationID")
+                    == recommendation["RecommendationID"]
+                ]
+                if len(reverse) != 1:
+                    raise DdmrpReplenishmentConflict(
+                        "Recommendation supersession reverse event is missing."
+                    )
     return result, statuses
 
 

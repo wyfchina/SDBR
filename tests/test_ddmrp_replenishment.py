@@ -361,6 +361,11 @@ def test_be_ddmrp_007_recommendation_predecessor_and_supersession_links_are_bidi
 
 
 def test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_second_actionable_version() -> None:
+    from sdbr.ddmrp_replenishment import (
+        apply_staged_ddmrp_evaluation, fold_recommendation_status,
+        stage_ddmrp_evaluation,
+    )
+
     first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
     existing = _existing_from(first)
     recommendation = first.recommendation_versions[0]
@@ -372,17 +377,86 @@ def test_be_ddmrp_007_active_confirmed_graph_creates_adjustment_required_not_sec
     second = _prepare_evaluation(
         request_id="REQ-2",
         lines=[_runtime_line("ITEM-RED", "LOC", "Red", 90)],
+        evaluated_at=EVALUATED_AT + timedelta(minutes=1),
         existing=existing,
     )
 
     adjustment = second.recommendation_versions[0]
+    superseded = next(
+        event for event in second.events
+        if event["EventType"] == "RecommendationSuperseded"
+    )
     assert adjustment["InitialStatus"] == "AdjustmentRequired"
     assert adjustment["AdjustmentOfRecommendationID"] == recommendation["RecommendationID"]
     assert adjustment["PredecessorRecommendationID"] == recommendation["RecommendationID"]
+    assert superseded["AggregateID"] == recommendation["RecommendationID"]
+    assert superseded["AggregateVersion"] == 4
+    assert superseded["StatusBefore"] == "Confirmed"
+    assert superseded["StatusAfter"] == "Superseded"
+    assert superseded["RelatedRecommendationID"] == adjustment["RecommendationID"]
+    assert superseded["EventPayload"] == {
+        "SupersededByRecommendationID": adjustment["RecommendationID"],
+        "SupersedingEvaluationID": adjustment["EvaluationID"],
+    }
     assert not any(
         event["EventType"] in {"RecommendationPendingReview", "RecommendationConfirmed"}
         for event in second.events
     )
+    ledgers = _empty_evaluation_ledgers()
+    ledgers["chains"].update(existing["chains"])
+    ledgers["recommendations"].update(existing["recommendations"])
+    ledgers["events"].extend(existing["events"])
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=second, **ledgers), **ledgers
+    )
+    persisted = next(
+        event for event in ledgers["events"]
+        if event["EventID"] == superseded["EventID"]
+    )
+    assert persisted == superseded
+    assert fold_recommendation_status(recommendation, ledgers["events"]) == "Superseded"
+
+
+def test_be_ddmrp_007_adjustment_history_requires_reverse_supersession_event() -> None:
+    first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
+    existing = _existing_from(first)
+    predecessor = first.recommendation_versions[0]
+    chain = first.chain_records[0]
+    existing["events"] += _confirmation_events(predecessor, chain)
+    existing["active_graphs"] = {
+        chain["LogicalReplenishmentID"]: _active_graph(chain, predecessor)
+    }
+    adjustment = _prepare_evaluation(
+        request_id="REQ-2",
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 90)],
+        existing=existing,
+    )
+    corrupted = _existing_from(adjustment)
+    corrupted["chains"].update(existing["chains"])
+    corrupted["recommendations"].update(existing["recommendations"])
+    corrupted["events"] = tuple(
+        event
+        for event in (*existing["events"], *adjustment.events)
+        if not (
+            event["EventType"] == "RecommendationSuperseded"
+            and event["AggregateID"] == predecessor["RecommendationID"]
+            and event["RelatedRecommendationID"]
+            == adjustment.recommendation_versions[0]["RecommendationID"]
+        )
+    )
+    corrupted["active_graphs"] = existing["active_graphs"]
+
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict
+
+    with pytest.raises(
+        DdmrpReplenishmentConflict,
+        match="Recommendation supersession reverse event is missing",
+    ):
+        _prepare_evaluation(
+            request_id="REQ-3",
+            lines=[_runtime_line("ITEM-RED", "LOC", "Red", 100)],
+            existing=corrupted,
+        )
 
 
 def test_be_ddmrp_007_terminal_chain_starts_next_cycle_with_new_logical_identity() -> None:
@@ -685,6 +759,62 @@ def test_be_ddmrp_007_event_or_child_drift_fails_closed() -> None:
                 recommendations=drifted["recommendations"],
                 events=tuple(drifted["events"]),
             )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"ItemID": "ITEM-SCOPED"},
+        {"LocationID": "LOC-SCOPED"},
+        {"Severity": "Information"},
+        {"Severity": "Warning", "BlocksOperationalAction": True},
+        {"Severity": "Blocking", "BlocksOperationalAction": False},
+        {"Severity": "Blocking", "BlocksOperationalAction": "yes"},
+    ),
+)
+def test_be_ddmrp_007_persisted_issue_semantic_corruption_fails_closed(
+    changes: dict[str, object],
+) -> None:
+    from sdbr.ddmrp_replenishment import (
+        DdmrpReplenishmentConflict, apply_staged_ddmrp_evaluation,
+        canonical_fingerprint, canonical_stable_id,
+        lookup_ddmrp_evaluation_request_result, stage_ddmrp_evaluation,
+    )
+
+    write_set = _prepare_evaluation()
+    ledgers = _empty_evaluation_ledgers()
+    apply_staged_ddmrp_evaluation(
+        staged=stage_ddmrp_evaluation(write_set=write_set, **ledgers), **ledgers
+    )
+    evaluation = next(iter(ledgers["evaluation_runs"].values()))
+    issue = evaluation["Issues"][0]
+    issue.update(changes)
+    issue["IssueID"] = canonical_stable_id("DRI", {
+        "EvaluationID": issue["EvaluationID"],
+        "Code": issue["Code"],
+        "ItemID": issue["ItemID"],
+        "LocationID": issue["LocationID"],
+    })
+    issue["IssueFingerprint"] = canonical_fingerprint({
+        key: value for key, value in issue.items() if key != "IssueFingerprint"
+    })
+    evaluation["EvaluationFingerprint"] = canonical_fingerprint({
+        key: value for key, value in evaluation.items()
+        if key != "EvaluationFingerprint"
+    })
+    _recompute_persisted_evaluation_fingerprints(ledgers, write_set)
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        lookup_ddmrp_evaluation_request_result(
+            evaluation_request_id=write_set.evaluation_request_id,
+            request_fingerprint=write_set.request_fingerprint,
+            request_results=ledgers["request_results"],
+            evaluation_runs=ledgers["evaluation_runs"],
+            evaluation_rows=ledgers["evaluation_rows"],
+            chains=ledgers["chains"],
+            recommendations=ledgers["recommendations"],
+            events=tuple(ledgers["events"]),
+        )
 
 
 def test_be_ddmrp_007_failure_after_staging_leaves_every_live_ledger_unchanged() -> None:

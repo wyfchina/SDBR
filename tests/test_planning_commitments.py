@@ -1,11 +1,16 @@
 """Acceptance evidence for BE-SDBR-006 stable demand commitment identity."""
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+import json
 
 import pytest
 
 from sdbr.planning_commitments import (
+    BUSINESS_CONTENT_FIELDS,
     DemandCommitmentConflict,
+    DemandCommitmentMigrationRequired,
     assert_no_active_predecessor,
     create_demand_commitment,
     register_demand_commitment,
@@ -170,6 +175,105 @@ def test_register_does_not_treat_two_malformed_business_records_as_equal():
         )
 
     assert error.value.status == "DemandCommitmentMigrationRequired"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["BusinessKey", "LogicalDemandKey", "DemandCommitmentID"],
+)
+@pytest.mark.parametrize("record_kind", ["stored", "candidate"])
+def test_register_rejects_drifted_derived_demand_identity(
+    field: str,
+    record_kind: str,
+):
+    existing = _commitment()
+    candidate = _commitment()
+    target = existing if record_kind == "stored" else candidate
+    target[field] = f"forged-{field}"
+    commitments = (
+        {str(_commitment()["DemandCommitmentID"]): existing}
+        if record_kind == "stored"
+        else {}
+    )
+
+    with pytest.raises(DemandCommitmentConflict) as error:
+        register_demand_commitment(commitments, candidate)
+
+    expected_type = (
+        DemandCommitmentMigrationRequired
+        if record_kind == "stored"
+        else DemandCommitmentConflict
+    )
+    assert type(error.value) is expected_type
+
+
+def _legacy_business_fingerprint(record: dict[str, object]) -> str:
+    content = {field: record[field] for field in BUSINESS_CONTENT_FIELDS}
+    encoded = json.dumps(
+        content,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{sha256(encoded).hexdigest()}"
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("DemandSourceType", "Forecast"), ("Quantity", 0.0)],
+)
+@pytest.mark.parametrize("record_kind", ["stored", "candidate"])
+def test_register_rejects_self_consistent_invalid_domain_content(
+    field: str,
+    invalid_value: object,
+    record_kind: str,
+):
+    invalid = _commitment()
+    invalid[field] = invalid_value
+    invalid["ContentFingerprint"] = _legacy_business_fingerprint(invalid)
+    candidate = deepcopy(invalid)
+    commitments = (
+        {str(invalid["DemandCommitmentID"]): invalid}
+        if record_kind == "stored"
+        else {}
+    )
+
+    with pytest.raises(DemandCommitmentConflict) as error:
+        register_demand_commitment(commitments, candidate)
+
+    expected_type = (
+        DemandCommitmentMigrationRequired
+        if record_kind == "stored"
+        else DemandCommitmentConflict
+    )
+    assert type(error.value) is expected_type
+
+
+def test_register_rejects_duplicate_matching_business_key_ledger():
+    existing = _commitment()
+    duplicate = deepcopy(existing)
+
+    with pytest.raises(
+        DemandCommitmentMigrationRequired,
+        match="multiple persisted demand commitments",
+    ):
+        register_demand_commitment(
+            {
+                str(existing["DemandCommitmentID"]): existing,
+                "duplicate-ledger-row": duplicate,
+            },
+            _commitment(),
+        )
+
+
+def test_predecessor_check_rejects_drifted_stored_logical_identity():
+    predecessor = {**_commitment(version="1"), "Status": "Active"}
+    predecessor["LogicalDemandKey"] = "forged-logical-demand"
+
+    with pytest.raises(DemandCommitmentMigrationRequired):
+        assert_no_active_predecessor(
+            {str(predecessor["DemandCommitmentID"]): predecessor},
+            _commitment(version="2"),
+        )
 
 
 def test_create_demand_commitment_delimited_source_identifiers_remain_distinct():

@@ -7,6 +7,7 @@ from hmac import compare_digest
 from pathlib import Path
 from secrets import token_urlsafe
 from threading import Lock, RLock
+from time import monotonic
 from typing import Literal, Mapping
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
@@ -237,6 +238,9 @@ from sdbr.test_case_acceptance import (
     build_test_case_acceptance_workbench,
     create_test_case_acceptance_decision,
 )
+
+
+_DIRECT_EXECUTION_CLAIM_GRACE_SECONDS = 60
 
 
 class ResourcePayload(BaseModel):
@@ -616,8 +620,8 @@ class PlanningRunPayload(BaseModel):
 
 class PlanningRunExecutionPayload(BaseModel):
     ExecutedBy: str
-    StartedAt: datetime
-    CompletedAt: datetime | None = None
+    StartedAt: AwareDatetime
+    CompletedAt: AwareDatetime | None = None
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
     LeaseToken: str | None = None
 
@@ -659,20 +663,20 @@ class PlanningRunEnqueuePayload(BaseModel):
 
 class PlanningRunClaimPayload(BaseModel):
     WorkerID: str
-    ClaimedAt: datetime
+    ClaimedAt: AwareDatetime
     LeaseSeconds: int = Field(default=300, ge=10, le=3600)
 
 
 class PlanningRunLeaseRenewalPayload(BaseModel):
     WorkerID: str
     LeaseToken: str
-    RenewedAt: datetime
+    RenewedAt: AwareDatetime
     LeaseSeconds: int = Field(default=300, ge=10, le=3600)
 
 
 class PlanningRunProcessQueuedPayload(BaseModel):
     WorkerID: str = "interactive-worker"
-    ProcessedAt: datetime
+    ProcessedAt: AwareDatetime
     LeaseSeconds: int = Field(default=300, ge=10, le=3600)
     TimeLimitSeconds: int = Field(default=300, ge=1, le=3600)
 
@@ -1159,11 +1163,10 @@ def create_app(
             await run_in_threadpool(active_store.state_lock.acquire)
             try:
                 response = await call_next(request)
+                response_revision = active_store.current_revision()
             finally:
                 active_store.state_lock.release()
-            response.headers["X-Workbench-Revision"] = str(
-                active_store.current_revision()
-            )
+            response.headers["X-Workbench-Revision"] = str(response_revision)
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
@@ -1174,9 +1177,14 @@ def create_app(
         )
         if store_managed_execution:
             response = await call_next(request)
-            response.headers["X-Workbench-Revision"] = str(
-                active_store.current_revision()
+            response_revision = getattr(
+                request.state,
+                "store_managed_revision",
+                None,
             )
+            if not isinstance(response_revision, int):
+                response_revision = active_store.current_revision()
+            response.headers["X-Workbench-Revision"] = str(response_revision)
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
@@ -3437,13 +3445,15 @@ def create_app(
                 for planning_run in planning_runs.values()
                 if planning_run.get("SolverBackendID") == ACTIVE_SOLVER_BACKEND_ID
                 and (
-                    planning_run["Status"] == "Queued"
-                    and _planning_run_ready_for_claim(
+                    (
+                        planning_run["Status"] == "Queued"
+                        and _planning_run_ready_for_claim(
+                            planning_run, payload.ClaimedAt
+                        )
+                    )
+                    or _planning_run_lease_expired(
                         planning_run, payload.ClaimedAt
                     )
-                )
-                or _planning_run_lease_expired(
-                    planning_run, payload.ClaimedAt
                 )
             ]
             if not candidates:
@@ -3466,6 +3476,7 @@ def create_app(
                 claimed_run.pop("ExecutionTokenHash", None)
                 claimed_run.pop("ExecutionClaimedAt", None)
                 claimed_run.pop("ExecutionClaimedBy", None)
+                claimed_run.pop("ExecutionClaimExpiresAt", None)
                 claimed_run["ExecutionClaimInvalidatedAt"] = (
                     payload.ClaimedAt.isoformat()
                 )
@@ -3624,6 +3635,19 @@ def create_app(
                     )
 
             execution_version = int(planning_run.get("ExecutionVersion", 0)) + 1
+            execution_claim_expires_at = (
+                str(planning_run["LeaseExpiresAt"])
+                if worker_execution
+                else (
+                    payload.StartedAt
+                    + timedelta(
+                        seconds=(
+                            payload.TimeLimitSeconds
+                            + _DIRECT_EXECUTION_CLAIM_GRACE_SECONDS
+                        )
+                    )
+                ).isoformat()
+            )
             claimed_execution_run = deepcopy(planning_run)
             claimed_execution_run.update(
                 {
@@ -3632,6 +3656,7 @@ def create_app(
                     "ExecutionTokenHash": execution_token_hash,
                     "ExecutionClaimedAt": payload.StartedAt.isoformat(),
                     "ExecutionClaimedBy": payload.ExecutedBy,
+                    "ExecutionClaimExpiresAt": execution_claim_expires_at,
                 }
             )
             claimed_status_history = list(planning_run["StatusHistory"])
@@ -3669,10 +3694,11 @@ def create_app(
             }
 
         try:
-            claim, _ = active_store.atomic_update(
+            claim, claim_outcome = active_store.atomic_update(
                 persist_execution_claim,
                 expected_revision=expected_revision,
             )
+            request.state.store_managed_revision = claim_outcome.revision
         except _StoreManagedRequestRejected as error:
             return error.response
         except StateStoreRevisionConflict as error:
@@ -3690,6 +3716,7 @@ def create_app(
         master_data_version = claim["MasterDataVersion"]
         operational_snapshot = claim["OperationalSnapshot"]
         execution_request = _planning_run_payload_from_record(planning_run)
+        solve_started_at = monotonic()
         try:
             solver_result = _execute_planning_run(
                 payload=execution_request,
@@ -3728,7 +3755,13 @@ def create_app(
                 "SolverMessage": str(error),
                 "Schedule": None,
             }
-        completed_at = payload.CompletedAt or datetime.now(timezone.utc)
+        observed_completed_at = payload.StartedAt + timedelta(
+            seconds=max(0.0, monotonic() - solve_started_at)
+        )
+        completed_at = max(
+            observed_completed_at,
+            payload.CompletedAt or observed_completed_at,
+        )
 
         def persist_execution_finalization() -> dict[str, object]:
             live_execution_run = planning_runs.get(run_id)
@@ -3769,6 +3802,22 @@ def create_app(
                                     "before finalization."
                                 ),
                             },
+                        },
+                    )
+                )
+            expiry_error = _planning_run_execution_claim_expiry_error(
+                planning_run=live_execution_run,
+                finalized_at=completed_at,
+                worker_execution=bool(claim["WorkerExecution"]),
+            )
+            if expiry_error is not None:
+                raise _StoreManagedRequestRejected(
+                    JSONResponse(
+                        status_code=409,
+                        content={
+                            "Endpoint": endpoint,
+                            "StatusCode": 409,
+                            "Data": {"RunID": run_id, **expiry_error},
                         },
                     )
                 )
@@ -3989,6 +4038,7 @@ def create_app(
             )
             completed_run["StatusHistory"] = status_history
             completed_run.pop("ExecutionTokenHash", None)
+            completed_run.pop("ExecutionClaimExpiresAt", None)
             completed_run["CompletedExecutionVersion"] = claim["ExecutionVersion"]
             planning_runs[run_id] = completed_run
             _append_planning_run_audit_event(
@@ -4014,10 +4064,78 @@ def create_app(
                 "ReservationError": deepcopy(reservation_error),
             }
 
+        def persist_direct_finalization_error(
+            finalization_error: Exception,
+        ) -> dict[str, object]:
+            live_execution_run = planning_runs.get(run_id)
+            ownership_matches = (
+                live_execution_run is not None
+                and live_execution_run.get("Status") == "Running"
+                and live_execution_run.get("ExecutionVersion")
+                == claim["ExecutionVersion"]
+                and live_execution_run.get("ExecutionClaimedBy")
+                == payload.ExecutedBy
+                and compare_digest(
+                    str(live_execution_run.get("ExecutionTokenHash") or ""),
+                    execution_token_hash,
+                )
+            )
+            if not ownership_matches:
+                raise RuntimeError(
+                    "Direct execution ownership changed before finalization error "
+                    "compensation."
+                )
+            failed_run = deepcopy(live_execution_run)
+            failed_run.update(
+                {
+                    "Status": "Failed",
+                    "SolverStatus": "Error",
+                    "SolverMessage": (
+                        "Planning run finalization failed: "
+                        f"{finalization_error}"
+                    ),
+                    "PlanningError": {
+                        "Status": "PlanningRunFinalizationError",
+                        "Message": str(finalization_error),
+                    },
+                    "StartedAt": payload.StartedAt.isoformat(),
+                    "CompletedAt": completed_at.isoformat(),
+                    "ExecutedBy": payload.ExecutedBy,
+                    "TimeLimitSeconds": payload.TimeLimitSeconds,
+                    "ExecutionClaimInvalidatedAt": completed_at.isoformat(),
+                    "ExecutionClaimInvalidationReason": "FinalizationError",
+                }
+            )
+            failed_run.pop("ExecutionTokenHash", None)
+            failed_run.pop("ExecutionClaimExpiresAt", None)
+            failed_run["StatusHistory"] = [
+                *live_execution_run["StatusHistory"],
+                {
+                    "Status": "Failed",
+                    "ChangedAt": completed_at.isoformat(),
+                    "ChangedBy": payload.ExecutedBy,
+                    "Reason": "FinalizationError",
+                },
+            ]
+            planning_runs[run_id] = failed_run
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=run_id,
+                action="PlanningRunFinalizationFailed",
+                actor_id=_effective_actor_id(request, payload.ExecutedBy),
+                occurred_at=completed_at,
+                details={
+                    "ExecutionVersion": claim["ExecutionVersion"],
+                    "Message": str(finalization_error),
+                },
+            )
+            return deepcopy(failed_run)
+
         try:
-            finalization, _ = active_store.atomic_update(
+            finalization, finalization_outcome = active_store.atomic_update(
                 persist_execution_finalization
             )
+            request.state.store_managed_revision = finalization_outcome.revision
         except _StoreManagedRequestRejected as error:
             return error.response
         except StateStoreRevisionConflict as error:
@@ -4030,6 +4148,13 @@ def create_app(
                     "persisted execution owner was not overwritten."
                 ),
             )
+        except Exception as error:
+            if claim["DirectExecution"]:
+                _, compensation_outcome = active_store.atomic_update(
+                    lambda: persist_direct_finalization_error(error)
+                )
+                request.state.store_managed_revision = compensation_outcome.revision
+            raise
 
         completed_run = finalization["PlanningRun"]
         reservation_error = finalization["ReservationError"]
@@ -4164,12 +4289,13 @@ def create_app(
             )
 
         try:
-            active_store.atomic_update(
+            _, claim_outcome = active_store.atomic_update(
                 persist_interactive_worker_claim,
                 expected_revision=_client_revision_from_if_match(
                     request.headers.get("if-match")
                 )
             )
+            request.state.store_managed_revision = claim_outcome.revision
         except _StoreManagedRequestRejected as error:
             return error.response
         except StateStoreRevisionConflict as error:
@@ -4250,13 +4376,13 @@ def create_app(
                     )
                 )
             renewed_run = dict(planning_run)
+            renewed_expires_at = (
+                payload.RenewedAt + timedelta(seconds=payload.LeaseSeconds)
+            ).isoformat()
             renewed_run.update(
                 {
                     "LastHeartbeatAt": payload.RenewedAt.isoformat(),
-                    "LeaseExpiresAt": (
-                        payload.RenewedAt
-                        + timedelta(seconds=payload.LeaseSeconds)
-                    ).isoformat(),
+                    "LeaseExpiresAt": renewed_expires_at,
                     "LeaseSeconds": payload.LeaseSeconds,
                     "LeaseRenewalCount": int(
                         planning_run.get("LeaseRenewalCount", 0)
@@ -4264,6 +4390,8 @@ def create_app(
                     + 1,
                 }
             )
+            if renewed_run.get("ExecutionTokenHash"):
+                renewed_run["ExecutionClaimExpiresAt"] = renewed_expires_at
             planning_runs[run_id] = renewed_run
             _append_planning_run_audit_event(
                 audit_events=audit_events,
@@ -4276,12 +4404,13 @@ def create_app(
             return deepcopy(renewed_run)
 
         try:
-            renewed_run, _ = active_store.atomic_update(
+            renewed_run, renewal_outcome = active_store.atomic_update(
                 persist_lease_renewal,
                 expected_revision=_client_revision_from_if_match(
                     request.headers.get("if-match")
                 ),
             )
+            request.state.store_managed_revision = renewal_outcome.revision
         except _StoreManagedRequestRejected as error:
             return error.response
         except StateStoreRevisionConflict as error:
@@ -4399,6 +4528,13 @@ def create_app(
                 "PlanningError": None,
             }
         )
+        for ownership_field in (
+            "ExecutionTokenHash",
+            "ExecutionClaimExpiresAt",
+            "LeaseTokenHash",
+            "LeaseExpiresAt",
+        ):
+            recovered_run.pop(ownership_field, None)
         if recovery_source_status == "DeadLetter":
             recovered_run["PreviousDeadLetter"] = {
                 "DeadLetterAt": planning_run.get("DeadLetterAt"),
@@ -9283,10 +9419,30 @@ def _planning_run_lease_expired(
 ) -> bool:
     if planning_run["Status"] != "Running":
         return False
-    lease_expires_at = planning_run.get("LeaseExpiresAt")
-    if not isinstance(lease_expires_at, str):
+    normalized_observed_at = _aware_planning_run_datetime(observed_at)
+    if normalized_observed_at is None:
         return False
-    return datetime.fromisoformat(lease_expires_at) <= observed_at
+    has_worker_lease = any(
+        planning_run.get(field)
+        for field in ("WorkerID", "LeaseTokenHash", "LeaseExpiresAt")
+    )
+    if has_worker_lease:
+        lease_expires_at = _aware_planning_run_datetime(
+            planning_run.get("LeaseExpiresAt")
+        )
+        return (
+            lease_expires_at is None
+            or lease_expires_at <= normalized_observed_at
+        )
+    if planning_run.get("ExecutionTokenHash"):
+        execution_expires_at = _aware_planning_run_datetime(
+            planning_run.get("ExecutionClaimExpiresAt")
+        )
+        return (
+            execution_expires_at is None
+            or execution_expires_at <= normalized_observed_at
+        )
+    return False
 
 
 def _planning_run_ready_for_claim(
@@ -9296,7 +9452,27 @@ def _planning_run_ready_for_claim(
     next_attempt_at = planning_run.get("NextAttemptAt")
     if not isinstance(next_attempt_at, str):
         return True
-    return datetime.fromisoformat(next_attempt_at) <= observed_at
+    normalized_next_attempt_at = _aware_planning_run_datetime(next_attempt_at)
+    normalized_observed_at = _aware_planning_run_datetime(observed_at)
+    return (
+        normalized_next_attempt_at is None
+        or normalized_observed_at is not None
+        and normalized_next_attempt_at <= normalized_observed_at
+    )
+
+
+def _aware_planning_run_datetime(value: object) -> datetime | None:
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
 
 
 def _apply_planning_run_failure_policy(
@@ -9326,6 +9502,7 @@ def _apply_planning_run_failure_policy(
                 "LeaseTokenHash": None,
                 "LeaseClaimedAt": None,
                 "LeaseExpiresAt": None,
+                "ExecutionClaimExpiresAt": None,
             }
         )
         return updated_run
@@ -9340,6 +9517,7 @@ def _apply_planning_run_failure_policy(
             ),
             "LeaseTokenHash": None,
             "LeaseExpiresAt": None,
+            "ExecutionClaimExpiresAt": None,
         }
     )
     return updated_run
@@ -9364,16 +9542,60 @@ def _planning_run_execution_lease_error(
             "CurrentStatus": planning_run["Status"],
             "Message": "Worker identity or lease token does not own this planning run.",
         }
-    lease_expires_at = planning_run.get("LeaseExpiresAt")
-    if (
-        isinstance(lease_expires_at, str)
-        and datetime.fromisoformat(lease_expires_at) <= started_at
-    ):
+    lease_expires_at = _aware_planning_run_datetime(
+        planning_run.get("LeaseExpiresAt")
+    )
+    if lease_expires_at is None or lease_expires_at <= started_at:
         return {
             "Status": "PlanningRunLeaseExpired",
             "CurrentStatus": planning_run["Status"],
-            "LeaseExpiresAt": lease_expires_at,
+            "LeaseExpiresAt": planning_run.get("LeaseExpiresAt"),
             "Message": "Planning run lease expired before execution started.",
+        }
+    return None
+
+
+def _planning_run_execution_claim_expiry_error(
+    *,
+    planning_run: Mapping[str, object],
+    finalized_at: datetime,
+    worker_execution: bool,
+) -> dict[str, object] | None:
+    execution_expires_at = _aware_planning_run_datetime(
+        planning_run.get("ExecutionClaimExpiresAt")
+    )
+    if worker_execution:
+        lease_expires_at = _aware_planning_run_datetime(
+            planning_run.get("LeaseExpiresAt")
+        )
+        if (
+            lease_expires_at is None
+            or execution_expires_at is None
+            or lease_expires_at <= finalized_at
+            or execution_expires_at <= finalized_at
+        ):
+            return {
+                "Status": "PlanningRunLeaseExpired",
+                "CurrentStatus": planning_run["Status"],
+                "LeaseExpiresAt": planning_run.get("LeaseExpiresAt"),
+                "ExecutionClaimExpiresAt": planning_run.get(
+                    "ExecutionClaimExpiresAt"
+                ),
+                "Message": (
+                    "Planning run lease expired before execution finalization."
+                ),
+            }
+        return None
+    if execution_expires_at is None or execution_expires_at <= finalized_at:
+        return {
+            "Status": "PlanningRunExecutionClaimExpired",
+            "CurrentStatus": planning_run["Status"],
+            "ExecutionClaimExpiresAt": planning_run.get(
+                "ExecutionClaimExpiresAt"
+            ),
+            "Message": (
+                "Direct execution claim expired before execution finalization."
+            ),
         }
     return None
 

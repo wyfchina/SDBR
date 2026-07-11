@@ -2,10 +2,12 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from hashlib import sha256
+import json
 
 import pytest
 
-from sdbr.planning_commitments import create_demand_commitment
+from sdbr.planning_commitments import BUSINESS_CONTENT_FIELDS, create_demand_commitment
 from sdbr.planning_run_reservation_bridge import (
     ReservationBatchReferenceError,
     ReservationGraphDriftError,
@@ -15,7 +17,7 @@ from sdbr.planning_run_reservation_bridge import (
 )
 
 
-def _demands() -> dict[str, dict[str, object]]:
+def _canonical_demands() -> dict[str, dict[str, object]]:
     first = create_demand_commitment(
         demand_source_type="MTOCustomerOrder",
         source_system="MockERP",
@@ -46,28 +48,27 @@ def _demands() -> dict[str, dict[str, object]]:
         demand_class="MTA",
         trace_id="TRACE-DC-2",
     )
-    first.update(
-        {
-            "DemandCommitmentID": "DC-1",
-            "Status": "Active",
-            "RecordVersion": 1,
-        }
-    )
-    second.update(
-        {
-            "DemandCommitmentID": "DC-2",
-            "Status": "Active",
-            "RecordVersion": 1,
-        }
-    )
-    return {"DC-1": first, "DC-2": second}
+    first.update({"Status": "Active", "RecordVersion": 1})
+    second.update({"Status": "Active", "RecordVersion": 1})
+    return {
+        str(first["DemandCommitmentID"]): first,
+        str(second["DemandCommitmentID"]): second,
+    }
+
+
+_CANONICAL_DEMANDS = _canonical_demands()
+DEMAND_1_ID, DEMAND_2_ID = tuple(_CANONICAL_DEMANDS)
+
+
+def _demands() -> dict[str, dict[str, object]]:
+    return deepcopy(_CANONICAL_DEMANDS)
 
 
 def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, object]]:
     return {
         "PRB-1": {
             "ReservationBatchID": "PRB-1",
-            "DemandCommitmentID": "DC-1",
+            "DemandCommitmentID": DEMAND_1_ID,
             "DemandClass": "MTO",
             "Status": status,
             "CapacityReservationIDs": ["CCR-1"],
@@ -77,7 +78,7 @@ def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, ob
         },
         "PRB-2": {
             "ReservationBatchID": "PRB-2",
-            "DemandCommitmentID": "DC-2",
+            "DemandCommitmentID": DEMAND_2_ID,
             "DemandClass": "MTA",
             "Status": "LinkedToFormalOrder",
             "CapacityReservationIDs": ["CCR-2"],
@@ -92,7 +93,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
         "CCR-1": {
             "CapacityReservationID": "CCR-1",
             "ReservationBatchID": "PRB-1",
-            "DemandCommitmentID": "DC-1",
+            "DemandCommitmentID": DEMAND_1_ID,
             "DemandClass": "MTO",
             "ReservationLineID": "CAP-1",
             "OrderID": "WO-1",
@@ -109,7 +110,7 @@ def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str,
         "CCR-2": {
             "CapacityReservationID": "CCR-2",
             "ReservationBatchID": "PRB-2",
-            "DemandCommitmentID": "DC-2",
+            "DemandCommitmentID": DEMAND_2_ID,
             "DemandClass": "MTA",
             "ReservationLineID": "CAP-2",
             "OrderID": "WO-2",
@@ -137,7 +138,7 @@ def _allocations(
         "MA-1": {
             "MaterialAllocationID": "MA-1",
             "ReservationBatchID": "PRB-1",
-            "DemandCommitmentID": "DC-1",
+            "DemandCommitmentID": DEMAND_1_ID,
             "DemandClass": "MTO",
             "Status": status,
             "Details": {"item": "RM-1"},
@@ -146,7 +147,7 @@ def _allocations(
         "MA-2": {
             "MaterialAllocationID": "MA-2",
             "ReservationBatchID": "PRB-2",
-            "DemandCommitmentID": "DC-2",
+            "DemandCommitmentID": DEMAND_2_ID,
             "DemandClass": "MTA",
             "Status": "LinkedToFormalOrder",
             "RecordVersion": 1,
@@ -190,6 +191,28 @@ def test_freeze_requires_aware_latest_completion_inside_capacity_window(
             demand_commitments=_demands(),
             batches=_batches(),
             capacity_reservations=capacities,
+            material_allocations=_allocations(),
+        )
+
+
+def test_freeze_rejects_self_consistent_unsupported_demand_source():
+    demands = _demands()
+    demand = demands[DEMAND_1_ID]
+    demand["DemandSourceType"] = "Forecast"
+    content = {field: demand[field] for field in BUSINESS_CONTENT_FIELDS}
+    encoded = json.dumps(
+        content,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    demand["ContentFingerprint"] = f"sha256:{sha256(encoded).hexdigest()}"
+
+    with pytest.raises(ReservationBatchReferenceError, match="source type"):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            demand_commitments=demands,
+            batches=_batches(),
+            capacity_reservations=_capacities(),
             material_allocations=_allocations(),
         )
 
@@ -473,7 +496,7 @@ def test_frozen_recovery_preserves_monotonic_material_authority_handoff():
             "MA-LINKED": {
                 "MaterialAllocationID": "MA-LINKED",
                 "ReservationBatchID": "PRB-1",
-                "DemandCommitmentID": "DC-1",
+                "DemandCommitmentID": DEMAND_1_ID,
                 "DemandClass": "MTO",
                 "Status": "LinkedToFormalOrder",
                 "RecordVersion": 1,
@@ -481,7 +504,7 @@ def test_frozen_recovery_preserves_monotonic_material_authority_handoff():
             "MA-EXTERNAL": {
                 "MaterialAllocationID": "MA-EXTERNAL",
                 "ReservationBatchID": "PRB-1",
-                "DemandCommitmentID": "DC-1",
+                "DemandCommitmentID": DEMAND_1_ID,
                 "DemandClass": "MTO",
                 "Status": "ActivePlanReservation",
                 "MaterialSnapshotID": "OPS-1",
@@ -490,7 +513,7 @@ def test_frozen_recovery_preserves_monotonic_material_authority_handoff():
             "MA-OTHER-AUTHORITY": {
                 "MaterialAllocationID": "MA-OTHER-AUTHORITY",
                 "ReservationBatchID": "PRB-1",
-                "DemandCommitmentID": "DC-1",
+                "DemandCommitmentID": DEMAND_1_ID,
                 "DemandClass": "MTO",
                 "Status": "ActivePlanReservation",
                 "MaterialSnapshotID": "OPS-1",
@@ -797,7 +820,7 @@ def test_freeze_records_versioned_graph_identity_and_fingerprint():
     assert frozen["GraphVersion"] == 2
     assert str(frozen["GraphID"]).startswith("PRG-")
     assert str(frozen["GraphFingerprint"]).startswith("sha256:")
-    assert frozen["DemandCommitments"][0]["DemandCommitmentID"] == "DC-1"
+    assert frozen["DemandCommitments"][0]["DemandCommitmentID"] == DEMAND_1_ID
     assert frozen["DemandCommitments"][0]["RecordVersion"] == 1
     assert str(frozen["DemandCommitments"][0]["ContentFingerprint"]).startswith(
         "sha256:"
@@ -1172,6 +1195,48 @@ def test_transition_compare_and_set_rejects_live_graph_drift(drift: str):
     assert (batches, capacities, allocations) == before
 
 
+@pytest.mark.parametrize(
+    ("field", "drifted_value"),
+    [
+        ("PlanningRunID", "RUN-OTHER"),
+        ("LastTransitionAt", "2026-07-20T11:59:00+00:00"),
+        ("EventType", "PlanningRunCompleted"),
+    ],
+)
+def test_transition_rejects_same_version_lifecycle_provenance_drift(
+    field: str,
+    drifted_value: str,
+):
+    demands = _demands()
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    frozen = freeze_planning_reservations(
+        batch_ids=["PRB-1"],
+        demand_commitments=demands,
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+    batches["PRB-1"][field] = drifted_value
+    before = deepcopy((demands, batches, capacities, allocations))
+
+    with pytest.raises(ReservationGraphDriftError, match="lifecycle provenance"):
+        transition_planning_reservations_for_run(
+            run_id="RUN-1",
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            frozen_reservations=frozen,
+            schedule=_exact_schedule(),
+            demand_commitments=demands,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+    assert (demands, batches, capacities, allocations) == before
+
+
 @pytest.mark.parametrize("drift", ["status", "content", "version", "fingerprint", "missing"])
 def test_transition_compare_and_set_rejects_demand_commitment_drift(drift: str):
     demands = _demands()
@@ -1186,15 +1251,15 @@ def test_transition_compare_and_set_rejects_demand_commitment_drift(drift: str):
         material_allocations=allocations,
     )
     if drift == "status":
-        demands["DC-1"]["Status"] = "Cancelled"
+        demands[DEMAND_1_ID]["Status"] = "Cancelled"
     elif drift == "content":
-        demands["DC-1"]["Quantity"] = 2.0
+        demands[DEMAND_1_ID]["Quantity"] = 2.0
     elif drift == "version":
-        demands["DC-1"]["RecordVersion"] = 2
+        demands[DEMAND_1_ID]["RecordVersion"] = 2
     elif drift == "fingerprint":
-        demands["DC-1"]["ContentFingerprint"] = "sha256:changed"
+        demands[DEMAND_1_ID]["ContentFingerprint"] = "sha256:changed"
     else:
-        demands.pop("DC-1")
+        demands.pop(DEMAND_1_ID)
     before = deepcopy((demands, batches, capacities, allocations))
 
     with pytest.raises(ReservationGraphDriftError):

@@ -11,7 +11,7 @@ from typing import Iterable, Mapping, MutableMapping, MutableSequence, MutableSe
 
 from sdbr.planning_commitments import (
     assert_no_active_predecessor,
-    demand_commitment_content_fingerprint,
+    normalize_demand_commitment,
 )
 
 
@@ -246,16 +246,20 @@ def prepare_reservation_confirmation(
     capacity_requests: Iterable[Mapping[str, object]],
     material_requests: Iterable[Mapping[str, object]],
 ) -> PlanningReservationWriteSet:
-    demand_id = str(demand_commitment.get("DemandCommitmentID") or "")
-    if not demand_id:
-        raise ReservationConflict("Demand commitment ID is required.")
-    if demand_commitment.get("Status") != "PendingConfirmation":
+    try:
+        demand_snapshot = normalize_demand_commitment(demand_commitment)
+    except ValueError as error:
+        raise ReservationConflict(
+            f"Demand commitment identity or content is invalid: {error}"
+        ) from error
+    demand_id = str(demand_snapshot["DemandCommitmentID"])
+    if demand_snapshot.get("Status") != "PendingConfirmation":
         raise ReservationConflict("Demand commitment must await confirmation.")
     if confirmed_at.tzinfo is None or confirmed_at.utcoffset() is None:
         raise ReservationConflict("Confirmation time must be timezone-aware.")
-    assert_no_active_predecessor(existing_commitments, demand_commitment)
+    assert_no_active_predecessor(existing_commitments, demand_snapshot)
 
-    demand_snapshot = deepcopy(demand_commitment)
+    demand_snapshot = deepcopy(demand_snapshot)
     capacity_rows = tuple(deepcopy(dict(row)) for row in capacity_requests)
     material_rows = tuple(deepcopy(dict(row)) for row in material_requests)
     _validate_capacity_requests(capacity_rows)
@@ -568,20 +572,24 @@ def _assert_idempotent_replay_matches(
         record_name="reservation batch",
     )
     try:
-        persisted_demand_fingerprint = demand_commitment_content_fingerprint(
+        normalized_persisted_demand = normalize_demand_commitment(
             persisted_demand
         )
     except ValueError as error:
         raise ReservationLegacyMigrationRequired(
             "Persisted reservation replay demand content is unverifiable."
         ) from error
-    if persisted_demand.get("ContentFingerprint") != persisted_demand_fingerprint:
-        raise ReservationLegacyMigrationRequired(
-            "Persisted reservation replay demand fingerprint is unverifiable."
+    try:
+        normalized_candidate_demand = normalize_demand_commitment(
+            write_set.demand_commitment
         )
+    except ValueError as error:
+        raise ReservationConflict(
+            "Candidate reservation replay demand content is invalid."
+        ) from error
     _assert_replay_record_content(
-        persisted=persisted_demand,
-        candidate=write_set.demand_commitment,
+        persisted=normalized_persisted_demand,
+        candidate=normalized_candidate_demand,
         record_name="demand commitment",
         allowed_statuses=_DEMAND_REPLAY_STATUSES,
     )
@@ -656,6 +664,18 @@ def apply_reservation_write_set(
     events: MutableSequence[dict[str, object]],
     processed_event_keys: MutableSet[str],
 ) -> None:
+    try:
+        normalized_demand = normalize_demand_commitment(
+            write_set.demand_commitment
+        )
+    except ValueError as error:
+        raise ReservationConflict(
+            f"Reservation demand identity or content is invalid: {error}"
+        ) from error
+    if normalized_demand != write_set.demand_commitment:
+        raise ReservationConflict(
+            "Reservation demand record must use canonical normalized content."
+        )
     demand_id = str(write_set.demand_commitment["DemandCommitmentID"])
     batch_id = str(write_set.batch["ReservationBatchID"])
     _assert_no_duplicate_ids(

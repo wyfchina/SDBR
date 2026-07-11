@@ -40,7 +40,7 @@ def _seed_active_planning_reservation(
     store: WorkbenchStateStore,
     *,
     batch_id: str,
-) -> None:
+) -> str:
     demand = create_demand_commitment(
         demand_source_type="MTOCustomerOrder",
         source_system="MockERP",
@@ -58,15 +58,15 @@ def _seed_active_planning_reservation(
     )
     demand.update(
         {
-            "DemandCommitmentID": "DC-PHASE0",
             "Status": "Active",
             "RecordVersion": 1,
         }
     )
-    store.planning_demand_commitments["DC-PHASE0"] = demand
+    demand_id = str(demand["DemandCommitmentID"])
+    store.planning_demand_commitments[demand_id] = demand
     store.planning_reservation_batches[batch_id] = {
         "ReservationBatchID": batch_id,
-        "DemandCommitmentID": "DC-PHASE0",
+        "DemandCommitmentID": demand_id,
         "DemandClass": "MTO",
         "Status": "ActivePlanReservation",
         "CapacityReservationIDs": ["CCR-RES-1"],
@@ -78,7 +78,7 @@ def _seed_active_planning_reservation(
     store.ccr_capacity_reservations["CCR-RES-1"] = {
         "CapacityReservationID": "CCR-RES-1",
         "ReservationBatchID": batch_id,
-        "DemandCommitmentID": "DC-PHASE0",
+        "DemandCommitmentID": demand_id,
         "DemandClass": "MTO",
         "ReservationLineID": "CAP-PHASE0-1",
         "OrderID": "TST-WO-0001",
@@ -94,7 +94,7 @@ def _seed_active_planning_reservation(
     store.material_planning_allocations["MPA-1"] = {
         "MaterialAllocationID": "MPA-1",
         "ReservationBatchID": batch_id,
-        "DemandCommitmentID": "DC-PHASE0",
+        "DemandCommitmentID": demand_id,
         "DemandClass": "MTO",
         "RequirementLineID": "TST-WO-0001:TST-RM-STEEL",
         "ItemID": "TST-RM-STEEL",
@@ -106,6 +106,7 @@ def _seed_active_planning_reservation(
         "Status": "ActivePlanReservation",
         "RecordVersion": 1,
     }
+    return demand_id
 
 
 def _completed_execution(**_kwargs) -> dict[str, object]:
@@ -714,7 +715,10 @@ def test_planning_reservation_demand_drift_returns_structured_conflict(
 ):
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
-    _seed_active_planning_reservation(store, batch_id=f"PRB-DEMAND-{drift}")
+    demand_id = _seed_active_planning_reservation(
+        store,
+        batch_id=f"PRB-DEMAND-{drift}",
+    )
     client = TestClient(create_app(state_store=store))
     run_id = f"RUN-DEMAND-{drift}"
     assert client.post(
@@ -724,7 +728,7 @@ def test_planning_reservation_demand_drift_returns_structured_conflict(
             "PlanningReservationBatchIDs": [f"PRB-DEMAND-{drift}"],
         },
     ).status_code == 200
-    demand = store.planning_demand_commitments["DC-PHASE0"]
+    demand = store.planning_demand_commitments[demand_id]
     if drift == "status":
         demand["Status"] = "Cancelled"
     elif drift == "content":
@@ -1269,11 +1273,155 @@ def test_planning_reservation_transition_is_atomic_when_bridge_fails(monkeypatch
     assert store.planning_reservation_batches["PRB-ATOMIC"] == original_batch
     assert store.ccr_capacity_reservations["CCR-RES-1"] == original_capacity
     assert store.material_planning_allocations["MPA-1"] == original_material
-    persisted_claim = store.planning_runs["RUN-ATOMIC-RES"]
-    assert persisted_claim["Status"] == "Running"
-    assert persisted_claim["ExecutionVersion"] == 1
-    assert persisted_claim["ExecutionClaimedBy"] == "planner-phase0"
-    assert "ExecutionTokenHash" in persisted_claim
+    failed_run = store.planning_runs["RUN-ATOMIC-RES"]
+    assert failed_run["Status"] == "Failed"
+    assert failed_run["ExecutionVersion"] == 1
+    assert failed_run["ExecutionClaimedBy"] == "planner-phase0"
+    assert failed_run["ExecutionClaimInvalidationReason"] == "FinalizationError"
+    assert "ExecutionTokenHash" not in failed_run
+    assert "ExecutionClaimExpiresAt" not in failed_run
+
+    recovered = client.post(
+        "/planner/workbench/planning-runs/RUN-ATOMIC-RES/recover",
+        json={
+            "RecoveredBy": "planner-phase0",
+            "RecoveredAt": "2026-06-22T07:57:00+00:00",
+            "Reason": "Retry after finalization persistence was repaired.",
+        },
+    )
+
+    assert recovered.status_code == 200
+    assert recovered.json()["Data"]["PlanningRun"]["Status"] == "Queued"
+
+
+def test_abandoned_direct_execution_claim_is_durably_expired_and_recovered(
+    monkeypatch,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def abandoned_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", abandoned_execution)
+    app = create_app(state_store=store)
+    with TestClient(app) as direct_client, TestClient(app) as recovery_client:
+        assert direct_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-DIRECT-ABANDONED"),
+        ).status_code == 200
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                direct_client.post,
+                "/planner/workbench/planning-runs/RUN-DIRECT-ABANDONED/execute",
+                json={
+                    "ExecutedBy": "planner-abandoned",
+                    "StartedAt": "2026-06-22T07:55:00+00:00",
+                    "TimeLimitSeconds": 1,
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            persisted_claim = store.planning_runs["RUN-DIRECT-ABANDONED"]
+            assert "ExecutionClaimExpiresAt" in persisted_claim
+            claim_expires_at = datetime.fromisoformat(
+                str(persisted_claim["ExecutionClaimExpiresAt"])
+            )
+
+            recovered = recovery_client.post(
+                "/planner/workbench/planning-runs/jobs/claim-next",
+                json={
+                    "WorkerID": "worker-recovery",
+                    "ClaimedAt": claim_expires_at.isoformat(),
+                    "LeaseSeconds": 60,
+                },
+            )
+            release_solver.set()
+            abandoned_response = execution.result(timeout=5)
+
+    recovered_run = recovered.json()["Data"]["PlanningRun"]
+    assert recovered.status_code == 200
+    assert recovered_run["RunID"] == "RUN-DIRECT-ABANDONED"
+    assert recovered_run["WorkerID"] == "worker-recovery"
+    assert recovered_run["RecoveredFromExpiredLease"] is True
+    authoritative_run = store.planning_runs["RUN-DIRECT-ABANDONED"]
+    assert "ExecutionTokenHash" not in authoritative_run
+    assert "ExecutionClaimExpiresAt" not in authoritative_run
+    assert authoritative_run["ExecutionClaimInvalidationReason"] == (
+        "ExpiredLeaseRecovery"
+    )
+    assert abandoned_response.status_code == 409
+    assert abandoned_response.json()["Data"]["Status"] == (
+        "PlanningRunExecutionOwnershipLost"
+    )
+
+
+@pytest.mark.parametrize(
+    "claimed_at",
+    ["not-a-timestamp", "2026-06-22T07:52:00"],
+)
+def test_worker_claim_rejects_invalid_or_naive_timestamp_before_mutation(
+    claimed_at: str,
+):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(
+        create_app(state_store=store),
+        raise_server_exceptions=False,
+    )
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-INVALID-CLAIM-TIME"),
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-INVALID-CLAIM-TIME/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+        },
+    ).status_code == 200
+
+    response = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-invalid-time",
+            "ClaimedAt": claimed_at,
+            "LeaseSeconds": 60,
+        },
+    )
+
+    assert response.status_code == 422
+    assert store.planning_runs["RUN-INVALID-CLAIM-TIME"]["Status"] == "Queued"
+    assert "WorkerID" not in store.planning_runs["RUN-INVALID-CLAIM-TIME"]
+
+
+def test_direct_execution_rejects_naive_started_at_before_claim(monkeypatch):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-NAIVE-DIRECT-CLAIM"),
+    ).status_code == 200
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-NAIVE-DIRECT-CLAIM/execute",
+        json={
+            "ExecutedBy": "planner-phase0",
+            "StartedAt": "2026-06-22T07:55:00",
+            "CompletedAt": "2026-06-22T07:56:00",
+        },
+    )
+
+    assert response.status_code == 422
+    run = store.planning_runs["RUN-NAIVE-DIRECT-CLAIM"]
+    assert run["Status"] == "Pending"
+    assert "ExecutionTokenHash" not in run
 
 
 def test_planning_reservation_transition_is_atomically_visible_to_workbench_readers(
@@ -1346,6 +1494,158 @@ def test_planning_reservation_transition_is_atomically_visible_to_workbench_read
     assert audit.json()["Data"]["AuditEvents"][-1]["Action"] == (
         "PlanningRunExecuted"
     )
+
+
+def test_get_body_and_revision_header_are_captured_under_one_state_lock():
+    body_snapshot_ready = Event()
+    allow_reader_return = Event()
+
+    class ReleaseAwareLock:
+        def __init__(self, store):
+            self.store = store
+
+        def acquire(self, *args, **kwargs):
+            return self.store._request_write_lock.acquire(*args, **kwargs)
+
+        def release(self):
+            self.store._request_write_lock.release()
+            if self.store.arm_reader_release:
+                self.store.arm_reader_release = False
+                self.store.released_reader_thread = get_ident()
+
+    class HeaderRaceStore(WorkbenchStateStore):
+        def __init__(self):
+            super().__init__()
+            self.arm_reader_release = False
+            self.released_reader_thread = None
+            self.header_read_after_unlock = Event()
+            self.concurrent_save_completed = Event()
+
+        @property
+        def state_lock(self):
+            return ReleaseAwareLock(self)
+
+        def current_revision(self):
+            if self.released_reader_thread == get_ident():
+                self.released_reader_thread = None
+                self.header_read_after_unlock.set()
+                assert self.concurrent_save_completed.wait(timeout=5)
+            return super().current_revision()
+
+        def save(self):
+            outcome = super().save()
+            if self.header_read_after_unlock.is_set():
+                self.concurrent_save_completed.set()
+            return outcome
+
+    store = HeaderRaceStore()
+    reader_app = create_app(state_store=store)
+    writer_app = create_app(state_store=store)
+
+    @reader_app.get("/test/revision-pair")
+    def read_revision_pair():
+        body_revision = store.current_revision()
+        body_snapshot_ready.set()
+        assert allow_reader_return.wait(timeout=5)
+        return {"BodyRevision": body_revision}
+
+    @writer_app.post("/test/revision-pair")
+    def advance_revision():
+        store.audit_events.append({"Action": "ConcurrentRevisionAdvance"})
+        return {"Status": "Advanced"}
+
+    store.arm_reader_release = True
+    with TestClient(reader_app) as reader, TestClient(writer_app) as writer:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            read = executor.submit(reader.get, "/test/revision-pair")
+            assert body_snapshot_ready.wait(timeout=2)
+            write = executor.submit(writer.post, "/test/revision-pair")
+            allow_reader_return.set()
+            read_response = read.result(timeout=5)
+            write_response = write.result(timeout=5)
+
+    assert read_response.status_code == 200
+    assert write_response.status_code == 200
+    assert int(read_response.headers["X-Workbench-Revision"]) == (
+        read_response.json()["BodyRevision"]
+    )
+    assert store.current_revision() == read_response.json()["BodyRevision"] + 1
+
+
+def test_store_managed_execution_uses_exact_finalization_outcome_revision(
+    monkeypatch,
+):
+    class PausingFinalizationStore(WorkbenchStateStore):
+        def __init__(self):
+            super().__init__()
+            self.pause_finalization = True
+            self.finalization_committed = Event()
+            self.concurrent_save_completed = Event()
+            self.finalization_revision = None
+
+        def atomic_update(self, mutation, *, expected_revision=None):
+            result, outcome = super().atomic_update(
+                mutation,
+                expected_revision=expected_revision,
+            )
+            if (
+                self.pause_finalization
+                and isinstance(result, dict)
+                and set(result) == {"PlanningRun", "ReservationError"}
+            ):
+                self.pause_finalization = False
+                self.finalization_revision = outcome.revision
+                self.finalization_committed.set()
+                assert self.concurrent_save_completed.wait(timeout=5)
+            return result, outcome
+
+        def save(self):
+            outcome = super().save()
+            if self.finalization_committed.is_set():
+                self.concurrent_save_completed.set()
+            return outcome
+
+    store = PausingFinalizationStore()
+    seed_baseline_test_data(store)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    execution_app = create_app(state_store=store)
+    writer_app = create_app(state_store=store)
+
+    @writer_app.post("/test/concurrent-finalization-write")
+    def concurrent_finalization_write():
+        store.audit_events.append({"Action": "AfterFinalization"})
+        return {"Status": "Advanced"}
+
+    with TestClient(execution_app) as execution_client, TestClient(
+        writer_app
+    ) as writer_client:
+        assert execution_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-EXACT-REVISION"),
+        ).status_code == 200
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                execution_client.post,
+                "/planner/workbench/planning-runs/RUN-EXACT-REVISION/execute",
+                json={
+                    "ExecutedBy": "planner-phase0",
+                    "StartedAt": "2026-06-22T07:55:00+00:00",
+                    "CompletedAt": "2026-06-22T07:56:00+00:00",
+                },
+            )
+            assert store.finalization_committed.wait(timeout=2)
+            advanced = writer_client.post("/test/concurrent-finalization-write")
+            executed = execution.result(timeout=5)
+
+    assert advanced.status_code == 200
+    assert executed.status_code == 200
+    assert int(executed.headers["X-Workbench-Revision"]) == (
+        store.finalization_revision
+    )
+    assert store.current_revision() == int(
+        executed.headers["X-Workbench-Revision"]
+    ) + 1
 
 
 def test_concurrent_direct_execution_claims_run_once_and_cannot_overwrite_completed(
@@ -1799,6 +2099,69 @@ def test_planning_reservation_expired_lease_recovery_invalidates_execution_claim
     assert claimed["LeaseToken"]
 
 
+def test_worker_cannot_finalize_after_authoritative_lease_expiry(monkeypatch):
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
+    client = TestClient(create_app(state_store=store))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-WORKER-EXPIRED-FINALIZE"),
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-WORKER-EXPIRED-FINALIZE/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+        },
+    ).status_code == 200
+    claimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-expiring",
+            "ClaimedAt": "2026-06-22T07:52:00+00:00",
+            "LeaseSeconds": 10,
+        },
+    ).json()["Data"]["PlanningRun"]
+
+    response = client.post(
+        "/planner/workbench/planning-runs/RUN-WORKER-EXPIRED-FINALIZE/execute",
+        json={
+            "ExecutedBy": "worker-expiring",
+            "StartedAt": "2026-06-22T07:52:01+00:00",
+            "CompletedAt": "2026-06-22T07:52:11+00:00",
+            "LeaseToken": claimed["LeaseToken"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "PlanningRunLeaseExpired"
+    expired_run = store.planning_runs["RUN-WORKER-EXPIRED-FINALIZE"]
+    assert expired_run["Status"] == "Running"
+    assert expired_run["ExecutionClaimExpiresAt"] == expired_run["LeaseExpiresAt"]
+    assert "ExecutionTokenHash" in expired_run
+
+    recovered = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-after-expiry",
+            "ClaimedAt": "2026-06-22T07:52:11+00:00",
+            "LeaseSeconds": 60,
+        },
+    )
+
+    assert recovered.status_code == 200
+    assert recovered.json()["Data"]["PlanningRun"]["WorkerID"] == (
+        "worker-after-expiry"
+    )
+    recovered_run = store.planning_runs["RUN-WORKER-EXPIRED-FINALIZE"]
+    assert "ExecutionTokenHash" not in recovered_run
+    assert "ExecutionClaimExpiresAt" not in recovered_run
+    assert recovered_run["ExecutionClaimInvalidationReason"] == (
+        "ExpiredLeaseRecovery"
+    )
+
+
 def test_historic_planning_run_without_reservation_fields_executes_with_empty_graph(
     monkeypatch,
 ):
@@ -2125,7 +2488,10 @@ def test_planning_reservation_workbench_blocks_during_sqlite_conflict_reload(
     database_path = tmp_path / "planning-reservation-conflict-read.db"
     seed_store = SQLiteWorkbenchStateStore(database_path)
     seed_baseline_test_data(seed_store)
-    _seed_active_planning_reservation(seed_store, batch_id="PRB-CONFLICT-READ")
+    demand_id = _seed_active_planning_reservation(
+        seed_store,
+        batch_id="PRB-CONFLICT-READ",
+    )
     seed_store.save()
 
     first_store = SQLiteWorkbenchStateStore(database_path)
@@ -2210,7 +2576,7 @@ def test_planning_reservation_workbench_blocks_during_sqlite_conflict_reload(
         "Rows": [
             {
                 "ReservationBatchID": "PRB-CONFLICT-READ",
-                "DemandCommitmentID": "DC-PHASE0",
+                "DemandCommitmentID": demand_id,
                 "DemandClass": "MTO",
                 "DemandSourceType": "MTOCustomerOrder",
                 "Status": "LinkedToFormalOrder",

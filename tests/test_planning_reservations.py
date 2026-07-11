@@ -3,10 +3,13 @@
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
+from hashlib import sha256
+import json
 
 import pytest
 
 from sdbr.planning_commitments import (
+    BUSINESS_CONTENT_FIELDS,
     DemandCommitmentConflict,
     create_demand_commitment,
 )
@@ -120,6 +123,39 @@ def test_duplicate_confirmation_does_not_create_second_batch():
 
     assert len(collections[1]) == 1
     assert len(collections[4]) == 1
+
+
+def test_prepare_rejects_drifted_candidate_demand_identity():
+    demand = _demand()
+    demand["BusinessKey"] = "forged-business-key"
+
+    with pytest.raises(ReservationConflict, match="identity"):
+        _prepare(demand_commitment=demand)
+
+
+def test_idempotent_replay_requires_canonical_persisted_demand_domain():
+    write_set = _prepare()
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    demand_id = str(write_set.demand_commitment["DemandCommitmentID"])
+    persisted = collections[0][demand_id]
+    persisted["DemandSourceType"] = "Forecast"
+    business_content = {
+        field: persisted[field] for field in BUSINESS_CONTENT_FIELDS
+    }
+    encoded = json.dumps(
+        business_content,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    persisted["ContentFingerprint"] = f"sha256:{sha256(encoded).hexdigest()}"
+    before = deepcopy(collections)
+
+    with pytest.raises(ReservationConflict) as error:
+        _apply(write_set, collections)
+
+    assert error.value.status == "PlanningReservationLegacyMigrationRequired"
+    assert collections == before
 
 
 def test_idempotent_replay_requires_every_persisted_result_child():

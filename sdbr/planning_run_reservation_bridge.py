@@ -8,7 +8,7 @@ from math import isfinite
 from numbers import Real
 from typing import Iterable, Mapping
 
-from sdbr.planning_commitments import demand_commitment_content_fingerprint
+from sdbr.planning_commitments import normalize_demand_commitment
 
 
 GRAPH_FORMAT = "SDBRPlanningReservationGraphV2"
@@ -212,8 +212,12 @@ def _resolve_demand_commitment_ids(
             raise ReservationBatchReferenceError(
                 f"Demand commitment is missing for selected batch: {demand_id}."
             )
+        try:
+            normalized_demand = normalize_demand_commitment(demand)
+        except ValueError as error:
+            raise ReservationBatchReferenceError(str(error)) from error
         canonical_id = _require_identity(
-            demand.get("DemandCommitmentID"),
+            normalized_demand.get("DemandCommitmentID"),
             "DemandCommitmentID",
             "Demand commitment",
         )
@@ -228,21 +232,10 @@ def _resolve_demand_commitment_ids(
             raise ReservationBatchReferenceError(
                 f"Demand commitment {demand_id} status is not eligible."
             )
-        persisted_fingerprint = _require_identity(
-            demand.get("ContentFingerprint"),
-            "ContentFingerprint",
-            f"Demand commitment {demand_id}",
-        )
-        try:
-            calculated_fingerprint = demand_commitment_content_fingerprint(demand)
-        except ValueError as error:
-            raise ReservationBatchReferenceError(str(error)) from error
-        if persisted_fingerprint != calculated_fingerprint:
-            raise ReservationBatchReferenceError(
-                f"Demand commitment {demand_id} ContentFingerprint does not match content."
-            )
         demand_class = _require_identity(
-            demand.get("DemandClass"), "DemandClass", "Demand commitment"
+            normalized_demand.get("DemandClass"),
+            "DemandClass",
+            "Demand commitment",
         )
         batch_class = _require_identity(
             batch.get("DemandClass"), "DemandClass", f"Reservation batch {batch_id}"
@@ -728,6 +721,14 @@ def _immutable_record(record: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _transition_metadata(record: Mapping[str, object]) -> dict[str, object]:
+    return {
+        field: deepcopy(record[field])
+        for field in TRANSITION_METADATA_FIELDS
+        if field in record
+    }
+
+
 def _assert_record_compare_and_set(
     *,
     live: Mapping[str, object],
@@ -741,11 +742,13 @@ def _assert_record_compare_and_set(
         )
     frozen_version = _record_version(frozen, record_name)
     live_version = _record_version(live, record_name)
-    if (
-        live_version == frozen_version
-        and live.get("Status") == frozen.get("Status")
-    ):
-        return
+    if live_version == frozen_version:
+        if _transition_metadata(live) == _transition_metadata(frozen):
+            return
+        raise ReservationGraphDriftError(
+            f"{record_name} lifecycle provenance drifted without a version "
+            "advance after Planning Run freeze."
+        )
     if (
         live_version > frozen_version
         and live.get("PlanningRunID") == run_id

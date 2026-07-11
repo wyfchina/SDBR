@@ -8,7 +8,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 from threading import Lock, RLock
 from time import monotonic
-from typing import Literal, Mapping
+from typing import Callable, Literal, Mapping
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Query, Request
@@ -225,6 +225,7 @@ from sdbr.shop_floor_execution import (
 )
 from sdbr.state_store import (
     SQLiteWorkbenchStateStore,
+    StateStoreManagedRequestRejected,
     StateStoreRevisionConflict,
     WorkbenchStateStore,
 )
@@ -981,7 +982,7 @@ def _lease_token_hash(lease_token: str) -> str:
     return sha256(lease_token.encode("utf-8")).hexdigest()
 
 
-class _StoreManagedRequestRejected(RuntimeError):
+class _StoreManagedRequestRejected(StateStoreManagedRequestRejected):
     def __init__(self, response: JSONResponse) -> None:
         super().__init__("Store-managed request was rejected.")
         self.response = response
@@ -1085,6 +1086,7 @@ def create_app(
     *,
     require_auth: bool = False,
     runtime_environment: RuntimeEnvironment | None = None,
+    utc_now: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="SDBR Planner Workbench")
     app.mount(
@@ -1095,6 +1097,16 @@ def create_app(
     app.state.require_auth = require_auth
     active_environment = runtime_environment or resolve_runtime_environment()
     app.state.runtime_environment = active_environment
+    server_utc_clock = utc_now or (lambda: datetime.now(timezone.utc))
+
+    def server_utc_now() -> datetime:
+        observed_at = server_utc_clock()
+        if not isinstance(observed_at, datetime):
+            raise TypeError("Server UTC clock must return a datetime.")
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ValueError("Server UTC clock must return a timezone-aware datetime.")
+        return observed_at.astimezone(timezone.utc)
+
     active_store = state_store or WorkbenchStateStore()
     app.state.workbench_state_store = active_store
     execution_events = active_store.execution_events
@@ -3440,6 +3452,7 @@ def create_app(
             )
             if identity_error is not None:
                 return identity_error
+            claim_observed_at = server_utc_now()
             candidates = [
                 planning_run
                 for planning_run in planning_runs.values()
@@ -3448,11 +3461,11 @@ def create_app(
                     (
                         planning_run["Status"] == "Queued"
                         and _planning_run_ready_for_claim(
-                            planning_run, payload.ClaimedAt
+                            planning_run, claim_observed_at
                         )
                     )
                     or _planning_run_lease_expired(
-                        planning_run, payload.ClaimedAt
+                        planning_run, claim_observed_at
                     )
                 )
             ]
@@ -3478,7 +3491,7 @@ def create_app(
                 claimed_run.pop("ExecutionClaimedBy", None)
                 claimed_run.pop("ExecutionClaimExpiresAt", None)
                 claimed_run["ExecutionClaimInvalidatedAt"] = (
-                    payload.ClaimedAt.isoformat()
+                    claim_observed_at.isoformat()
                 )
                 claimed_run["ExecutionClaimInvalidationReason"] = (
                     "ExpiredLeaseRecovery"
@@ -3490,7 +3503,7 @@ def create_app(
                     "LeaseTokenHash": _lease_token_hash(lease_token),
                     "LeaseClaimedAt": payload.ClaimedAt.isoformat(),
                     "LeaseExpiresAt": (
-                        payload.ClaimedAt
+                        claim_observed_at
                         + timedelta(seconds=payload.LeaseSeconds)
                     ).isoformat(),
                     "LeaseSeconds": payload.LeaseSeconds,
@@ -3555,6 +3568,7 @@ def create_app(
         execution_token_hash = _lease_token_hash(token_urlsafe(24))
 
         def persist_execution_claim() -> dict[str, object]:
+            claim_observed_at = server_utc_now()
             planning_run = planning_runs.get(run_id)
             if planning_run is None:
                 raise _StoreManagedRequestRejected(
@@ -3620,7 +3634,7 @@ def create_app(
                     planning_run=planning_run,
                     executed_by=payload.ExecutedBy,
                     lease_token=payload.LeaseToken,
-                    started_at=payload.StartedAt,
+                    observed_at=claim_observed_at,
                 )
                 if lease_error is not None:
                     raise _StoreManagedRequestRejected(
@@ -3639,7 +3653,7 @@ def create_app(
                 str(planning_run["LeaseExpiresAt"])
                 if worker_execution
                 else (
-                    payload.StartedAt
+                    claim_observed_at
                     + timedelta(
                         seconds=(
                             payload.TimeLimitSeconds
@@ -3700,8 +3714,10 @@ def create_app(
             )
             request.state.store_managed_revision = claim_outcome.revision
         except _StoreManagedRequestRejected as error:
+            request.state.store_managed_revision = error.current_revision
             return error.response
         except StateStoreRevisionConflict as error:
+            request.state.store_managed_revision = error.current_revision
             return _revision_conflict_response(
                 endpoint=endpoint,
                 expected_revision=error.expected_revision,
@@ -3764,6 +3780,7 @@ def create_app(
         )
 
         def persist_execution_finalization() -> dict[str, object]:
+            finalization_observed_at = server_utc_now()
             live_execution_run = planning_runs.get(run_id)
             ownership_matches = (
                 live_execution_run is not None
@@ -3807,7 +3824,7 @@ def create_app(
                 )
             expiry_error = _planning_run_execution_claim_expiry_error(
                 planning_run=live_execution_run,
-                finalized_at=completed_at,
+                observed_at=finalization_observed_at,
                 worker_execution=bool(claim["WorkerExecution"]),
             )
             if expiry_error is not None:
@@ -3840,7 +3857,7 @@ def create_app(
             if claim["WorkerExecution"] and completed_run["Status"] == "Failed":
                 completed_run = _apply_planning_run_failure_policy(
                     planning_run=completed_run,
-                    failed_at=completed_at,
+                    failed_at=finalization_observed_at,
                 )
             reservation_fields_present = (
                 "PlanningReservationBatchIDs" in completed_run
@@ -4137,8 +4154,10 @@ def create_app(
             )
             request.state.store_managed_revision = finalization_outcome.revision
         except _StoreManagedRequestRejected as error:
+            request.state.store_managed_revision = error.current_revision
             return error.response
         except StateStoreRevisionConflict as error:
+            request.state.store_managed_revision = error.current_revision
             return _revision_conflict_response(
                 endpoint=endpoint,
                 expected_revision=error.expected_revision,
@@ -4195,6 +4214,7 @@ def create_app(
         lease_token = token_urlsafe(24)
 
         def persist_interactive_worker_claim() -> None:
+            claim_observed_at = server_utc_now()
             planning_run = planning_runs.get(run_id)
             if planning_run is None:
                 raise _StoreManagedRequestRejected(
@@ -4233,7 +4253,7 @@ def create_app(
                     )
                 )
             if not _planning_run_ready_for_claim(
-                planning_run, payload.ProcessedAt
+                planning_run, claim_observed_at
             ):
                 raise _StoreManagedRequestRejected(
                     JSONResponse(
@@ -4258,7 +4278,7 @@ def create_app(
                     "LeaseTokenHash": _lease_token_hash(lease_token),
                     "LeaseClaimedAt": payload.ProcessedAt.isoformat(),
                     "LeaseExpiresAt": (
-                        payload.ProcessedAt
+                        claim_observed_at
                         + timedelta(seconds=payload.LeaseSeconds)
                     ).isoformat(),
                     "LeaseSeconds": payload.LeaseSeconds,
@@ -4297,8 +4317,10 @@ def create_app(
             )
             request.state.store_managed_revision = claim_outcome.revision
         except _StoreManagedRequestRejected as error:
+            request.state.store_managed_revision = error.current_revision
             return error.response
         except StateStoreRevisionConflict as error:
+            request.state.store_managed_revision = error.current_revision
             return _revision_conflict_response(
                 endpoint=endpoint,
                 expected_revision=error.expected_revision,
@@ -4342,6 +4364,7 @@ def create_app(
             return identity_error
 
         def persist_lease_renewal() -> dict[str, object]:
+            renewal_observed_at = server_utc_now()
             planning_run = planning_runs.get(run_id)
             if planning_run is None:
                 raise _StoreManagedRequestRejected(
@@ -4362,7 +4385,7 @@ def create_app(
                 planning_run=planning_run,
                 executed_by=payload.WorkerID,
                 lease_token=payload.LeaseToken,
-                started_at=payload.RenewedAt,
+                observed_at=renewal_observed_at,
             )
             if lease_error is not None:
                 raise _StoreManagedRequestRejected(
@@ -4377,7 +4400,7 @@ def create_app(
                 )
             renewed_run = dict(planning_run)
             renewed_expires_at = (
-                payload.RenewedAt + timedelta(seconds=payload.LeaseSeconds)
+                renewal_observed_at + timedelta(seconds=payload.LeaseSeconds)
             ).isoformat()
             renewed_run.update(
                 {
@@ -4412,8 +4435,10 @@ def create_app(
             )
             request.state.store_managed_revision = renewal_outcome.revision
         except _StoreManagedRequestRejected as error:
+            request.state.store_managed_revision = error.current_revision
             return error.response
         except StateStoreRevisionConflict as error:
+            request.state.store_managed_revision = error.current_revision
             return _revision_conflict_response(
                 endpoint=endpoint,
                 expected_revision=error.expected_revision,
@@ -9528,7 +9553,7 @@ def _planning_run_execution_lease_error(
     planning_run: dict[str, object],
     executed_by: str,
     lease_token: str | None,
-    started_at: datetime,
+    observed_at: datetime,
 ) -> dict[str, object] | None:
     stored_hash = planning_run.get("LeaseTokenHash")
     if stored_hash is None and isinstance(planning_run.get("LeaseToken"), str):
@@ -9545,7 +9570,7 @@ def _planning_run_execution_lease_error(
     lease_expires_at = _aware_planning_run_datetime(
         planning_run.get("LeaseExpiresAt")
     )
-    if lease_expires_at is None or lease_expires_at <= started_at:
+    if lease_expires_at is None or lease_expires_at <= observed_at:
         return {
             "Status": "PlanningRunLeaseExpired",
             "CurrentStatus": planning_run["Status"],
@@ -9558,7 +9583,7 @@ def _planning_run_execution_lease_error(
 def _planning_run_execution_claim_expiry_error(
     *,
     planning_run: Mapping[str, object],
-    finalized_at: datetime,
+    observed_at: datetime,
     worker_execution: bool,
 ) -> dict[str, object] | None:
     execution_expires_at = _aware_planning_run_datetime(
@@ -9571,8 +9596,8 @@ def _planning_run_execution_claim_expiry_error(
         if (
             lease_expires_at is None
             or execution_expires_at is None
-            or lease_expires_at <= finalized_at
-            or execution_expires_at <= finalized_at
+            or lease_expires_at <= observed_at
+            or execution_expires_at <= observed_at
         ):
             return {
                 "Status": "PlanningRunLeaseExpired",
@@ -9586,7 +9611,7 @@ def _planning_run_execution_claim_expiry_error(
                 ),
             }
         return None
-    if execution_expires_at is None or execution_expires_at <= finalized_at:
+    if execution_expires_at is None or execution_expires_at <= observed_at:
         return {
             "Status": "PlanningRunExecutionClaimExpired",
             "CurrentStatus": planning_run["Status"],

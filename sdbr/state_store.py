@@ -27,6 +27,25 @@ class StateStoreRevisionConflict(RuntimeError):
         self.current_revision = current_revision
 
 
+class StateStoreManagedRequestRejected(RuntimeError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self._current_revision: int | None = None
+
+    @property
+    def current_revision(self) -> int:
+        if self._current_revision is None:
+            raise RuntimeError(
+                "Controlled rejection left the state store without a revision."
+            )
+        return self._current_revision
+
+    def capture_current_revision(self, current_revision: int) -> None:
+        if self._current_revision is not None:
+            raise RuntimeError("Controlled rejection revision was already captured.")
+        self._current_revision = current_revision
+
+
 @dataclass(frozen=True, slots=True)
 class StateStoreSaveOutcome:
     committed: bool
@@ -158,7 +177,9 @@ class WorkbenchStateStore:
             try:
                 result = mutation()
                 outcome = self.save()
-            except Exception:
+            except Exception as error:
+                if isinstance(error, StateStoreManagedRequestRejected):
+                    error.capture_current_revision(current_revision)
                 self.restore_state(snapshot)
                 raise
             return result, outcome
@@ -254,7 +275,9 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
                         next_revision=next_revision,
                     )
                     connection.commit()
-                except Exception:
+                except Exception as error:
+                    if isinstance(error, StateStoreManagedRequestRejected):
+                        error.capture_current_revision(current_revision)
                     connection.rollback()
                     self.restore_state(
                         authoritative_snapshot or pre_transaction_snapshot

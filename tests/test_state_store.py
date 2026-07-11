@@ -9,6 +9,7 @@ from sdbr.release_authorization import create_release_authorization
 from sdbr.release_candidates import MaterialAvailability, WipLimit
 from sdbr.replanning import create_replan_request
 from sdbr.state_store import SQLiteWorkbenchStateStore, WorkbenchStateStore
+from sdbr.state_store import StateStoreManagedRequestRejected
 
 
 def test_default_service_uses_sqlite_state_store():
@@ -16,6 +17,33 @@ def test_default_service_uses_sqlite_state_store():
         app.state.workbench_state_store,
         SQLiteWorkbenchStateStore,
     )
+
+
+# BE-RUN-007 / BE-RUN-011
+def test_atomic_update_captures_controlled_rejection_revision_inside_store_boundary(
+    tmp_path,
+):
+    stores = (
+        WorkbenchStateStore(),
+        SQLiteWorkbenchStateStore(tmp_path / "controlled-rejection.db"),
+    )
+    for store in stores:
+        store.audit_events.append({"Action": "InitialRevision"})
+        store.save()
+        rejection = StateStoreManagedRequestRejected(
+            "Controlled request rejection."
+        )
+
+        def reject():
+            raise rejection
+
+        try:
+            store.atomic_update(reject)
+        except StateStoreManagedRequestRejected as error:
+            assert error.current_revision == 1
+        else:
+            raise AssertionError("Controlled rejection was not propagated.")
+        assert store.current_revision() == 1
 
 
 def test_shared_state_store_survives_application_recreation():

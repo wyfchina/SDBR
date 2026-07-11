@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock, get_ident
 from time import sleep
@@ -135,6 +135,80 @@ def _completed_execution(**_kwargs) -> dict[str, object]:
 
 def _raising_execution(**_kwargs) -> dict[str, object]:
     raise RuntimeError("solver exploded before producing a result")
+
+
+class _MutableUtcClock:
+    def __init__(self, current: datetime) -> None:
+        self._current = current
+        self._lock = Lock()
+
+    def __call__(self) -> datetime:
+        with self._lock:
+            return self._current
+
+    def advance(self, **delta: float) -> None:
+        with self._lock:
+            self._current += timedelta(**delta)
+
+
+class _PausingRejectedStore(WorkbenchStateStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pause_next_rejection = False
+        self.rejection_captured = Event()
+        self.allow_rejection_response = Event()
+        self.rejection_boundary_revision: int | None = None
+        self.rejection_exception_revision: int | None = None
+
+    def atomic_update(self, mutation, *, expected_revision=None):
+        try:
+            return super().atomic_update(
+                mutation,
+                expected_revision=expected_revision,
+            )
+        except RuntimeError as error:
+            if self.pause_next_rejection and hasattr(error, "response"):
+                self.pause_next_rejection = False
+                self.rejection_boundary_revision = self.current_revision()
+                self.rejection_exception_revision = getattr(
+                    error,
+                    "current_revision",
+                    None,
+                )
+                self.rejection_captured.set()
+                assert self.allow_rejection_response.wait(timeout=5)
+            raise
+
+
+def _concurrent_rejection_writer_app(store: WorkbenchStateStore):
+    app = create_app(state_store=store)
+
+    @app.post("/test/concurrent-rejection-write")
+    def concurrent_rejection_write():
+        store.audit_events.append({"Action": "AfterRejectedStoreBoundary"})
+        return {"Status": "Advanced"}
+
+    return app
+
+
+def _complete_paused_rejection(
+    *,
+    store: _PausingRejectedStore,
+    writer_client: TestClient,
+    rejected_request,
+):
+    assert store.rejection_captured.wait(timeout=2)
+    boundary_revision = store.rejection_boundary_revision
+    assert isinstance(boundary_revision, int)
+    try:
+        advanced = writer_client.post("/test/concurrent-rejection-write")
+    finally:
+        store.allow_rejection_response.set()
+    rejected = rejected_request.result(timeout=5)
+    assert advanced.status_code == 200
+    assert int(rejected.headers["X-Workbench-Revision"]) == boundary_revision
+    assert store.rejection_exception_revision == boundary_revision
+    return rejected
 
 
 # BE-RUN-011 / BE-SDBR-007 / BE-SDBR-008 / BE-SDBR-009
@@ -1297,6 +1371,8 @@ def test_planning_reservation_transition_is_atomic_when_bridge_fails(monkeypatch
 def test_abandoned_direct_execution_claim_is_durably_expired_and_recovered(
     monkeypatch,
 ):
+    server_start = datetime(2026, 6, 22, 7, 55, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
     solver_entered = Event()
@@ -1308,7 +1384,7 @@ def test_abandoned_direct_execution_claim_is_durably_expired_and_recovered(
         return _completed_execution()
 
     monkeypatch.setattr("sdbr.api._execute_planning_run", abandoned_execution)
-    app = create_app(state_store=store)
+    app = create_app(state_store=store, utc_now=clock)
     with TestClient(app) as direct_client, TestClient(app) as recovery_client:
         assert direct_client.post(
             "/planner/workbench/planning-runs",
@@ -1331,6 +1407,7 @@ def test_abandoned_direct_execution_claim_is_durably_expired_and_recovered(
             claim_expires_at = datetime.fromisoformat(
                 str(persisted_claim["ExecutionClaimExpiresAt"])
             )
+            clock.advance(seconds=61)
 
             recovered = recovery_client.post(
                 "/planner/workbench/planning-runs/jobs/claim-next",
@@ -1397,6 +1474,292 @@ def test_worker_claim_rejects_invalid_or_naive_timestamp_before_mutation(
     assert response.status_code == 422
     assert store.planning_runs["RUN-INVALID-CLAIM-TIME"]["Status"] == "Queued"
     assert "WorkerID" not in store.planning_runs["RUN-INVALID-CLAIM-TIME"]
+
+
+# BE-RUN-004 / BE-RUN-011
+def test_future_worker_claim_cannot_recover_live_server_timed_lease():
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store, utc_now=clock))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-SERVER-CLOCK-CLAIM"),
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-CLAIM/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+        },
+    ).status_code == 200
+
+    claimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-live-owner",
+            "ClaimedAt": server_start.isoformat(),
+            "LeaseSeconds": 120,
+        },
+    )
+    assert claimed.status_code == 200
+    assert claimed.json()["Data"]["PlanningRun"]["WorkerID"] == (
+        "worker-live-owner"
+    )
+    assert store.planning_runs["RUN-SERVER-CLOCK-CLAIM"]["LeaseExpiresAt"] == (
+        server_start + timedelta(seconds=120)
+    ).isoformat()
+
+    clock.advance(seconds=30)
+    attempted_steal = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-future-claim",
+            "ClaimedAt": "2099-01-01T00:00:00+00:00",
+            "LeaseSeconds": 120,
+        },
+    )
+
+    assert attempted_steal.status_code == 200
+    assert attempted_steal.json()["Data"]["PlanningRun"] is None
+    assert store.planning_runs["RUN-SERVER-CLOCK-CLAIM"]["WorkerID"] == (
+        "worker-live-owner"
+    )
+
+
+# BE-RUN-004 / BE-RUN-011
+def test_backdated_heartbeat_cannot_revive_server_expired_lease():
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    client = TestClient(create_app(state_store=store, utc_now=clock))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-SERVER-CLOCK-HEARTBEAT"),
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-HEARTBEAT/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+        },
+    ).status_code == 200
+    claimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-expired-heartbeat",
+            "ClaimedAt": server_start.isoformat(),
+            "LeaseSeconds": 60,
+        },
+    ).json()["Data"]["PlanningRun"]
+    original_expiry = store.planning_runs["RUN-SERVER-CLOCK-HEARTBEAT"][
+        "LeaseExpiresAt"
+    ]
+
+    clock.advance(seconds=61)
+    heartbeat = client.post(
+        "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-HEARTBEAT/renew-lease",
+        json={
+            "WorkerID": "worker-expired-heartbeat",
+            "LeaseToken": claimed["LeaseToken"],
+            "RenewedAt": (server_start + timedelta(seconds=30)).isoformat(),
+            "LeaseSeconds": 120,
+        },
+    )
+
+    assert heartbeat.status_code == 409
+    assert heartbeat.json()["Data"]["Status"] == "PlanningRunLeaseExpired"
+    expired_run = store.planning_runs["RUN-SERVER-CLOCK-HEARTBEAT"]
+    assert expired_run["LeaseExpiresAt"] == original_expiry
+    assert "LastHeartbeatAt" not in expired_run
+
+
+# BE-RUN-004 / BE-RUN-011
+def test_backdated_execution_timestamps_cannot_finalize_after_server_lease_expiry(
+    monkeypatch,
+):
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    app = create_app(state_store=store, utc_now=clock)
+    with TestClient(app) as client:
+        assert client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-SERVER-CLOCK-FINALIZE"),
+        ).status_code == 200
+        assert client.post(
+            "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-FINALIZE/enqueue",
+            json={
+                "EnqueuedBy": "planner-phase0",
+                "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+            },
+        ).status_code == 200
+        claimed = client.post(
+            "/planner/workbench/planning-runs/jobs/claim-next",
+            json={
+                "WorkerID": "worker-expired-finalizer",
+                "ClaimedAt": server_start.isoformat(),
+                "LeaseSeconds": 10,
+            },
+        ).json()["Data"]["PlanningRun"]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                client.post,
+                "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-FINALIZE/execute",
+                json={
+                    "ExecutedBy": "worker-expired-finalizer",
+                    "StartedAt": (
+                        server_start + timedelta(seconds=1)
+                    ).isoformat(),
+                    "CompletedAt": (
+                        server_start + timedelta(seconds=2)
+                    ).isoformat(),
+                    "LeaseToken": claimed["LeaseToken"],
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            clock.advance(seconds=11)
+            release_solver.set()
+            response = execution.result(timeout=5)
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "PlanningRunLeaseExpired"
+    assert store.planning_runs["RUN-SERVER-CLOCK-FINALIZE"]["Status"] == (
+        "Running"
+    )
+
+
+# BE-RUN-004 / BE-RUN-011
+def test_future_direct_started_at_cannot_create_long_lived_execution_claim(
+    monkeypatch,
+):
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    future_started_at = server_start + timedelta(days=365)
+    clock = _MutableUtcClock(server_start)
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    app = create_app(state_store=store, utc_now=clock)
+    with TestClient(app) as client:
+        assert client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-SERVER-CLOCK-DIRECT"),
+        ).status_code == 200
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                client.post,
+                "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-DIRECT/execute",
+                json={
+                    "ExecutedBy": "planner-future-start",
+                    "StartedAt": future_started_at.isoformat(),
+                    "TimeLimitSeconds": 10,
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            persisted_claim = store.planning_runs["RUN-SERVER-CLOCK-DIRECT"]
+            assert persisted_claim["ExecutionClaimedAt"] == (
+                future_started_at.isoformat()
+            )
+            assert persisted_claim["ExecutionClaimExpiresAt"] == (
+                server_start + timedelta(seconds=70)
+            ).isoformat()
+            release_solver.set()
+            response = execution.result(timeout=5)
+
+    assert response.status_code == 200
+
+
+# BE-RUN-004 / BE-RUN-005 / BE-RUN-011
+def test_future_completed_at_cannot_delay_server_timed_retry_readiness(
+    monkeypatch,
+):
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    future_completed_at = server_start + timedelta(days=365)
+    clock = _MutableUtcClock(server_start)
+    store = WorkbenchStateStore()
+    seed_baseline_test_data(store)
+    monkeypatch.setattr(
+        "sdbr.api._execute_planning_run",
+        lambda **_kwargs: {
+            "Status": "Failed",
+            "SolverStatus": "Error",
+            "SolverMessage": "Retryable solver failure.",
+            "Schedule": None,
+        },
+    )
+    client = TestClient(create_app(state_store=store, utc_now=clock))
+    assert client.post(
+        "/planner/workbench/planning-runs",
+        json=_phase0_planning_run_payload("RUN-SERVER-CLOCK-RETRY"),
+    ).status_code == 200
+    assert client.post(
+        "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-RETRY/enqueue",
+        json={
+            "EnqueuedBy": "planner-phase0",
+            "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+            "MaxAttempts": 2,
+            "RetryDelaySeconds": 60,
+        },
+    ).status_code == 200
+    claimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-future-completion",
+            "ClaimedAt": server_start.isoformat(),
+            "LeaseSeconds": 120,
+        },
+    ).json()["Data"]["PlanningRun"]
+
+    failed = client.post(
+        "/planner/workbench/planning-runs/RUN-SERVER-CLOCK-RETRY/execute",
+        json={
+            "ExecutedBy": "worker-future-completion",
+            "StartedAt": (server_start + timedelta(seconds=1)).isoformat(),
+            "CompletedAt": future_completed_at.isoformat(),
+            "LeaseToken": claimed["LeaseToken"],
+        },
+    )
+
+    assert failed.status_code == 200
+    retry_run = failed.json()["Data"]["PlanningRun"]
+    assert retry_run["Status"] == "Queued"
+    assert retry_run["CompletedAt"] == future_completed_at.isoformat()
+    assert retry_run["NextAttemptAt"] == (
+        server_start + timedelta(seconds=60)
+    ).isoformat()
+    clock.advance(seconds=60)
+    reclaimed = client.post(
+        "/planner/workbench/planning-runs/jobs/claim-next",
+        json={
+            "WorkerID": "worker-server-retry",
+            "ClaimedAt": future_completed_at.isoformat(),
+            "LeaseSeconds": 120,
+        },
+    )
+    assert reclaimed.json()["Data"]["PlanningRun"]["WorkerID"] == (
+        "worker-server-retry"
+    )
 
 
 def test_direct_execution_rejects_naive_started_at_before_claim(monkeypatch):
@@ -1646,6 +2009,295 @@ def test_store_managed_execution_uses_exact_finalization_outcome_revision(
     assert store.current_revision() == int(
         executed.headers["X-Workbench-Revision"]
     ) + 1
+
+
+# BE-RUN-004 / BE-RUN-007 / BE-RUN-011
+def test_direct_claim_rejection_uses_store_boundary_revision_during_concurrent_write(
+    monkeypatch,
+):
+    store = _PausingRejectedStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    owner_app = create_app(state_store=store)
+    rejected_app = create_app(state_store=store)
+    writer_app = _concurrent_rejection_writer_app(store)
+    with TestClient(owner_app) as owner_client, TestClient(
+        rejected_app
+    ) as rejected_client, TestClient(writer_app) as writer_client:
+        assert owner_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-REJECTED-DIRECT-CLAIM"),
+        ).status_code == 200
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            owner = executor.submit(
+                owner_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-DIRECT-CLAIM/execute",
+                json={
+                    "ExecutedBy": "planner-owner",
+                    "StartedAt": "2026-06-22T07:55:00+00:00",
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            store.pause_next_rejection = True
+            rejected_request = executor.submit(
+                rejected_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-DIRECT-CLAIM/execute",
+                json={
+                    "ExecutedBy": "planner-duplicate",
+                    "StartedAt": "2026-06-22T07:55:01+00:00",
+                },
+            )
+            try:
+                rejected = _complete_paused_rejection(
+                    store=store,
+                    writer_client=writer_client,
+                    rejected_request=rejected_request,
+                )
+            finally:
+                release_solver.set()
+            completed = owner.result(timeout=5)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["Data"]["Status"] == (
+        "PlanningRunExecutionAlreadyClaimed"
+    )
+    assert completed.status_code == 200
+
+
+# BE-RUN-004 / BE-RUN-007 / BE-RUN-011
+def test_interactive_claim_rejection_uses_store_boundary_revision_during_concurrent_write():
+    store = _PausingRejectedStore()
+    seed_baseline_test_data(store)
+    rejected_app = create_app(state_store=store)
+    writer_app = _concurrent_rejection_writer_app(store)
+    with TestClient(rejected_app) as rejected_client, TestClient(
+        writer_app
+    ) as writer_client:
+        assert rejected_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-REJECTED-INTERACTIVE-CLAIM"),
+        ).status_code == 200
+        store.pause_next_rejection = True
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            rejected_request = executor.submit(
+                rejected_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-INTERACTIVE-CLAIM/process-queued",
+                json={
+                    "WorkerID": "interactive-worker",
+                    "ProcessedAt": "2026-06-22T07:52:00+00:00",
+                },
+            )
+            rejected = _complete_paused_rejection(
+                store=store,
+                writer_client=writer_client,
+                rejected_request=rejected_request,
+            )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["Data"]["Status"] == "PlanningRunNotPending"
+
+
+# BE-RUN-004 / BE-RUN-007 / BE-RUN-011
+def test_renewal_rejection_uses_store_boundary_revision_during_concurrent_write():
+    store = _PausingRejectedStore()
+    seed_baseline_test_data(store)
+    rejected_app = create_app(state_store=store)
+    writer_app = _concurrent_rejection_writer_app(store)
+    with TestClient(rejected_app) as rejected_client, TestClient(
+        writer_app
+    ) as writer_client:
+        assert rejected_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-REJECTED-RENEWAL"),
+        ).status_code == 200
+        assert rejected_client.post(
+            "/planner/workbench/planning-runs/RUN-REJECTED-RENEWAL/enqueue",
+            json={
+                "EnqueuedBy": "planner-phase0",
+                "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+            },
+        ).status_code == 200
+        claimed = rejected_client.post(
+            "/planner/workbench/planning-runs/jobs/claim-next",
+            json={
+                "WorkerID": "worker-renewal-owner",
+                "ClaimedAt": "2026-06-22T07:52:00+00:00",
+                "LeaseSeconds": 120,
+            },
+        ).json()["Data"]["PlanningRun"]
+        assert claimed is not None
+        store.pause_next_rejection = True
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            rejected_request = executor.submit(
+                rejected_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-RENEWAL/renew-lease",
+                json={
+                    "WorkerID": "worker-renewal-owner",
+                    "LeaseToken": "wrong-lease-token",
+                    "RenewedAt": "2026-06-22T07:52:30+00:00",
+                    "LeaseSeconds": 120,
+                },
+            )
+            rejected = _complete_paused_rejection(
+                store=store,
+                writer_client=writer_client,
+                rejected_request=rejected_request,
+            )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["Data"]["Status"] == "PlanningRunLeaseMismatch"
+
+
+# BE-RUN-004 / BE-RUN-007 / BE-RUN-011
+def test_finalization_ownership_rejection_uses_store_boundary_revision_during_concurrent_write(
+    monkeypatch,
+):
+    store = _PausingRejectedStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    execution_app = create_app(state_store=store)
+    ownership_app = create_app(state_store=store)
+    writer_app = _concurrent_rejection_writer_app(store)
+
+    @ownership_app.post("/test/replace-execution-owner")
+    def replace_execution_owner():
+        run = store.planning_runs["RUN-REJECTED-OWNERSHIP"]
+        run["ExecutionVersion"] = int(run["ExecutionVersion"]) + 1
+        run["ExecutionTokenHash"] = "replacement-owner-token-hash"
+        run["ExecutionClaimedBy"] = "replacement-owner"
+        return {"Status": "Replaced"}
+
+    with TestClient(execution_app) as execution_client, TestClient(
+        ownership_app
+    ) as ownership_client, TestClient(writer_app) as writer_client:
+        assert execution_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-REJECTED-OWNERSHIP"),
+        ).status_code == 200
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                execution_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-OWNERSHIP/execute",
+                json={
+                    "ExecutedBy": "planner-original-owner",
+                    "StartedAt": "2026-06-22T07:55:00+00:00",
+                    "CompletedAt": "2026-06-22T07:56:00+00:00",
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            assert ownership_client.post(
+                "/test/replace-execution-owner"
+            ).status_code == 200
+            store.pause_next_rejection = True
+            release_solver.set()
+            rejected = _complete_paused_rejection(
+                store=store,
+                writer_client=writer_client,
+                rejected_request=execution,
+            )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["Data"]["Status"] == (
+        "PlanningRunExecutionOwnershipLost"
+    )
+
+
+# BE-RUN-004 / BE-RUN-007 / BE-RUN-011
+def test_finalization_expiry_rejection_uses_store_boundary_revision_during_concurrent_write(
+    monkeypatch,
+):
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
+    store = _PausingRejectedStore()
+    seed_baseline_test_data(store)
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    execution_app = create_app(state_store=store, utc_now=clock)
+    heartbeat_app = create_app(state_store=store, utc_now=clock)
+    writer_app = _concurrent_rejection_writer_app(store)
+    with TestClient(execution_app) as execution_client, TestClient(
+        heartbeat_app
+    ) as heartbeat_client, TestClient(writer_app) as writer_client:
+        assert execution_client.post(
+            "/planner/workbench/planning-runs",
+            json=_phase0_planning_run_payload("RUN-REJECTED-EXPIRY"),
+        ).status_code == 200
+        assert execution_client.post(
+            "/planner/workbench/planning-runs/RUN-REJECTED-EXPIRY/enqueue",
+            json={
+                "EnqueuedBy": "planner-phase0",
+                "EnqueuedAt": "2026-06-22T07:51:00+00:00",
+            },
+        ).status_code == 200
+        claimed = execution_client.post(
+            "/planner/workbench/planning-runs/jobs/claim-next",
+            json={
+                "WorkerID": "worker-expiry-owner",
+                "ClaimedAt": server_start.isoformat(),
+                "LeaseSeconds": 30,
+            },
+        ).json()["Data"]["PlanningRun"]
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                execution_client.post,
+                "/planner/workbench/planning-runs/RUN-REJECTED-EXPIRY/execute",
+                json={
+                    "ExecutedBy": "worker-expiry-owner",
+                    "StartedAt": (
+                        server_start + timedelta(seconds=1)
+                    ).isoformat(),
+                    "CompletedAt": (
+                        server_start + timedelta(seconds=2)
+                    ).isoformat(),
+                    "LeaseToken": claimed["LeaseToken"],
+                },
+            )
+            assert solver_entered.wait(timeout=2)
+            clock.advance(seconds=10)
+            heartbeat = heartbeat_client.post(
+                "/planner/workbench/planning-runs/RUN-REJECTED-EXPIRY/renew-lease",
+                json={
+                    "WorkerID": "worker-expiry-owner",
+                    "LeaseToken": claimed["LeaseToken"],
+                    "RenewedAt": clock().isoformat(),
+                    "LeaseSeconds": 30,
+                },
+            )
+            assert heartbeat.status_code == 200
+            clock.advance(seconds=31)
+            store.pause_next_rejection = True
+            release_solver.set()
+            rejected = _complete_paused_rejection(
+                store=store,
+                writer_client=writer_client,
+                rejected_request=execution,
+            )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["Data"]["Status"] == "PlanningRunLeaseExpired"
 
 
 def test_concurrent_direct_execution_claims_run_once_and_cannot_overwrite_completed(
@@ -2044,9 +2696,11 @@ def test_planning_reservation_two_sqlite_stores_only_persisted_owner_solves_and_
 
 
 def test_planning_reservation_expired_lease_recovery_invalidates_execution_claim():
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
-    client = TestClient(create_app(state_store=store))
+    client = TestClient(create_app(state_store=store, utc_now=clock))
     assert client.post(
         "/planner/workbench/planning-runs",
         json=_phase0_planning_run_payload("RUN-LEASE-RECOVERY"),
@@ -2076,6 +2730,7 @@ def test_planning_reservation_expired_lease_recovery_invalidates_execution_claim
         }
     )
     store.save()
+    clock.advance(minutes=1)
 
     recovered = client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
@@ -2100,10 +2755,20 @@ def test_planning_reservation_expired_lease_recovery_invalidates_execution_claim
 
 
 def test_worker_cannot_finalize_after_authoritative_lease_expiry(monkeypatch):
+    server_start = datetime(2026, 6, 22, 7, 52, tzinfo=timezone.utc)
+    clock = _MutableUtcClock(server_start)
     store = WorkbenchStateStore()
     seed_baseline_test_data(store)
-    monkeypatch.setattr("sdbr.api._execute_planning_run", _completed_execution)
-    client = TestClient(create_app(state_store=store))
+    solver_entered = Event()
+    release_solver = Event()
+
+    def blocking_execution(**_kwargs):
+        solver_entered.set()
+        assert release_solver.wait(timeout=5)
+        return _completed_execution()
+
+    monkeypatch.setattr("sdbr.api._execute_planning_run", blocking_execution)
+    client = TestClient(create_app(state_store=store, utc_now=clock))
     assert client.post(
         "/planner/workbench/planning-runs",
         json=_phase0_planning_run_payload("RUN-WORKER-EXPIRED-FINALIZE"),
@@ -2124,15 +2789,21 @@ def test_worker_cannot_finalize_after_authoritative_lease_expiry(monkeypatch):
         },
     ).json()["Data"]["PlanningRun"]
 
-    response = client.post(
-        "/planner/workbench/planning-runs/RUN-WORKER-EXPIRED-FINALIZE/execute",
-        json={
-            "ExecutedBy": "worker-expiring",
-            "StartedAt": "2026-06-22T07:52:01+00:00",
-            "CompletedAt": "2026-06-22T07:52:11+00:00",
-            "LeaseToken": claimed["LeaseToken"],
-        },
-    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        execution = executor.submit(
+            client.post,
+            "/planner/workbench/planning-runs/RUN-WORKER-EXPIRED-FINALIZE/execute",
+            json={
+                "ExecutedBy": "worker-expiring",
+                "StartedAt": "2026-06-22T07:52:01+00:00",
+                "CompletedAt": "2026-06-22T07:52:11+00:00",
+                "LeaseToken": claimed["LeaseToken"],
+            },
+        )
+        assert solver_entered.wait(timeout=2)
+        clock.advance(seconds=11)
+        release_solver.set()
+        response = execution.result(timeout=5)
 
     assert response.status_code == 409
     assert response.json()["Data"]["Status"] == "PlanningRunLeaseExpired"
@@ -3863,8 +4534,16 @@ def test_planning_run_worker_lease_recovers_after_restart_and_rejects_stale_owne
 ):
     from sdbr.state_store import SQLiteWorkbenchStateStore
 
+    clock = _MutableUtcClock(
+        datetime(2026, 6, 16, 7, 52, tzinfo=timezone.utc)
+    )
     database_path = tmp_path / "workbench.db"
-    client = TestClient(create_app(state_store=SQLiteWorkbenchStateStore(database_path)))
+    client = TestClient(
+        create_app(
+            state_store=SQLiteWorkbenchStateStore(database_path),
+            utc_now=clock,
+        )
+    )
     master_data_payload = _master_data_import_calculate_payload()
     master_data_payload.pop("ProblemID")
     master_data_payload.pop("ScheduleStartAt")
@@ -3924,7 +4603,10 @@ def test_planning_run_worker_lease_recovers_after_restart_and_rejects_stale_owne
     first_token = first_run["LeaseToken"]
 
     recreated_client = TestClient(
-        create_app(state_store=SQLiteWorkbenchStateStore(database_path))
+        create_app(
+            state_store=SQLiteWorkbenchStateStore(database_path),
+            utc_now=clock,
+        )
     )
     stored_run = recreated_client.app.state.workbench_state_store.planning_runs[
         "RUN-WORKER-1"
@@ -3937,6 +4619,7 @@ def test_planning_run_worker_lease_recovers_after_restart_and_rejects_stale_owne
     assert "LeaseToken" not in read_run
     assert "LeaseTokenHash" not in read_run
 
+    clock.advance(seconds=30)
     heartbeat = recreated_client.post(
         "/planner/workbench/planning-runs/RUN-WORKER-1/renew-lease",
         json={
@@ -3962,6 +4645,7 @@ def test_planning_run_worker_lease_recovers_after_restart_and_rejects_stale_owne
     assert no_claim.status_code == 200
     assert no_claim.json()["Data"]["PlanningRun"] is None
 
+    clock.advance(minutes=3, seconds=30)
     second_claim = recreated_client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
         json={
@@ -4209,7 +4893,10 @@ def test_concurrent_workers_cannot_claim_the_same_planning_run(monkeypatch):
 def test_planning_run_retries_recoverable_failure_then_moves_to_dead_letter(
     monkeypatch,
 ):
-    client = TestClient(create_app())
+    clock = _MutableUtcClock(
+        datetime(2026, 6, 16, 7, 52, tzinfo=timezone.utc)
+    )
+    client = TestClient(create_app(utc_now=clock))
     master_data_payload = _master_data_import_calculate_payload()
     master_data_payload.pop("ProblemID")
     master_data_payload.pop("ScheduleStartAt")
@@ -4283,9 +4970,10 @@ def test_planning_run_retries_recoverable_failure_then_moves_to_dead_letter(
     assert first_failure.status_code == 200
     retry_run = first_failure.json()["Data"]["PlanningRun"]
     assert retry_run["Status"] == "Queued"
-    assert retry_run["NextAttemptAt"] == "2026-06-16T07:53:10+00:00"
+    assert retry_run["NextAttemptAt"] == "2026-06-16T07:53:00+00:00"
     assert retry_run["LastFailure"]["SolverStatus"] == "Error"
 
+    clock.advance(seconds=59)
     early_claim = client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
         json={
@@ -4296,6 +4984,7 @@ def test_planning_run_retries_recoverable_failure_then_moves_to_dead_letter(
     )
     assert early_claim.json()["Data"]["PlanningRun"] is None
 
+    clock.advance(seconds=1)
     second_claim = client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
         json={
@@ -4319,6 +5008,7 @@ def test_planning_run_retries_recoverable_failure_then_moves_to_dead_letter(
     assert dead_letter["AttemptCount"] == 2
     assert dead_letter["DeadLetterReason"] == "MaxAttemptsExceeded"
 
+    clock.advance(minutes=7)
     no_more_claims = client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
         json={
@@ -4365,6 +5055,7 @@ def test_planning_run_retries_recoverable_failure_then_moves_to_dead_letter(
     assert recovered["PreviousDeadLetter"]["Reason"] == "MaxAttemptsExceeded"
     assert recovered["RecoveryReason"] == "Solver service restored."
 
+    clock.advance(minutes=1)
     recovered_claim = client.post(
         "/planner/workbench/planning-runs/jobs/claim-next",
         json={

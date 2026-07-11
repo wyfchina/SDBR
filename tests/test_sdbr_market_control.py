@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from sdbr.planning_reservation_view import reservation_load_by_bucket
 from sdbr.sdbr_market_control import (
     build_ccr_planned_load,
     build_mta_replenishment_load,
@@ -56,6 +57,49 @@ def test_ccr_planned_load_keeps_scheduled_load_unchanged_without_reservations():
     assert bucket["ReservationLoadMinutes"] == 0
     assert bucket["MtoLoadMinutes"] == 0
     assert bucket["MtaLoadMinutes"] == 0
+    assert bucket["TotalPlannedLoadMinutes"] == 0
+
+
+def test_ccr_planned_load_ignores_valid_reservations_outside_visible_buckets():
+    # Acceptance evidence: BE-SDBR-008 read-model boundary.
+    reservations = [
+        {
+            "CapacityReservationID": "R-OTHER-RESOURCE",
+            "ResourceID": "CCR-OTHER",
+            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+            "ReservedMinutes": 60,
+            "DemandClass": "MTO",
+            "Status": "ActivePlanReservation",
+        },
+        {
+            "CapacityReservationID": "R-OTHER-DATE",
+            "ResourceID": "CCR-1",
+            "WindowStartAt": "2026-07-21T08:00:00+00:00",
+            "ReservedMinutes": 90,
+            "DemandClass": "MTA",
+            "Status": "ActivePlanReservation",
+        },
+    ]
+    pure_projection = reservation_load_by_bucket(reservations)
+
+    result = build_ccr_planned_load(
+        gantt_rows=[],
+        resources=[{
+            "ResourceID": "CCR-1",
+            "Name": "Constraint",
+            "IsConstraint": True,
+            "DailyCapacityMinutes": {"2026-07-20": 480},
+        }],
+        orders=[],
+        ddmrp_lines=[],
+        horizon_start=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        capacity_reservations=reservations,
+    )
+
+    assert pure_projection[("CCR-OTHER", "2026-07-20")]["ReservationLoadMinutes"] == 60
+    assert pure_projection[("CCR-1", "2026-07-21")]["ReservationLoadMinutes"] == 90
+    bucket = result["Buckets"][0]
+    assert bucket["ReservationLoadMinutes"] == 0
     assert bucket["TotalPlannedLoadMinutes"] == 0
 
 

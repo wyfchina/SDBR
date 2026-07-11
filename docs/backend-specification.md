@@ -987,11 +987,13 @@ Simio 集成工作约束：
 
 ### BE-SDBR-006 至 BE-SDBR-009 / BE-RUN-011 共享计划预留阶段 0
 
-- 日期：2026-07-10
+- 验证日期：2026-07-11
 - 范围：统一 MTO/MTA 需求身份、CCR 计划级容量预留、物料计划分配、状态存储、Planning Run 冻结与转正。
 - 核心不变量：需求只计一次；计划预留转正式工序后不重复计负荷；权威物料分配接管后不重复扣减；确认批次原子写入；重放不产生重复对象。
-- 边界：不实现 MTO 影子排程、DDMRP 新算法、BOM 展开、ERP 正式订单创建或 UI 页面。
-- 状态：`[PARTIAL]`，待实现与重复测试证据。
+- 实现证据：`sdbr/planning_commitments.py`、`sdbr/planning_reservations.py`、`sdbr/planning_reservation_view.py`、`sdbr/state_store.py`、`sdbr/planning_run_reservation_bridge.py` 和 `sdbr/api.py`。
+- 验证证据：`python -m compileall -q sdbr`，退出码 0、无输出（0.29s）；`pytest tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py tests/test_api.py -q -k "planning_commitment or planning_reservation or ccr_planned_load or state_store" --basetemp .tmp/pytest-shared-reservation-phase0 -p no:cacheprovider`，99 passed、221 deselected、1 warning（5.23s）；`pytest -q --basetemp .tmp/pytest-full-shared-reservation-phase0 -p no:cacheprovider`，603 passed、0 deselected、1 warning（54.52s）。两次 pytest 的唯一 warning 均为 `StarletteDeprecationWarning`：`starlette.testclient` 使用 `httpx` 已弃用，应安装 `httpx2`；无失败被该 warning 隐藏。
+- 边界：MTO/MTA 业务工作流尚未接入；不实现 MTO 影子排程、DDMRP 新算法、BOM 展开、ERP 正式订单创建或 UI 页面。
+- 状态：`BE-SDBR-006`、`BE-SDBR-007`、`BE-SDBR-008`、`BE-SDBR-009` 和 `BE-RUN-011` 均保持 `[PARTIAL]`，阶段 0 仅完成上述实现与可重复验证证据。
 
 ## 18. 变更记录
 

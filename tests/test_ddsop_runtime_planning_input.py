@@ -335,6 +335,42 @@ def test_be_ddmrp_007_preserves_contract_demand_supply_ids_and_uom() -> None:
     assert "StandardTargetReceiptAt" not in line
 
 
+def test_be_ddmrp_007_rejects_runtime_spike_without_accepted_threshold_authority() -> None:
+    from sdbr.ddsop_runtime_planning_input import DdmrpRuntimeAuthorityError
+
+    message = _runtime_message(status="AcceptedForBoundedPlanning")
+    demand = message["Payload"]["RuntimeEvidenceSnapshot"]["DemandSignals"][0]
+    demand.update(
+        {
+            "DemandType": "SpikeCandidate",
+            "SpikeQualificationStatus": "RequiresSDBRQualification",
+            "SpikeQualificationMode": "CalculatedBySDBR",
+            "SpikeQualificationEvidenceID": None,
+        }
+    )
+    accepted_config = _accepted_configuration_for(message)
+    processed = process_runtime_planning_input_message(
+        message,
+        received_at=RECEIVED_AT,
+        accepted_configurations={
+            accepted_config["Payload"]["OperatingModelConfigurationID"]: accepted_config
+        },
+        contract_root=DEFAULT_CONTRACT_ROOT,
+    )
+    assert processed.processing_status == "Accepted"
+    assert processed.package_record is not None
+
+    with pytest.raises(DdmrpRuntimeAuthorityError) as error:
+        evaluate_ddmrp_runtime_signals_from_package(
+            processed.package_record,
+            accepted_config,
+            evaluated_at=datetime.fromisoformat("2026-06-30T09:00:00+08:00"),
+        )
+
+    assert error.value.code == "SPIKE_QUALIFICATION_INPUT_INSUFFICIENT"
+    assert error.value.status == "DdmrpRuntimeAuthorityError"
+
+
 def test_bounded_scheduling_adapter_uses_explicit_executable_rows_only() -> None:
     message = _runtime_message(status="AcceptedForBoundedPlanning")
     package = _accepted_result(message).package_record

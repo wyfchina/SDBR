@@ -77,6 +77,14 @@ class RuntimePlanningInputProcessingResult:
     errors: list[dict[str, Any]]
 
 
+class DdmrpRuntimeAuthorityError(ValueError):
+    status = "DdmrpRuntimeAuthorityError"
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def runtime_planning_input_schema(
     contract_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -272,6 +280,15 @@ def evaluate_ddmrp_runtime_signals_from_package(
         "DDMRPConfiguration"
     ]
     runtime = payload["RuntimeEvidenceSnapshot"]
+    if any(
+        item.get("SpikeQualificationStatus") == "RequiresSDBRQualification"
+        and item.get("SpikeQualificationMode") == "CalculatedBySDBR"
+        for item in runtime.get("DemandSignals", [])
+    ):
+        raise DdmrpRuntimeAuthorityError(
+            "SPIKE_QUALIFICATION_INPUT_INSUFFICIENT",
+            "Accepted spike threshold authority is required for SDBR qualification.",
+        )
     buffer_by_id = {
         str(item["BufferProfileID"]): item
         for item in ddmrp_config.get("StockBufferProfiles", [])

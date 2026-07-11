@@ -37,6 +37,8 @@ class DemandSignal:
     demand_due_at: datetime
     demand_type: str = "CustomerOrder"
     is_qualified_spike: bool = False
+    demand_id: str | None = None
+    uom: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -46,6 +48,8 @@ class DemandSignal:
             "DemandDueAt": self.demand_due_at.isoformat(),
             "DemandType": self.demand_type,
             "IsQualifiedSpike": self.is_qualified_spike,
+            "DemandID": self.demand_id,
+            "Uom": self.uom,
         }
 
 
@@ -56,6 +60,8 @@ class OpenSupply:
     supply_qty: float
     expected_at: datetime | None
     status: str = "Open"
+    supply_id: str | None = None
+    uom: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -64,6 +70,8 @@ class OpenSupply:
             "SupplyQty": self.supply_qty,
             "ExpectedAt": self.expected_at.isoformat() if self.expected_at else None,
             "Status": self.status,
+            "SupplyID": self.supply_id,
+            "Uom": self.uom,
         }
 
 
@@ -223,6 +231,7 @@ def _evaluate_point(
         "BufferProfileID": point.buffer_profile_id,
         "DLTMinutes": point.dlt_minutes,
         "OnHandQty": buffer.on_hand_qty,
+        "QualifiedOnHandQty": buffer.on_hand_qty,
         "QualifiedOpenSupplyQty": qualified_supply_qty,
         "QualifiedDemandQty": qualified_demand_qty,
         "NetFlowPosition": net_flow_position,
@@ -235,18 +244,22 @@ def _evaluate_point(
         "RecommendedAction": "Replenish" if suggested_replenishment_qty > 0 else "Monitor",
         "DemandComponents": [
             {
+                "DemandID": item.demand_id,
                 "DemandQty": item.demand_qty,
                 "DemandDueAt": item.demand_due_at.isoformat(),
                 "DemandType": item.demand_type,
                 "IsQualifiedSpike": item.is_qualified_spike,
+                "Uom": item.uom,
             }
             for item in qualified_demands
         ],
         "SupplyComponents": [
             {
+                "SupplyID": item.supply_id,
                 "SupplyQty": item.supply_qty,
                 "ExpectedAt": item.expected_at.isoformat() if item.expected_at else None,
                 "Status": item.status,
+                "Uom": item.uom,
             }
             for item in qualified_supply
         ],

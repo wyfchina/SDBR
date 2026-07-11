@@ -1,3 +1,5 @@
+"""Acceptance evidence for BE-DDMRP-007 and BE-INT-008."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -249,6 +251,88 @@ def test_ddmrp_runtime_adapter_consumes_frozen_parameters_and_runtime_evidence()
     assert result["Summary"]["DecouplingPointCount"] == 1
     assert result["Summary"]["LineCount"] == 1
     assert "DDAE-governed DDMRP master settings" in result["Boundary"]
+
+
+@pytest.mark.parametrize(
+    ("quality_state", "available_qty"),
+    [
+        ("Unrestricted", 34),
+        ("Inspection", 0),
+        ("Blocked", 0),
+        ("Released", 34),
+    ],
+)
+def test_be_ddmrp_007_consumes_authority_available_qty_without_quality_reinterpretation(
+    quality_state: str,
+    available_qty: int,
+) -> None:
+    message = _runtime_message(status="AcceptedForBoundedPlanning")
+    inventory = message["Payload"]["RuntimeEvidenceSnapshot"]["InventoryPositions"][0]
+    inventory.update(
+        {
+            "OnHandQty": 42,
+            "AllocatedQty": 8,
+            "AvailableQty": available_qty,
+            "QualityState": quality_state,
+        }
+    )
+    accepted_config = _accepted_configuration_for(message)
+    processed = process_runtime_planning_input_message(
+        message,
+        received_at=RECEIVED_AT,
+        accepted_configurations={
+            accepted_config["Payload"]["OperatingModelConfigurationID"]: accepted_config
+        },
+        contract_root=DEFAULT_CONTRACT_ROOT,
+    )
+    assert processed.processing_status == "Accepted"
+    assert processed.package_record is not None
+
+    result = evaluate_ddmrp_runtime_signals_from_package(
+        processed.package_record,
+        accepted_config,
+        evaluated_at=datetime.fromisoformat("2026-06-30T09:00:00+08:00"),
+    )
+    line = result["Lines"][0]
+    assert line["QualifiedOnHandQty"] == available_qty
+    assert line["OnHandQty"] == available_qty
+    assert line["PhysicalOnHandQty"] == 42
+    assert line["AuthorityAllocatedQty"] == 8
+    assert line["AuthorityAvailableQty"] == available_qty
+    assert line["QualityState"] == quality_state
+    assert line["Uom"] == inventory["UnitOfMeasure"]
+
+
+def test_be_ddmrp_007_preserves_contract_demand_supply_ids_and_uom() -> None:
+    message = _runtime_message(status="AcceptedForBoundedPlanning")
+    runtime = message["Payload"]["RuntimeEvidenceSnapshot"]
+    demand = runtime["DemandSignals"][0]
+    supply = runtime["OpenSupplySignals"][0]
+    demand["DueAt"] = "2026-06-30T17:00:00+08:00"
+    accepted_config = _accepted_configuration_for(message)
+    processed = process_runtime_planning_input_message(
+        message,
+        received_at=RECEIVED_AT,
+        accepted_configurations={
+            accepted_config["Payload"]["OperatingModelConfigurationID"]: accepted_config
+        },
+        contract_root=DEFAULT_CONTRACT_ROOT,
+    )
+    assert processed.processing_status == "Accepted"
+    assert processed.package_record is not None
+
+    result = evaluate_ddmrp_runtime_signals_from_package(
+        processed.package_record,
+        accepted_config,
+        evaluated_at=datetime.fromisoformat("2026-06-30T09:00:00+08:00"),
+    )
+    line = result["Lines"][0]
+    assert line["DemandComponents"][0]["DemandID"] == demand["DemandID"]
+    assert line["DemandComponents"][0]["Uom"] == demand["UnitOfMeasure"]
+    assert line["SupplyComponents"][0]["SupplyID"] == supply["SupplyID"]
+    assert line["SupplyComponents"][0]["Uom"] == supply["UnitOfMeasure"]
+    assert line["Uom"] == runtime["InventoryPositions"][0]["UnitOfMeasure"]
+    assert "StandardTargetReceiptAt" not in line
 
 
 def test_bounded_scheduling_adapter_uses_explicit_executable_rows_only() -> None:

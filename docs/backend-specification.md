@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.67 |
-| 日期 | 2026-07-09 |
+| 文档版本 | 2.80 |
+| 日期 | 2026-07-11 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
 | UI 规格 | `docs/ui-specification.md` |
@@ -133,6 +133,9 @@ DDOM 与 DDS&OP 分工：
 | `BE-DDMRP-004` | 区分计划缓冲状态与在手执行状态 | `[VERIFIED]` | `C` `PlanningStatus`、`ExecutionStatus`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 计划状态基于净流位置，执行状态基于在手库存，二者不得混用 |
 | `BE-DDMRP-005` | 生成补货建议 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `SuggestedReplenishmentQty`; `A` `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 当净流处于红区或黄区时触发补货建议，建议量补到绿区顶部，并按 MOQ/订单倍量修正；净流高于黄区时不补货 |
 | `BE-DDMRP-006` | DDMRP 运行 read model | `[VERIFIED]` | `A` `/planner/workbench/ddmrp/status`; `UI` `UI-DDMRP-001`、`UI-DDMRP-002`; `T` `tests/test_api.py` | 数据就绪页只读显示健康摘要；物料计划工作台只读显示解耦点、缓冲颜色、缓冲百分比、净流位置、在手/在途/合格需求、补货建议和详情；不提供参数编辑 |
+| `BE-DDMRP-007` | 不可变 DDMRP 运行评估与版本化只读补货建议 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 直接消费已校验运行包 `AvailableQty`；冻结完整权威签名；Red/Yellow 形成稳定逻辑补货链上的不可变版本；缺失目标日期、Advice/BOM/物料/产能或生产权威时返回结构化阻塞；不产生操作写入。 |
+| `BE-DDMRP-008` | 契约授权的 Buy/Make 建议与计划员确认治理 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 仅在 `CONTRACT-GATE-DDMRP-ACTIVATION-001` 关闭项全部验收后启动；建议类型由服务端已验收契约证据决定，计划员逐条确认，身份/时间由服务端记录，当前不得新增调用方自报 advice envelope；Transfer 属于原设计的后续目标，但本验收项不包含且不得声明。 |
+| `BE-DDMRP-009` | Make 可行性、计划制造候选和共享 CCR/物料预留 | `[NOT-STARTED]` | `D` approved DDMRP and shared-reservation designs | 仅在已验收 Plan BOM、目标日期、物料/CCR 日历可行性和生产权威证据存在后启动；确认 Make 必须原子创建候选、CCR 预留和下级物料分配，并进入完整 Planning Run 生命周期。 |
 
 ## 4.2 S-DBR P1 市场控制运行能力
 
@@ -1011,6 +1014,7 @@ Simio 集成工作约束：
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.80 | 2026-07-11 | 定义 DDMRP 运行补货分阶段边界：先实现权威输入驱动的不可变评估与只读工作台；Buy/Make 确认及 Make 候选/CCR/物料预留保持 Contract Agent 契约门控，不接受调用方自报 ERP/MRP 证据，不声明运行补货闭环完成 |
 | 2.79 | 2026-07-11 | 收紧共享计划预留阶段 0 第六轮最终复核验收：普通请求改用 store-owned cancellation-safe async admission，等待锁不占用默认 AnyIO worker token；取消请求等待同步 route 完成并在 release 前完整回滚；solver lock-free、heartbeat 和 store-managed atomic update 语义保持不变，能力状态保持 `[PARTIAL]` |
 | 2.78 | 2026-07-11 | 完成共享计划预留阶段 0 第五轮最终复核修复：execution ownership 全部改用注入的 server-owned UTC clock，client timestamps 降为 audit metadata，store-managed controlled rejection 携带 store boundary 内 authoritative revision；`BE-RUN-004` 保持 `[VERIFIED]`，Phase 0 五项能力保持 `[PARTIAL]` |
 | 2.77 | 2026-07-11 | 收紧共享计划预留阶段 0 第四轮最终复核验收：bounded direct/worker execution claim、active-lease finalization、expired claim recovery、direct finalization error compensation、同锁 body/revision pairing、精确 save outcome revision、canonical demand normalizer 及同版本 lifecycle provenance CAS；上述 timeout/grace 仅为 SDBR 内部执行安全，能力状态保持 `[PARTIAL]` |

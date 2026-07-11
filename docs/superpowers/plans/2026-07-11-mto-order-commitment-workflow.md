@@ -349,7 +349,7 @@ Exclude `DecidedAt`. Capture `decision_at = server_utc_now()` and `actor_id = _e
 
 ### Intake Version and Terminal Rules
 
-- `OrderVersionRank` is the tuple `(parse_aware(ReceivedAt), OrderVersion)`; it is persisted in the normalized order and compared lexicographically. Tests use `ReceivedAt` one minute later for version 2. This avoids guessing numeric semantics for source-owned version strings.
+- `OrderVersionRank` is the tuple `(_parse_aware(ReceivedAt), OrderVersion)`; it is persisted as canonical ISO text plus `OrderVersion` and compared lexicographically. Tests use `ReceivedAt` one minute later for version 2. `_parse_aware` is the only datetime parse helper in `order_commitment_evaluation.py`; no `parse_aware` alias is introduced.
 - Exact `OrderContentFingerprint` replay returns the existing row, including a terminal/superseded row, with `RegistrationStatus="Duplicate"` and no mutation/event/clock-derived evaluation.
 - The same `OrderKey` (same version) with different content returns `409 OrderVersionContentConflict`.
 - A lower version rank than the greatest persisted rank for the logical order returns `409 OrderVersionSuperseded` and cannot displace the newer row.
@@ -1310,7 +1310,7 @@ git commit -m "feat: scope MTO capacity evidence to exact windows"
 
 **IDs:** `BE-SDBR-010`.
 
-- [ ] **Step 1: Write candidate tests**
+- [ ] **Step 1A (requested-date RED): write the three requested-pass tests**
 
 Add `TestCcrShadowPromiseSelection`:
 
@@ -1321,13 +1321,66 @@ Add `TestCcrShadowPromiseSelection`:
 - `test_no_later_window_returns_not_assessable_without_reservation_requests`;
 - `test_selected_evidence_lists_exact_relevant_capacity_window_keys`.
 
-~~~powershell
-pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection -q --basetemp .tmp/pytest-mto-shadow-promise-red -p no:cacheprovider
+Add this exact cutoff regression to the same class and import
+`_requested_candidate`. It proves both cutoff rules during the initial
+evaluation: a window ending exactly at the cutoff is excluded, and only the
+unelapsed part of an active window contributes temporal capacity.
+
+~~~python
+    def test_initial_requested_pass_cannot_use_elapsed_shift_minutes(self):
+        start = datetime(2026, 7, 20, 8, tzinfo=UTC)
+        cutoff = datetime(2026, 7, 20, 12, tzinfo=UTC)
+        end = datetime(2026, 7, 20, 16, tzinfo=UTC)
+
+        def state(window_start, window_end, capacity):
+            return {
+                "ResourceID": "CCR-1",
+                "WindowStart": window_start,
+                "WindowEnd": window_end,
+                "CapacityMinutes": capacity,
+                "CapacityUnits": 1,
+                "ProcessingIntervals": [],
+                "ScheduledFullMinutes": 0,
+                "ExistingReservationMinutes": 0,
+                "CandidateAssignments": [],
+            }
+
+        operation = {
+            "RouteSequence": 10,
+            "OperationID": "SO-1:10:CUT",
+            "SourceOperationID": "CUT",
+            "ResourceID": "CCR-1",
+            "DurationMinutes": 300,
+        }
+        result = _requested_candidate(
+            order_id="SO-1:10",
+            requested_due_at=end,
+            capacity_assessment_cutoff_at=cutoff,
+            ccr_operations=[operation],
+            deadlines={"CUT": end},
+            source_states={
+                ("CCR-1", start, cutoff): state(start, cutoff, 240),
+                ("CCR-1", start, end): state(start, end, 480),
+            },
+            protection_threshold_percent=80.0,
+        )
+
+        assert result["Feasible"] is False
+        assert result["ReservationRequests"] == []
+        assert result["ConsideredWindowKeys"] == [
+            ("CCR-1", start.isoformat(), end.isoformat())
+        ]
 ~~~
 
-Expected: six tests fail because candidate passes are absent.
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_requested_candidate_walks_route_backward_and_returns_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_low_load_only_after_deadline_never_makes_request_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_initial_requested_pass_cannot_use_elapsed_shift_minutes --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_requested_candidate_walks_route_backward_and_returns_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_low_load_only_after_deadline_never_makes_request_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_initial_requested_pass_cannot_use_elapsed_shift_minutes -q --basetemp .tmp/pytest-mto-shadow-requested-red -p no:cacheprovider
+~~~
 
-- [ ] **Step 2: Implement both passes**
+Expected: exactly three items collect and fail because the requested pass is
+absent or does not accept `capacity_assessment_cutoff_at`.
+
+- [ ] **Step 1B (requested-date implement): add deadlines and the requested pass**
 
 ~~~python
 def _route_deadlines(
@@ -1354,6 +1407,7 @@ def _requested_candidate(
     *,
     order_id: str,
     requested_due_at: datetime,
+    capacity_assessment_cutoff_at: datetime,
     ccr_operations: list[dict[str, object]],
     deadlines: Mapping[str, datetime],
     source_states: Mapping[
@@ -1365,17 +1419,22 @@ def _requested_candidate(
     assessments: list[dict[str, object]] = []
     requests: list[dict[str, object]] = []
     considered: set[tuple[str, str, str]] = set()
+    cutoff = _utc(capacity_assessment_cutoff_at)
     for operation in reversed(ccr_operations):
         resource_id = str(operation["ResourceID"])
         deadline = deadlines[str(operation["SourceOperationID"])]
         fitting: list[tuple[dict[str, object], dict[str, object]]] = []
         for key, state in states.items():
-            if key[0] != resource_id or key[1] >= deadline:
+            if (
+                key[0] != resource_id
+                or key[2] <= cutoff
+                or key[1] >= deadline
+            ):
                 continue
             considered.add((key[0], _utc_iso(key[1]), _utc_iso(key[2])))
             metrics = _window_metrics(
                 state,
-                usable_start=key[1],
+                usable_start=max(key[1], cutoff),
                 deadline=deadline,
                 candidate_minutes=int(operation["DurationMinutes"]),
             )
@@ -1634,6 +1693,7 @@ def evaluate_ccr_shadow_schedule(
     requested = _requested_candidate(
         order_id=order_id,
         requested_due_at=requested_due_at,
+        capacity_assessment_cutoff_at=cutoff,
         ccr_operations=ccr_operations,
         deadlines=deadlines,
         source_states=states,
@@ -1696,18 +1756,66 @@ def evaluate_ccr_shadow_schedule(
     }
 ~~~
 
-No later candidate returns `NotAssessable`, issue `NO_SAFE_CCR_WINDOW`, and no selected/reservation rows. This task is split into three commits: requested-pass tests/body, forward-pass tests/body, then public evaluator tests/body. Each commit repeats the named RED selector, a focused green selector, and `python -m compileall -q sdbr` before commit.
+No later candidate returns `NotAssessable`, issue `NO_SAFE_CCR_WINDOW`, and no selected/reservation rows. Apply the bodies above only in the slice that names them; do not paste all three production blocks before the first RED run.
 
-- [ ] **Step 3: Verify and commit**
+- [ ] **Step 1C (requested-date GREEN/commit): verify exactly three items**
 
 ~~~powershell
-pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection --collect-only -q
-pytest tests/test_ccr_shadow_scheduler.py -q --basetemp .tmp/pytest-mto-shadow-complete -p no:cacheprovider
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_requested_candidate_walks_route_backward_and_returns_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_low_load_only_after_deadline_never_makes_request_on_time tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_initial_requested_pass_cannot_use_elapsed_shift_minutes -q --basetemp .tmp/pytest-mto-shadow-requested-green -p no:cacheprovider
+python -m compileall -q sdbr
 git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
-git commit -m "feat: select safe MTO promise windows"
+git commit -m "feat: honor the MTO capacity cutoff"
 ~~~
 
-Expected: six class tests collect and the complete scheduler file passes.
+Expected: exactly three items pass.
+
+- [ ] **Step 2A (earliest-safe RED): add and run the three forward-pass items**
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_late_requested_candidate_returns_earliest_safe_promise tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_multi_ccr_route_uses_per_operation_deadlines_and_route_order tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_no_later_window_returns_not_assessable_without_reservation_requests --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_late_requested_candidate_returns_earliest_safe_promise tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_multi_ccr_route_uses_per_operation_deadlines_and_route_order tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_no_later_window_returns_not_assessable_without_reservation_requests -q --basetemp .tmp/pytest-mto-shadow-forward-red -p no:cacheprovider
+~~~
+
+Expected: exactly three items collect and fail because
+`_earliest_safe_candidate` and the no-safe result path are absent.
+
+- [ ] **Step 2B (earliest-safe implement): add `_earliest_safe_candidate` and `_not_assessable_result` from the complete blocks above**
+
+- [ ] **Step 2C (earliest-safe GREEN/commit): verify exactly three items**
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_late_requested_candidate_returns_earliest_safe_promise tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_multi_ccr_route_uses_per_operation_deadlines_and_route_order tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_no_later_window_returns_not_assessable_without_reservation_requests -q --basetemp .tmp/pytest-mto-shadow-forward-green -p no:cacheprovider
+python -m compileall -q sdbr
+git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
+git commit -m "feat: select the earliest safe MTO promise"
+~~~
+
+Expected: exactly three items pass.
+
+- [ ] **Step 3A (public evaluator RED): add the exact-window evidence item**
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_selected_evidence_lists_exact_relevant_capacity_window_keys --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_selected_evidence_lists_exact_relevant_capacity_window_keys -q --basetemp .tmp/pytest-mto-shadow-public-red -p no:cacheprovider
+~~~
+
+Expected: exactly one item collects and fails because
+`evaluate_ccr_shadow_schedule` is absent.
+
+- [ ] **Step 3B (public evaluator implement): add `evaluate_ccr_shadow_schedule` from the complete block above**
+
+- [ ] **Step 3C (public evaluator GREEN/commit): verify one item, then all seven class items**
+
+~~~powershell
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection::test_selected_evidence_lists_exact_relevant_capacity_window_keys -q --basetemp .tmp/pytest-mto-shadow-public-green -p no:cacheprovider
+pytest tests/test_ccr_shadow_scheduler.py::TestCcrShadowPromiseSelection --collect-only -q
+pytest tests/test_ccr_shadow_scheduler.py -q --basetemp .tmp/pytest-mto-shadow-complete -p no:cacheprovider
+python -m compileall -q sdbr
+git add -- sdbr/ccr_shadow_scheduler.py tests/test_ccr_shadow_scheduler.py
+git commit -m "feat: expose the MTO shadow evaluation"
+~~~
+
+Expected: the focused item passes, exactly seven class items collect, and the complete scheduler file passes.
 
 ---
 
@@ -1738,17 +1846,20 @@ from sdbr.operational_state import (
     OperationalStateSnapshot,
     evaluate_operational_state_freshness,
 )
+from sdbr.planner_view import InventoryBufferPolicy
 from sdbr.planning_commitments import (
     create_demand_commitment,
     normalize_demand_commitment,
 )
 from sdbr.planning_reservation_view import (
+    ACTIVE_PLANNING_STATUSES,
     planning_allocated_qty_for_other_demands,
 )
 from sdbr.planning_reservations import (
     PlanningReservationWriteSet,
     prepare_reservation_confirmation,
 )
+from sdbr.release_candidates import MaterialAvailability
 
 
 class OrderCommitmentConflict(ValueError):
@@ -1756,6 +1867,15 @@ class OrderCommitmentConflict(ValueError):
 
 class OrderCommitmentStale(OrderCommitmentConflict):
     status = "OrderCommitmentEvaluationStale"
+
+class OrderCommitmentSnapshotNotFound(OrderCommitmentConflict):
+    status = "OperationalStateSnapshotNotFound"
+
+    def __init__(self, snapshot_id: str) -> None:
+        self.snapshot_id = snapshot_id
+        super().__init__(
+            f"Operational state snapshot was not found: {snapshot_id}."
+        )
 
 @dataclass(frozen=True, slots=True)
 class CcrProtectionPolicy:
@@ -1770,9 +1890,16 @@ REFERENCE_CCR_PROTECTION_POLICY = CcrProtectionPolicy(
     approved=False,
 )
 
-def _utc(value: datetime) -> datetime:
+def require_aware(value: datetime, field: str) -> datetime:
+    if not isinstance(value, datetime):
+        raise OrderCommitmentConflict(f"{field} must be a datetime.")
     if value.tzinfo is None or value.utcoffset() is None:
-        raise OrderCommitmentConflict("Datetime must be timezone-aware.")
+        raise OrderCommitmentConflict(f"{field} must be timezone-aware.")
+    return value
+
+
+def _utc(value: datetime) -> datetime:
+    require_aware(value, "Datetime")
     return value.astimezone(timezone.utc)
 
 
@@ -2024,9 +2151,12 @@ Expected: seven failures because selection is absent.
 
 ~~~python
 def select_order_commitment_operational_snapshot(
-    *, snapshots, evaluated_at, requested_snapshot_id
-):
-    require_aware(evaluated_at, "evaluated_at")
+    *,
+    snapshots: Mapping[str, OperationalStateSnapshot],
+    evaluated_at: datetime,
+    requested_snapshot_id: str | None,
+) -> dict[str, object]:
+    evaluated_at = _utc(require_aware(evaluated_at, "evaluated_at"))
     requested = (
         requested_snapshot_id.strip()
         if isinstance(requested_snapshot_id, str)
@@ -2082,7 +2212,7 @@ def select_order_commitment_operational_snapshot(
     }
 ~~~
 
-`OrderCommitmentSnapshotNotFound` carries status `OperationalStateSnapshotNotFound` and the missing ID. Do not choose a future row in latest mode.
+`OrderCommitmentSnapshotNotFound` was defined in Task 6, carries status `OperationalStateSnapshotNotFound`, and retains the missing ID in `snapshot_id`. Do not choose a future row in latest mode.
 
 - [ ] **Step 3: Verify and commit**
 
@@ -2134,13 +2264,103 @@ Add `TestOrderCommitmentMaterialFeasibility`:
 - `test_missing_snapshot_or_required_item_row_is_evidence_insufficient`;
 - `test_inbound_counts_only_when_aware_and_inside_frozen_material_window`;
 - `test_shortage_is_all_or_nothing_and_returns_no_allocation_requests`;
-- `test_current_demand_allocation_is_not_subtracted_twice`.
+- `test_current_demand_allocation_is_not_subtracted_twice`;
+- `test_same_item_location_lines_use_cumulative_candidate_balance`;
+- `test_same_item_location_coverage_is_independent_of_input_line_order`;
+- `test_feasible_same_item_location_allocations_sum_to_accepted_total`;
+- `test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient`.
+
+Install this exact helper and the three new cumulative-accounting tests in the
+class. The existing shortage test uses the same helper with quantities `3`
+and `3` and asserts `AllocationRequests == []`.
+
+~~~python
+    @staticmethod
+    def _same_key_material_result(requirements, *, on_hand=5.0):
+        observed_at = datetime(2026, 7, 11, 8, tzinfo=UTC)
+        snapshot = OperationalStateSnapshot(
+            snapshot_id="OPS-1",
+            captured_at=observed_at,
+            inventory_buffers=[
+                InventoryBufferPolicy(
+                    "RM-1", "MAIN", on_hand, 0.0, 0.0, 0.0
+                )
+            ],
+            material_availability=[
+                MaterialAvailability("RM-1", "MAIN")
+            ],
+            wip_limits=[],
+        )
+        selection = select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=observed_at,
+            requested_snapshot_id=snapshot.snapshot_id,
+        )
+        return evaluate_mto_material_availability(
+            order={"MaterialRequirements": deepcopy(requirements)},
+            snapshot_selection=selection,
+            active_material_allocations=[],
+            current_demand_commitment_id="DC-CURRENT",
+            evaluated_at=observed_at,
+            material_check_window_minutes=0,
+        )
+
+    def test_same_item_location_lines_use_cumulative_candidate_balance(self):
+        requirements = [
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+        ]
+        result = self._same_key_material_result(requirements)
+        assert result["Status"] == "Shortage"
+        assert [row["CoverageStatus"] for row in result["Lines"]] == [
+            "Covered", "Shortage"
+        ]
+        assert [
+            row["UncommittedAvailabilityQty"] for row in result["Lines"]
+        ] == [5.0, 2.0]
+        assert result["AllocationRequests"] == []
+
+    def test_same_item_location_coverage_is_independent_of_input_line_order(self):
+        requirements = [
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+        ]
+        forward = self._same_key_material_result(requirements)
+        reverse = self._same_key_material_result(list(reversed(requirements)))
+        assert forward == reverse
+
+    def test_feasible_same_item_location_allocations_sum_to_accepted_total(self):
+        requirements = [
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 2.0, "Uom": "EA"},
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 2.0, "Uom": "EA"},
+        ]
+        result = self._same_key_material_result(requirements)
+        assert result["Status"] == "Feasible"
+        assert [
+            row["RequirementLineID"]
+            for row in result["AllocationRequests"]
+        ] == ["L1", "L2"]
+        assert sum(
+            row["AllocatedQty"] for row in result["AllocationRequests"]
+        ) == 4.0
+~~~
+
+Extend the test imports with `deepcopy`, `OperationalStateSnapshot`,
+`InventoryBufferPolicy`, and `MaterialAvailability`; all four symbols are
+available before this task from the Task 6 production imports or their live
+modules.
 
 ~~~powershell
 pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility -q --basetemp .tmp/pytest-mto-material-red -p no:cacheprovider
 ~~~
 
-Expected: eight failures because material evaluation is absent.
+Expected: twelve collected items fail because material evaluation is absent.
 
 - [ ] **Step 2: Implement all branches**
 
@@ -2256,7 +2476,11 @@ if snapshot is None or material_cutoff is None:
     )
 requirements = sorted(
     deepcopy(order["MaterialRequirements"]),
-    key=lambda row: str(row["RequirementLineID"]),
+    key=lambda row: (
+        str(row["ItemID"]),
+        str(row["LocationID"]),
+        str(row["RequirementLineID"]),
+    ),
 )
 relevant_keys = {
     (str(row["ItemID"]), str(row["LocationID"]))
@@ -2289,11 +2513,10 @@ if set(buffers) != relevant_keys or set(availability_rows) != relevant_keys:
 lines: list[dict[str, object]] = []
 allocation_requests: list[dict[str, object]] = []
 try:
-    for requirement in requirements:
-        key = (
-            str(requirement["ItemID"]),
-            str(requirement["LocationID"]),
-        )
+    supply_by_key: dict[
+        tuple[str, str], dict[str, float | str]
+    ] = {}
+    for key in sorted(relevant_keys):
         buffer = buffers[key]
         availability = availability_rows[key]
         inbound_at = availability.inbound_available_at
@@ -2317,8 +2540,33 @@ try:
             - other_planning,
             0.0,
         )
+        supply_by_key[key] = {
+            "OnHandQty": float(buffer.on_hand_qty),
+            "EligibleInboundQty": eligible_inbound,
+            "AuthorityAllocatedQty": float(availability.allocated_qty),
+            "OtherPlanningAllocatedQty": other_planning,
+            "QualifiedSupplyQty": qualified,
+            "UncommittedAvailabilityQty": uncommitted,
+            "SupplySourceType": (
+                "OnHandAndInbound" if eligible_inbound > 0 else "OnHand"
+            ),
+        }
+
+    remaining_by_key = {
+        key: float(row["UncommittedAvailabilityQty"])
+        for key, row in supply_by_key.items()
+    }
+    for requirement in requirements:
+        key = (
+            str(requirement["ItemID"]),
+            str(requirement["LocationID"]),
+        )
+        supply = supply_by_key[key]
         required = float(requirement["RequiredQty"])
-        covered = uncommitted >= required
+        available_before_line = remaining_by_key[key]
+        covered = available_before_line >= required
+        if covered:
+            remaining_by_key[key] = available_before_line - required
         lines.append(
             {
                 "RequirementLineID": requirement["RequirementLineID"],
@@ -2326,14 +2574,16 @@ try:
                 "LocationID": key[1],
                 "Uom": requirement["Uom"],
                 "RequiredQty": required,
-                "OnHandQty": float(buffer.on_hand_qty),
-                "EligibleInboundQty": eligible_inbound,
-                "AuthorityAllocatedQty": float(
-                    availability.allocated_qty
-                ),
-                "OtherPlanningAllocatedQty": other_planning,
-                "QualifiedSupplyQty": qualified,
-                "UncommittedAvailabilityQty": uncommitted,
+                "OnHandQty": supply["OnHandQty"],
+                "EligibleInboundQty": supply["EligibleInboundQty"],
+                "AuthorityAllocatedQty": supply[
+                    "AuthorityAllocatedQty"
+                ],
+                "OtherPlanningAllocatedQty": supply[
+                    "OtherPlanningAllocatedQty"
+                ],
+                "QualifiedSupplyQty": supply["QualifiedSupplyQty"],
+                "UncommittedAvailabilityQty": available_before_line,
                 "CoverageStatus": "Covered" if covered else "Shortage",
             }
         )
@@ -2347,11 +2597,7 @@ try:
                     "LocationID": key[1],
                     "Uom": requirement["Uom"],
                     "AllocatedQty": required,
-                    "SupplySourceType": (
-                        "OnHandAndInbound"
-                        if eligible_inbound > 0
-                        else "OnHand"
-                    ),
+                    "SupplySourceType": supply["SupplySourceType"],
                     "MaterialSnapshotID": selection[
                         "OperationalStateSnapshotID"
                     ],
@@ -2383,18 +2629,76 @@ return {
 }
 ~~~
 
-Add two focused tests in separate RED/GREEN/commit slices: `test_material_opt_out_decision_basis_ignores_snapshot_and_material_rows` and `test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient`. These are the only additional tests in this task beyond the named material class.
+The material opt-out decision-basis test belongs to Task 10, where that basis
+is created. Keep only the malformed relevant/unrelated allocation test in this
+task.
 
-- [ ] **Step 3: Verify and commit**
+- [ ] **Step 3A (freshness/skip RED): run the four branch items**
 
 ~~~powershell
-pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility --collect-only -q
-pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-material-green -p no:cacheprovider
-git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
-git commit -m "feat: evaluate fresh MTO material evidence"
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_skip_requires_reason_records_pending_requirements_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_stale_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_future_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_missing_snapshot_or_required_item_row_is_evidence_insufficient --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_skip_requires_reason_records_pending_requirements_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_stale_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_future_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_missing_snapshot_or_required_item_row_is_evidence_insufficient -q --basetemp .tmp/pytest-mto-material-branches-red -p no:cacheprovider
 ~~~
 
-Expected: eight class tests and shared-allocation regressions pass.
+Expected: exactly four items collect and fail.
+
+- [ ] **Step 3B (freshness/skip implement): add `_material_evidence_insufficient`, the evidence header, and the three early branches shown above**
+
+- [ ] **Step 3C (freshness/skip GREEN/commit): verify four items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_skip_requires_reason_records_pending_requirements_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_stale_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_future_snapshot_returns_evidence_insufficient_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_missing_snapshot_or_required_item_row_is_evidence_insufficient -q --basetemp .tmp/pytest-mto-material-branches-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: gate MTO material evidence freshness"
+~~~
+
+Expected: exactly four items pass.
+
+- [ ] **Step 4A (candidate-balance RED): run the seven accounting items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_check_defaults_on_and_uses_uncommitted_shared_availability tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_inbound_counts_only_when_aware_and_inside_frozen_material_window tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_shortage_is_all_or_nothing_and_returns_no_allocation_requests tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_current_demand_allocation_is_not_subtracted_twice tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_lines_use_cumulative_candidate_balance tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_coverage_is_independent_of_input_line_order tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_feasible_same_item_location_allocations_sum_to_accepted_total --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_check_defaults_on_and_uses_uncommitted_shared_availability tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_inbound_counts_only_when_aware_and_inside_frozen_material_window tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_shortage_is_all_or_nothing_and_returns_no_allocation_requests tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_current_demand_allocation_is_not_subtracted_twice tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_lines_use_cumulative_candidate_balance tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_coverage_is_independent_of_input_line_order tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_feasible_same_item_location_allocations_sum_to_accepted_total -q --basetemp .tmp/pytest-mto-material-balance-red -p no:cacheprovider
+~~~
+
+Expected: exactly seven items collect and fail. In particular, the pre-fix
+implementation reports both `3`-unit lines covered against `5` units.
+
+- [ ] **Step 4B (candidate-balance implement): add the exact prefilter, one-per-key supply calculation, deterministic line loop, and all-or-nothing return shown above**
+
+- [ ] **Step 4C (candidate-balance GREEN/commit): verify seven items and shared allocation regressions**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_check_defaults_on_and_uses_uncommitted_shared_availability tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_inbound_counts_only_when_aware_and_inside_frozen_material_window tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_shortage_is_all_or_nothing_and_returns_no_allocation_requests tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_current_demand_allocation_is_not_subtracted_twice tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_lines_use_cumulative_candidate_balance tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_same_item_location_coverage_is_independent_of_input_line_order tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_feasible_same_item_location_allocations_sum_to_accepted_total tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-material-balance-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "fix: consume MTO material balance cumulatively"
+~~~
+
+Expected: exactly seven focused items and the shared-allocation regressions pass.
+
+- [ ] **Step 5A (exact-prefilter RED): run the one malformed-row item**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient -q --basetemp .tmp/pytest-mto-material-prefilter-red -p no:cacheprovider
+~~~
+
+Expected: exactly one item collects and fails before the exact prefilter is in
+the public function.
+
+- [ ] **Step 5B (exact-prefilter implement): keep the shown tolerant key filter before `planning_allocated_qty_for_other_demands`; matching malformed rows are caught and returned as `MATERIAL_EVIDENCE_INVALID`**
+
+- [ ] **Step 5C (exact-prefilter GREEN/commit): verify one item and all twelve class items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility::test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient -q --basetemp .tmp/pytest-mto-material-prefilter-green -p no:cacheprovider
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentMaterialFeasibility -q --basetemp .tmp/pytest-mto-material-complete -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: scope MTO material evidence exactly"
+~~~
+
+Expected: the focused item passes and exactly twelve class items collect and pass.
 
 ---
 
@@ -2415,6 +2719,42 @@ ACCEPTANCE_DECISIONS = frozenset({
     "AcceptRecommendedDate",
     "ConditionallyAcceptRecommendedDate",
 })
+
+ACCEPTANCE_ACTION_CONTEXT = {
+    "AcceptRequestedDate": (
+        "OnTime", "Feasible", "RequestedDateAssessment"
+    ),
+    "ConditionallyAcceptRequestedDate": (
+        "OnTime",
+        "SkippedPendingConfirmation",
+        "RequestedDateAssessment",
+    ),
+    "AcceptRecommendedDate": (
+        "LaterSafeDate", "Feasible", "EarliestSafeAssessment"
+    ),
+    "ConditionallyAcceptRecommendedDate": (
+        "LaterSafeDate",
+        "SkippedPendingConfirmation",
+        "EarliestSafeAssessment",
+    ),
+}
+
+
+def action_acknowledgement_requirements(
+    *,
+    action: str,
+    requires_ccr_acknowledgement: bool,
+    requires_material_acknowledgement: bool,
+) -> dict[str, bool]:
+    is_acceptance = action in ACCEPTANCE_DECISIONS
+    return {
+        "RequiresCcrAcknowledgement": (
+            is_acceptance and requires_ccr_acknowledgement
+        ),
+        "RequiresMaterialAcknowledgement": (
+            is_acceptance and requires_material_acknowledgement
+        ),
+    }
 
 def build_order_commitment_recommendation(
     *,
@@ -2600,6 +2940,106 @@ def supersede_open_order_commitment_evaluations(
 ) -> dict[str, dict[str, object]]:
 ~~~
 
+Before either basis/evaluation function, install the canonical decision-fact
+symbols from the global contract in `order_commitment_evaluation.py`; the
+global section is a contract, while this is the production installation:
+
+~~~python
+CAPACITY_DECISION_WINDOW_FIELDS = (
+    "RouteSequence", "OperationID", "ResourceID", "WindowStartAt",
+    "WindowEndAt", "UsableWindowStartAt", "UsableWindowEndAt",
+    "LatestAllowedCompletionAt", "CapacityMinutes",
+    "UsableTemporalCapacityMinutes", "ScheduledLoadMinutes",
+    "ScheduledLoadBeforeDeadlineMinutes", "ExistingReservationMinutes",
+    "CandidateLoadMinutes", "LoadBeforeMinutes", "LoadAfterMinutes",
+    "LoadAfterPercent", "AggregateRemainingMinutes",
+    "TemporalRemainingMinutes", "LoadStatus", "ThresholdExceeded",
+)
+CAPACITY_DECISION_REQUEST_FIELDS = (
+    "ReservationLineID", "OrderID", "OperationID", "ResourceID",
+    "WindowStartAt", "WindowEndAt", "ReservedMinutes",
+    "LatestAllowedCompletionAt",
+)
+MATERIAL_DECISION_REQUEST_FIELDS = (
+    "RequirementLineID", "ItemID", "LocationID", "Uom",
+    "AllocatedQty", "SupplySourceType", "MaterialSnapshotID",
+)
+
+
+def canonical_order_commitment_decision_facts(
+    evaluation: Mapping[str, object],
+) -> dict[str, object]:
+    shadow = dict(evaluation["ShadowSchedule"])
+    material = dict(evaluation["MaterialAssessment"])
+    recommendation = dict(evaluation["Recommendation"])
+    candidate_key = {
+        "OnTime": "RequestedDateAssessment",
+        "LaterSafeDate": "EarliestSafeAssessment",
+    }.get(str(shadow["Status"]))
+    candidate = (
+        dict(shadow[candidate_key])
+        if candidate_key is not None
+        and isinstance(shadow.get(candidate_key), Mapping)
+        else {}
+    )
+    actions = list(recommendation["AllowedActions"])
+    return {
+        "CapacityStatus": shadow["Status"],
+        "SelectedCandidateKey": candidate_key,
+        "SelectedPromiseAt": candidate.get("PromiseAt"),
+        "CapacityWindowAssessments": sorted(
+            [
+                {
+                    field: row.get(field)
+                    for field in CAPACITY_DECISION_WINDOW_FIELDS
+                }
+                for row in candidate.get("WindowAssessments", [])
+            ],
+            key=lambda row: (
+                int(row["RouteSequence"]),
+                str(row["OperationID"]),
+                str(row["WindowStartAt"]),
+            ),
+        ),
+        "CapacityReservationRequests": sorted(
+            [
+                {
+                    field: row.get(field)
+                    for field in CAPACITY_DECISION_REQUEST_FIELDS
+                }
+                for row in candidate.get("ReservationRequests", [])
+            ],
+            key=lambda row: str(row["ReservationLineID"]),
+        ),
+        "MaterialStatus": material["Status"],
+        "MaterialAllocationRequests": sorted(
+            [
+                {
+                    field: row.get(field)
+                    for field in MATERIAL_DECISION_REQUEST_FIELDS
+                }
+                for row in material.get("AllocationRequests", [])
+            ],
+            key=lambda row: str(row["RequirementLineID"]),
+        ),
+        "Recommendation": recommendation["Decision"],
+        "ThresholdState": recommendation["ThresholdState"],
+        "AllowedActions": actions,
+        "ActionAcknowledgementRequirements": {
+            action: action_acknowledgement_requirements(
+                action=action,
+                requires_ccr_acknowledgement=bool(
+                    recommendation["RequiresCcrAcknowledgement"]
+                ),
+                requires_material_acknowledgement=bool(
+                    recommendation["RequiresMaterialAcknowledgement"]
+                ),
+            )
+            for action in actions
+        },
+    }
+~~~
+
 - [ ] **Step 1: Write identity/relevant-state tests**
 
 Add `TestOrderCommitmentEvaluationIdentity`:
@@ -2628,236 +3068,457 @@ Expected: the named tests fail because basis and registration functions are abse
 
 - [ ] **Step 2: Build only exact relevant projections**
 
-Normalize relevant keys:
+Install the complete projection prelude and function body. Tolerant raw-key
+comparison happens before strict parsing, so malformed unrelated rows are
+ignored while malformed matching rows fail closed.
 
 ~~~python
-capacity_keys = sorted({
-    (
-        str(resource_id),
-        _parse_aware(start).isoformat(),
-        _parse_aware(end).isoformat(),
-    )
-    for resource_id, start, end in relevant_capacity_window_keys
-})
-material_keys = sorted({
-    (str(item_id), str(location_id))
-    for item_id, location_id in relevant_material_keys
-})
-~~~
-
-Capacity projection includes only active rows whose exact triple is in `capacity_keys`, sorted by `CapacityReservationID`, with exactly:
-
-~~~python
-(
+CAPACITY_BASIS_FIELDS = (
     "CapacityReservationID", "ReservationBatchID", "DemandCommitmentID",
     "DemandClass", "ResourceID", "WindowStartAt", "WindowEndAt",
     "ReservedMinutes", "LatestAllowedCompletionAt", "Status",
     "RecordVersion",
 )
-~~~
-
-Material ledger projection includes only active rows whose `(ItemID, LocationID)` is relevant, sorted by `MaterialAllocationID`, with:
-
-~~~python
-(
+MATERIAL_BASIS_FIELDS = (
     "MaterialAllocationID", "ReservationBatchID", "DemandCommitmentID",
     "DemandClass", "ItemID", "LocationID", "AllocatedQty",
     "MaterialSnapshotID", "Status", "RecordVersion",
 )
+
+
+def _basis_nonnegative(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise OrderCommitmentConflict(f"{field} must be finite and non-negative.")
+    normalized = float(value)
+    if not isfinite(normalized) or normalized < 0:
+        raise OrderCommitmentConflict(f"{field} must be finite and non-negative.")
+    return normalized
+
+
+def _basis_record_version(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise OrderCommitmentConflict(f"{field} must be a positive integer.")
+    return value
+
+
+def build_order_commitment_basis(
+    *,
+    baseline_planning_run_id: str,
+    baseline_operational_state_snapshot_id: str | None,
+    baseline_schedule_fingerprint: str,
+    master_data_version_id: str,
+    operating_model_configuration_id: str | None,
+    operating_model_fingerprint: str | None,
+    scheduling_configuration_id: str | None,
+    ddmrp_configuration_id: str | None,
+    release_policy_version_id: str | None,
+    frozen_release_policy_fingerprint: str,
+    routing_fingerprint: str,
+    calendar_fingerprint: str,
+    time_buffer_minutes: int,
+    material_check_window_minutes: int,
+    capacity_assessment_cutoff_at: datetime,
+    material_eligibility_cutoff_at: datetime | None,
+    check_material_availability: bool,
+    material_skip_reason: str | None,
+    snapshot_selection: Mapping[str, object],
+    relevant_capacity_window_keys: list[tuple[str, str, str]],
+    capacity_ledger_rows: list[dict[str, object]],
+    relevant_material_keys: list[tuple[str, str]],
+    inventory_buffer_rows: list[InventoryBufferPolicy],
+    material_availability_rows: list[MaterialAvailability],
+    material_ledger_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    selection = snapshot_selection
+    capacity_keys = sorted({
+        (
+            str(resource_id),
+            _parse_aware(start).isoformat(),
+            _parse_aware(end).isoformat(),
+        )
+        for resource_id, start, end in relevant_capacity_window_keys
+    })
+    material_keys = sorted({
+        (str(item_id), str(location_id))
+        for item_id, location_id in relevant_material_keys
+    })
+    capacity_key_set = set(capacity_keys)
+    material_key_set = set(material_keys)
+
+    capacity_projection: list[dict[str, object]] = []
+    seen_capacity_ids: set[str] = set()
+    for raw in capacity_ledger_rows:
+        if raw.get("Status") not in ACTIVE_PLANNING_STATUSES:
+            continue
+        raw_key = (
+            str(raw.get("ResourceID") or ""),
+            str(raw.get("WindowStartAt") or ""),
+            str(raw.get("WindowEndAt") or ""),
+        )
+        if raw_key not in capacity_key_set:
+            continue
+        capacity_id = _required_text(raw, "CapacityReservationID")
+        if capacity_id in seen_capacity_ids:
+            raise OrderCommitmentConflict(
+                "Relevant capacity reservation ID is duplicated."
+            )
+        start = _parse_aware(raw["WindowStartAt"])
+        end = _parse_aware(raw["WindowEndAt"])
+        latest = _parse_aware(raw["LatestAllowedCompletionAt"])
+        if end <= start or not start < latest <= end:
+            raise OrderCommitmentConflict(
+                "Relevant capacity reservation window is invalid."
+            )
+        projected = {
+            field: deepcopy(raw.get(field))
+            for field in CAPACITY_BASIS_FIELDS
+        }
+        projected.update({
+            "CapacityReservationID": capacity_id,
+            "ReservationBatchID": _required_text(raw, "ReservationBatchID"),
+            "DemandCommitmentID": _required_text(raw, "DemandCommitmentID"),
+            "DemandClass": _required_text(raw, "DemandClass"),
+            "ResourceID": raw_key[0],
+            "WindowStartAt": start.isoformat(),
+            "WindowEndAt": end.isoformat(),
+            "ReservedMinutes": _positive_number(
+                raw.get("ReservedMinutes"), "ReservedMinutes"
+            ),
+            "LatestAllowedCompletionAt": latest.isoformat(),
+            "Status": _required_text(raw, "Status"),
+            "RecordVersion": _basis_record_version(
+                raw.get("RecordVersion"), "Capacity RecordVersion"
+            ),
+        })
+        seen_capacity_ids.add(capacity_id)
+        capacity_projection.append(projected)
+    capacity_projection.sort(
+        key=lambda row: str(row["CapacityReservationID"])
+    )
+
+    inventory_projection: list[dict[str, object]] = []
+    seen_inventory_keys: set[tuple[str, str]] = set()
+    for row in inventory_buffer_rows:
+        key = (row.item_id, row.location_id)
+        if key not in material_key_set:
+            continue
+        if key in seen_inventory_keys:
+            raise OrderCommitmentConflict(
+                "Relevant inventory-buffer evidence is duplicated."
+            )
+        seen_inventory_keys.add(key)
+        inventory_projection.append({
+            "ItemID": row.item_id,
+            "LocationID": row.location_id,
+            "OnHandQty": _basis_nonnegative(row.on_hand_qty, "OnHandQty"),
+            "RedZoneQty": _basis_nonnegative(row.red_zone_qty, "RedZoneQty"),
+            "YellowZoneQty": _basis_nonnegative(
+                row.yellow_zone_qty, "YellowZoneQty"
+            ),
+            "GreenZoneQty": _basis_nonnegative(
+                row.green_zone_qty, "GreenZoneQty"
+            ),
+        })
+    inventory_projection.sort(
+        key=lambda row: (str(row["ItemID"]), str(row["LocationID"]))
+    )
+
+    availability_projection: list[dict[str, object]] = []
+    seen_availability_keys: set[tuple[str, str]] = set()
+    for row in material_availability_rows:
+        key = (row.item_id, row.location_id)
+        if key not in material_key_set:
+            continue
+        if key in seen_availability_keys:
+            raise OrderCommitmentConflict(
+                "Relevant material-availability evidence is duplicated."
+            )
+        seen_availability_keys.add(key)
+        availability_projection.append({
+            "ItemID": row.item_id,
+            "LocationID": row.location_id,
+            "AllocatedQty": _basis_nonnegative(
+                row.allocated_qty, "Authority AllocatedQty"
+            ),
+            "InboundQty": _basis_nonnegative(row.inbound_qty, "InboundQty"),
+            "InboundAvailableAt": (
+                _utc(row.inbound_available_at).isoformat()
+                if row.inbound_available_at is not None
+                else None
+            ),
+        })
+    availability_projection.sort(
+        key=lambda row: (str(row["ItemID"]), str(row["LocationID"]))
+    )
+
+    material_projection: list[dict[str, object]] = []
+    seen_material_ids: set[str] = set()
+    for raw in material_ledger_rows:
+        if raw.get("Status") not in ACTIVE_PLANNING_STATUSES:
+            continue
+        raw_key = (
+            str(raw.get("ItemID") or ""),
+            str(raw.get("LocationID") or ""),
+        )
+        if raw_key not in material_key_set:
+            continue
+        allocation_id = _required_text(raw, "MaterialAllocationID")
+        if allocation_id in seen_material_ids:
+            raise OrderCommitmentConflict(
+                "Relevant material allocation ID is duplicated."
+            )
+        projected = {
+            field: deepcopy(raw.get(field))
+            for field in MATERIAL_BASIS_FIELDS
+        }
+        projected.update({
+            "MaterialAllocationID": allocation_id,
+            "ReservationBatchID": _required_text(raw, "ReservationBatchID"),
+            "DemandCommitmentID": _required_text(raw, "DemandCommitmentID"),
+            "DemandClass": _required_text(raw, "DemandClass"),
+            "ItemID": raw_key[0],
+            "LocationID": raw_key[1],
+            "AllocatedQty": _basis_nonnegative(
+                raw.get("AllocatedQty"), "AllocatedQty"
+            ),
+            "MaterialSnapshotID": _required_text(
+                raw, "MaterialSnapshotID"
+            ),
+            "Status": _required_text(raw, "Status"),
+            "RecordVersion": _basis_record_version(
+                raw.get("RecordVersion"), "Material RecordVersion"
+            ),
+        })
+        seen_material_ids.add(allocation_id)
+        material_projection.append(projected)
+    material_projection.sort(
+        key=lambda row: str(row["MaterialAllocationID"])
+    )
 ~~~
 
-Snapshot projections include exact relevant `InventoryBufferPolicy` and `MaterialAvailability` fields, including aware ISO inbound time. Reject duplicate/malformed relevant rows.
-
-After constructing the exact `capacity_projection`, `inventory_projection`, `availability_projection`, and `material_projection`, return the two deliberately separate projections with this complete tail:
+Continue inside the same `build_order_commitment_basis` function with this
+indented tail:
 
 ~~~python
-audit_basis = {
-    "BaselinePlanningRunID": baseline_planning_run_id,
-    "BaselineOperationalStateSnapshotID": (
-        baseline_operational_state_snapshot_id
-    ),
-    "BaselineScheduleFingerprint": baseline_schedule_fingerprint,
-    "MasterDataVersionID": master_data_version_id,
-    "OperatingModelConfigurationID": operating_model_configuration_id,
-    "OperatingModelFingerprint": operating_model_fingerprint,
-    "SchedulingConfigurationID": scheduling_configuration_id,
-    "DDMRPConfigurationID": ddmrp_configuration_id,
-    "ReleasePolicyVersionID": release_policy_version_id,
-    "FrozenReleasePolicyFingerprint": frozen_release_policy_fingerprint,
-    "RoutingFingerprint": routing_fingerprint,
-    "CalendarFingerprint": calendar_fingerprint,
-    "TimeBufferMinutes": time_buffer_minutes,
-    "MaterialCheckWindowMinutes": material_check_window_minutes,
-    "CapacityAssessmentCutoffAt": _utc_iso(
-        capacity_assessment_cutoff_at
-    ),
-    "MaterialEligibilityCutoffAt": (
-        _utc_iso(material_eligibility_cutoff_at)
-        if material_eligibility_cutoff_at is not None
-        else None
-    ),
-    "SelectedOperationalStateSnapshotID": selection[
-        "OperationalStateSnapshotID"
-    ],
-    "SelectedOperationalStateCapturedAt": selection[
-        "OperationalStateCapturedAt"
-    ],
-    "OperationalStateFreshnessStatus": selection[
-        "OperationalStateFreshnessStatus"
-    ],
-    "OperationalStateAgeMinutes": selection[
-        "OperationalStateAgeMinutes"
-    ],
-    "OperationalStateMaxAgeMinutes": 60,
-    "OperationalStateValidThroughAt": selection[
-        "OperationalStateValidThroughAt"
-    ],
-    "RelevantCapacityWindowKeys": capacity_keys,
-    "RelevantCapacityLedger": capacity_projection,
-    "RelevantMaterialKeys": material_keys,
-    "RelevantInventoryBuffers": inventory_projection,
-    "RelevantMaterialAvailability": availability_projection,
-    "RelevantMaterialLedger": material_projection,
-}
-audit_fingerprint_projection = deepcopy(audit_basis)
-audit_fingerprint_projection.pop("OperationalStateAgeMinutes", None)
-capacity_decision_basis = {
-    key: deepcopy(audit_basis[key])
-    for key in (
-        "BaselinePlanningRunID",
-        "BaselineScheduleFingerprint",
-        "MasterDataVersionID",
-        "OperatingModelConfigurationID",
-        "OperatingModelFingerprint",
-        "SchedulingConfigurationID",
-        "DDMRPConfigurationID",
-        "ReleasePolicyVersionID",
-        "FrozenReleasePolicyFingerprint",
-        "RoutingFingerprint",
-        "CalendarFingerprint",
-        "TimeBufferMinutes",
-        "RelevantCapacityWindowKeys",
-        "RelevantCapacityLedger",
-    )
-}
-decision_staleness_basis = {
-    **capacity_decision_basis,
-    "MaterialPolicy": {
-        "CheckEnabled": bool(check_material_availability),
-        "SkipReason": material_skip_reason,
+    audit_basis = {
+        "BaselinePlanningRunID": baseline_planning_run_id,
+        "BaselineOperationalStateSnapshotID": (
+            baseline_operational_state_snapshot_id
+        ),
+        "BaselineScheduleFingerprint": baseline_schedule_fingerprint,
+        "MasterDataVersionID": master_data_version_id,
+        "OperatingModelConfigurationID": operating_model_configuration_id,
+        "OperatingModelFingerprint": operating_model_fingerprint,
+        "SchedulingConfigurationID": scheduling_configuration_id,
+        "DDMRPConfigurationID": ddmrp_configuration_id,
+        "ReleasePolicyVersionID": release_policy_version_id,
+        "FrozenReleasePolicyFingerprint": frozen_release_policy_fingerprint,
+        "RoutingFingerprint": routing_fingerprint,
+        "CalendarFingerprint": calendar_fingerprint,
+        "TimeBufferMinutes": time_buffer_minutes,
         "MaterialCheckWindowMinutes": material_check_window_minutes,
-    },
-}
-if check_material_availability:
-    decision_staleness_basis.update(
-        {
-            "SelectedOperationalStateSnapshotID": audit_basis[
-                "SelectedOperationalStateSnapshotID"
-            ],
-            "SelectedOperationalStateCapturedAt": audit_basis[
-                "SelectedOperationalStateCapturedAt"
-            ],
-            "OperationalStateFreshnessStatus": audit_basis[
-                "OperationalStateFreshnessStatus"
-            ],
-            "OperationalStateValidThroughAt": audit_basis[
-                "OperationalStateValidThroughAt"
-            ],
-            "RelevantMaterialKeys": material_keys,
-            "RelevantInventoryBuffers": inventory_projection,
-            "RelevantMaterialAvailability": availability_projection,
-            "RelevantMaterialLedger": material_projection,
-        }
-    )
-return {
-    **audit_basis,
-    "AuditBasisFingerprint": canonical_fingerprint(
-        audit_fingerprint_projection
-    ),
-    "DecisionStalenessBasis": decision_staleness_basis,
-    "DecisionStalenessBasisFingerprint": canonical_fingerprint(
-        decision_staleness_basis
-    ),
-}
+        "CapacityAssessmentCutoffAt": _utc_iso(
+            capacity_assessment_cutoff_at
+        ),
+        "MaterialEligibilityCutoffAt": (
+            _utc_iso(material_eligibility_cutoff_at)
+            if material_eligibility_cutoff_at is not None
+            else None
+        ),
+        "SelectedOperationalStateSnapshotID": selection[
+            "OperationalStateSnapshotID"
+        ],
+        "SelectedOperationalStateCapturedAt": selection[
+            "OperationalStateCapturedAt"
+        ],
+        "OperationalStateFreshnessStatus": selection[
+            "OperationalStateFreshnessStatus"
+        ],
+        "OperationalStateAgeMinutes": selection[
+            "OperationalStateAgeMinutes"
+        ],
+        "OperationalStateMaxAgeMinutes": 60,
+        "OperationalStateValidThroughAt": selection[
+            "OperationalStateValidThroughAt"
+        ],
+        "RelevantCapacityWindowKeys": capacity_keys,
+        "RelevantCapacityLedger": capacity_projection,
+        "RelevantMaterialKeys": material_keys,
+        "RelevantInventoryBuffers": inventory_projection,
+        "RelevantMaterialAvailability": availability_projection,
+        "RelevantMaterialLedger": material_projection,
+    }
+    audit_fingerprint_projection = deepcopy(audit_basis)
+    audit_fingerprint_projection.pop("OperationalStateAgeMinutes", None)
+    capacity_decision_basis = {
+        key: deepcopy(audit_basis[key])
+        for key in (
+            "BaselinePlanningRunID",
+            "BaselineScheduleFingerprint",
+            "MasterDataVersionID",
+            "OperatingModelConfigurationID",
+            "OperatingModelFingerprint",
+            "SchedulingConfigurationID",
+            "DDMRPConfigurationID",
+            "ReleasePolicyVersionID",
+            "FrozenReleasePolicyFingerprint",
+            "RoutingFingerprint",
+            "CalendarFingerprint",
+            "TimeBufferMinutes",
+            "RelevantCapacityWindowKeys",
+            "RelevantCapacityLedger",
+        )
+    }
+    decision_staleness_basis = {
+        **capacity_decision_basis,
+        "MaterialPolicy": {
+            "CheckEnabled": bool(check_material_availability),
+            "SkipReason": material_skip_reason,
+            "MaterialCheckWindowMinutes": material_check_window_minutes,
+        },
+    }
+    if check_material_availability:
+        decision_staleness_basis.update(
+            {
+                "SelectedOperationalStateSnapshotID": audit_basis[
+                    "SelectedOperationalStateSnapshotID"
+                ],
+                "SelectedOperationalStateCapturedAt": audit_basis[
+                    "SelectedOperationalStateCapturedAt"
+                ],
+                "OperationalStateFreshnessStatus": audit_basis[
+                    "OperationalStateFreshnessStatus"
+                ],
+                "OperationalStateValidThroughAt": audit_basis[
+                    "OperationalStateValidThroughAt"
+                ],
+                "RelevantMaterialKeys": material_keys,
+                "RelevantInventoryBuffers": inventory_projection,
+                "RelevantMaterialAvailability": availability_projection,
+                "RelevantMaterialLedger": material_projection,
+            }
+        )
+    return {
+        **audit_basis,
+        "AuditBasisFingerprint": canonical_fingerprint(
+            audit_fingerprint_projection
+        ),
+        "DecisionStalenessBasis": decision_staleness_basis,
+        "DecisionStalenessBasisFingerprint": canonical_fingerprint(
+            decision_staleness_basis
+        ),
+    }
 ~~~
 
 - [ ] **Step 3: Build complete evaluation identity**
 
 ~~~python
-policy = normalized_policy_dict(protection_policy)
-identity = {
-    "OrderContentFingerprint": order["OrderContentFingerprint"],
-    "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
-    "DecisionStalenessBasisFingerprint": basis[
-        "DecisionStalenessBasisFingerprint"
-    ],
-    "CapacityAssessmentCutoffAt": basis[
-        "CapacityAssessmentCutoffAt"
-    ],
-    "MaterialEligibilityCutoffAt": basis[
-        "MaterialEligibilityCutoffAt"
-    ],
-    "MaterialPolicy": {
-        "CheckEnabled": material_assessment["CheckEnabled"],
-        "SkipReason": material_assessment.get("SkipReason"),
-        "MaterialCheckWindowMinutes": material_assessment[
-            "MaterialCheckWindowMinutes"
+def create_order_commitment_evaluation(
+    *,
+    order: Mapping[str, object],
+    shadow_schedule: Mapping[str, object],
+    material_assessment: Mapping[str, object],
+    basis: Mapping[str, object],
+    protection_policy: CcrProtectionPolicy,
+    evaluated_at: datetime,
+) -> dict[str, object]:
+    evaluated_at = _utc(require_aware(evaluated_at, "evaluated_at"))
+    policy = normalized_policy_dict(protection_policy)
+    identity = {
+        "OrderContentFingerprint": order["OrderContentFingerprint"],
+        "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
+        "DecisionStalenessBasisFingerprint": basis[
+            "DecisionStalenessBasisFingerprint"
         ],
-        "SnapshotSelectionMode": material_assessment[
-            "SnapshotSelectionMode"
+        "CapacityAssessmentCutoffAt": basis[
+            "CapacityAssessmentCutoffAt"
         ],
-        "RequestedOperationalStateSnapshotID": material_assessment.get(
-            "RequestedOperationalStateSnapshotID"
+        "MaterialEligibilityCutoffAt": basis[
+            "MaterialEligibilityCutoffAt"
+        ],
+        "MaterialPolicy": {
+            "CheckEnabled": material_assessment["CheckEnabled"],
+            "SkipReason": material_assessment.get("SkipReason"),
+            "MaterialCheckWindowMinutes": material_assessment[
+                "MaterialCheckWindowMinutes"
+            ],
+            "SnapshotSelectionMode": material_assessment[
+                "SnapshotSelectionMode"
+            ],
+            "RequestedOperationalStateSnapshotID": material_assessment.get(
+                "RequestedOperationalStateSnapshotID"
+            ),
+        },
+        "ProtectionPolicy": policy,
+        "ShadowAlgorithm": deepcopy(shadow_schedule["Algorithm"]),
+    }
+    evaluation_id = (
+        "OCE-"
+        + sha256(canonical_json(identity).encode("utf-8")).hexdigest()[:20]
+    )
+    immutable = {
+        "EvaluationID": evaluation_id,
+        "Order": deepcopy(order),
+        "LogicalOrderKey": order["LogicalOrderKey"],
+        "OrderContentFingerprint": order["OrderContentFingerprint"],
+        "Basis": deepcopy(basis),
+        "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
+        "DecisionStalenessBasisFingerprint": basis[
+            "DecisionStalenessBasisFingerprint"
+        ],
+        "ProtectionPolicy": policy,
+        "ShadowSchedule": deepcopy(shadow_schedule),
+        "MaterialAssessment": deepcopy(material_assessment),
+        "Recommendation": build_order_commitment_recommendation(
+            shadow_schedule=shadow_schedule,
+            material_assessment=material_assessment,
+            protection_policy=protection_policy,
         ),
-    },
-    "ProtectionPolicy": policy,
-    "ShadowAlgorithm": deepcopy(shadow_schedule["Algorithm"]),
-}
-evaluation_id = (
-    "OCE-" + sha256(canonical_json(identity).encode("utf-8")).hexdigest()[:20]
-)
-immutable = {
-    "EvaluationID": evaluation_id,
-    "Order": deepcopy(order),
-    "LogicalOrderKey": order["LogicalOrderKey"],
-    "OrderContentFingerprint": order["OrderContentFingerprint"],
-    "Basis": deepcopy(basis),
-    "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
-    "DecisionStalenessBasisFingerprint": basis[
-        "DecisionStalenessBasisFingerprint"
-    ],
-    "ProtectionPolicy": policy,
-    "ShadowSchedule": deepcopy(shadow_schedule),
-    "MaterialAssessment": deepcopy(material_assessment),
-    "Recommendation": build_order_commitment_recommendation(
-        shadow_schedule=shadow_schedule,
-        material_assessment=material_assessment,
-        protection_policy=protection_policy,
-    ),
-}
-immutable["DecisionFacts"] = canonical_order_commitment_decision_facts(
-    immutable
-)
-immutable["DecisionFactsFingerprint"] = canonical_fingerprint(
-    immutable["DecisionFacts"]
-)
-fingerprint_projection = deepcopy(immutable)
-fingerprint_projection["Basis"].pop("OperationalStateAgeMinutes", None)
-fingerprint_projection["MaterialAssessment"].pop(
-    "OperationalStateAgeMinutes", None
-)
-evaluation_fingerprint = canonical_fingerprint(fingerprint_projection)
-return {
-    **immutable,
-    "EvaluationFingerprint": evaluation_fingerprint,
-    "EvaluatedAt": _utc_iso(evaluated_at),
-    "CreatedAt": _utc_iso(evaluated_at),
-    "Status": "AwaitingPlannerDecision",
-    "RecordVersion": 1,
-}
+    }
+    immutable["DecisionFacts"] = canonical_order_commitment_decision_facts(
+        immutable
+    )
+    immutable["DecisionFactsFingerprint"] = canonical_fingerprint(
+        immutable["DecisionFacts"]
+    )
+    fingerprint_projection = deepcopy(immutable)
+    fingerprint_projection["Basis"].pop(
+        "OperationalStateAgeMinutes", None
+    )
+    fingerprint_projection["MaterialAssessment"].pop(
+        "OperationalStateAgeMinutes", None
+    )
+    evaluation_fingerprint = canonical_fingerprint(fingerprint_projection)
+    return {
+        **immutable,
+        "EvaluationFingerprint": evaluation_fingerprint,
+        "EvaluatedAt": _utc_iso(evaluated_at),
+        "CreatedAt": _utc_iso(evaluated_at),
+        "Status": "AwaitingPlannerDecision",
+        "RecordVersion": 1,
+    }
+
+
+def register_order_commitment_evaluation(
+    evaluations: Mapping[str, dict[str, object]],
+    candidate: dict[str, object],
+) -> tuple[Literal["Created", "Duplicate"], dict[str, object]]:
+    evaluation_id = _required_text(candidate, "EvaluationID")
+    fingerprint = _required_text(candidate, "EvaluationFingerprint")
+    existing = evaluations.get(evaluation_id)
+    if existing is None:
+        return "Created", deepcopy(candidate)
+    if existing.get("EvaluationFingerprint") == fingerprint:
+        return "Duplicate", deepcopy(existing)
+    raise OrderCommitmentConflict(
+        "Evaluation ID already exists with different canonical content."
+    )
 ~~~
 
-Registration returns the persisted deep copy only when ID and evaluation fingerprint match; otherwise same-ID content raises conflict. Supersession updates only `AwaitingPlannerDecision` rows with the same logical key; accepted/rejected conflicts are explicit.
+Registration now has a complete body and returns the persisted deep copy only
+when ID and evaluation fingerprint match; otherwise same-ID content raises
+conflict. Supersession updates only `AwaitingPlannerDecision` rows with the
+same logical key; accepted/rejected conflicts are explicit.
 
 Use these complete intake helpers; they make terminal behavior and version ordering explicit before the API mutates anything:
 
@@ -2920,18 +3581,70 @@ def supersede_open_order_commitment_evaluations(
     return updates
 ~~~
 
-- [ ] **Step 4: Verify in reviewer-sized commits**
-
-Commit this task as three independent RED/GREEN slices: (a) exact projections plus audit/decision-staleness separation, (b) cutoff identity plus registration, and (c) decision facts plus supersession. Each slice runs only its named nodes before the complete class. Do not use one import failure as the red state for all three slices.
+- [ ] **Step 4A (exact projections RED): run the six projection/relevance items**
 
 ~~~powershell
-pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity --collect-only -q
-pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity -q --basetemp .tmp/pytest-mto-identity-green -p no:cacheprovider
-git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
-git commit -m "feat: freeze MTO evaluation identity"
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_capacity_change_in_exact_assessed_window_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_capacity_resource_or_window_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_material_item_location_change_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_material_item_location_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_skipped_material_decision_basis_excludes_snapshot_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_malformed_unrelated_rows_are_ignored_after_exact_prefilter --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_capacity_change_in_exact_assessed_window_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_capacity_resource_or_window_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_material_item_location_change_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_material_item_location_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_skipped_material_decision_basis_excludes_snapshot_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_malformed_unrelated_rows_are_ignored_after_exact_prefilter -q --basetemp .tmp/pytest-mto-basis-red -p no:cacheprovider
 ~~~
 
-Expected: eleven exact identity/relevance tests pass.
+Expected: exactly six items collect and fail.
+
+- [ ] **Step 4B (exact projections implement): install the complete `build_order_commitment_basis` projection prelude and tail above**
+
+- [ ] **Step 4C (exact projections GREEN/commit): verify six items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_capacity_change_in_exact_assessed_window_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_capacity_resource_or_window_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_relevant_material_item_location_change_changes_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_unrelated_material_item_location_does_not_change_basis tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_skipped_material_decision_basis_excludes_snapshot_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_malformed_unrelated_rows_are_ignored_after_exact_prefilter -q --basetemp .tmp/pytest-mto-basis-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: freeze exact MTO decision evidence"
+~~~
+
+Expected: exactly six items pass.
+
+- [ ] **Step 5A (identity/registration RED): run the seven identity items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_exact_replay_returns_existing_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_protection_policy_change_creates_new_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_each_frozen_configuration_reference_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_shadow_algorithm_capacity_semantics_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_fresh_age_observation_change_keeps_identity_but_fresh_to_stale_changes_it tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_capacity_cutoff_change_creates_deterministic_new_identity_not_content_conflict tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_material_cutoff_crossing_inbound_creates_deterministic_new_identity --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_exact_replay_returns_existing_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_protection_policy_change_creates_new_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_each_frozen_configuration_reference_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_shadow_algorithm_capacity_semantics_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_fresh_age_observation_change_keeps_identity_but_fresh_to_stale_changes_it tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_capacity_cutoff_change_creates_deterministic_new_identity_not_content_conflict tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_material_cutoff_crossing_inbound_creates_deterministic_new_identity -q --basetemp .tmp/pytest-mto-identity-red -p no:cacheprovider
+~~~
+
+Expected: exactly seven items collect and fail.
+
+- [ ] **Step 5B (identity/registration implement): install the decision-fact constants/function, complete evaluation builder, and complete registration function above**
+
+- [ ] **Step 5C (identity/registration GREEN/commit): verify seven items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_exact_replay_returns_existing_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_protection_policy_change_creates_new_evaluation tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_each_frozen_configuration_reference_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_shadow_algorithm_capacity_semantics_changes_identity tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_fresh_age_observation_change_keeps_identity_but_fresh_to_stale_changes_it tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_capacity_cutoff_change_creates_deterministic_new_identity_not_content_conflict tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_material_cutoff_crossing_inbound_creates_deterministic_new_identity -q --basetemp .tmp/pytest-mto-identity-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: register canonical MTO evaluations"
+~~~
+
+Expected: exactly seven items pass.
+
+- [ ] **Step 6A (supersession RED): run the two lifecycle items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_only_open_same_logical_order_is_superseded tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_accepted_or_rejected_evidence_cannot_be_superseded --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_only_open_same_logical_order_is_superseded tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_accepted_or_rejected_evidence_cannot_be_superseded -q --basetemp .tmp/pytest-mto-supersession-red -p no:cacheprovider
+~~~
+
+Expected: exactly two items collect and fail.
+
+- [ ] **Step 6B (supersession implement): install `exact_order_commitment_intake_replay` and `supersede_open_order_commitment_evaluations` above**
+
+- [ ] **Step 6C (supersession GREEN/commit): verify two items, then all fifteen class items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_only_open_same_logical_order_is_superseded tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_accepted_or_rejected_evidence_cannot_be_superseded -q --basetemp .tmp/pytest-mto-supersession-green -p no:cacheprovider
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity -q --basetemp .tmp/pytest-mto-identity-complete -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: supersede only open MTO evaluations"
+~~~
+
+Expected: the focused items pass and exactly fifteen class items collect and pass.
 
 ---
 
@@ -3016,128 +3729,366 @@ Add `TestOrderCommitmentAcceptancePreparation`:
 pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation -q --basetemp .tmp/pytest-mto-acceptance-prep-red -p no:cacheprovider
 ~~~
 
-Expected: ten failures because acceptance functions are absent.
+Expected: eleven items fail because acceptance functions are absent.
 
-- [ ] **Step 2: Validate action and build the canonical demand**
-
-~~~python
-if evaluation["Status"] != "AwaitingPlannerDecision":
-    raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
-context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
-if context is None or decision not in evaluation["Recommendation"]["AllowedActions"]:
-    raise OrderCommitmentConflict("Decision is not allowed.")
-capacity_status, material_status, candidate_key = context
-if evaluation["ShadowSchedule"]["Status"] != capacity_status:
-    raise OrderCommitmentConflict("Decision capacity context does not match.")
-if evaluation["MaterialAssessment"]["Status"] != material_status:
-    raise OrderCommitmentConflict("Decision material context does not match.")
-if evaluation["Recommendation"]["RequiresCcrAcknowledgement"] and not ccr_risk_acknowledged:
-    raise OrderCommitmentConflict("CCR risk acknowledgement is required.")
-if evaluation["Recommendation"]["RequiresMaterialAcknowledgement"] and not material_risk_acknowledged:
-    raise OrderCommitmentConflict("Material risk acknowledgement is required.")
-candidate = evaluation["ShadowSchedule"][candidate_key]
-accepted_promise_at = parse_aware(candidate["PromiseAt"])
-for row in candidate["ReservationRequests"]:
-    if parse_aware(row["LatestAllowedCompletionAt"]) <= decided_at:
-        raise OrderCommitmentConflict("Selected reservation window has expired.")
-~~~
-
-Require trimmed non-empty decision ID, actor, reason and aware decision time. Build:
+- [ ] **Step 2: Install complete validation, fingerprint, and acceptance preparation**
 
 ~~~python
-demand = create_demand_commitment(
-    demand_source_type="MTOCustomerOrder",
-    source_system=order["SourceSystem"],
-    source_object_type=order["SourceObjectType"],
-    source_object_id=order["OrderID"],
-    source_object_version=order["OrderVersion"],
-    demand_line_id=order["DemandLineID"],
-    item_or_product_id=order["ProductID"],
-    location_id=order["LocationID"],
-    quantity=order["Quantity"],
-    uom=order["Uom"],
-    required_at=accepted_promise_at,
-    demand_class="MTO",
-    trace_id=order["TraceID"],
-)
-demand.update({
-    "OrderCommitmentEvaluationID": evaluation["EvaluationID"],
-    "BaselinePlanningRunID": evaluation["Basis"]["BaselinePlanningRunID"],
-    "OperatingModelConfigurationID": evaluation["Basis"][
-        "OperatingModelConfigurationID"
-    ],
-    "OperatingModelFingerprint": evaluation["Basis"][
-        "OperatingModelFingerprint"
-    ],
-    "SchedulingConfigurationID": evaluation["Basis"][
-        "SchedulingConfigurationID"
-    ],
-    "DDMRPConfigurationID": evaluation["Basis"][
-        "DDMRPConfigurationID"
-    ],
-    "ReleasePolicyVersionID": evaluation["Basis"][
-        "ReleasePolicyVersionID"
-    ],
-    "RoutingID": order["RoutingID"],
-    "BusinessPriority": order["BusinessPriority"],
-    "AcceptedPromiseAt": accepted_promise_at.isoformat(),
-    "MaterialCommitmentStatus": (
-        "PlannedAllocationPrepared"
-        if material_status == "Feasible"
-        else "PendingConfirmation"
-    ),
-    "PendingMaterialRequirements": (
-        [] if material_status == "Feasible"
-        else deepcopy(
-            evaluation["MaterialAssessment"]["PendingRequirements"]
+def _decision_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise OrderCommitmentConflict(f"{field} is required.")
+    return value.strip()
+
+
+def canonical_decision_fingerprint(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    actor_id: str,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> str:
+    identity = {
+        "DecisionID": _decision_text(decision_id, "DecisionID"),
+        "EvaluationID": evaluation["EvaluationID"],
+        "EvaluationFingerprint": evaluation["EvaluationFingerprint"],
+        "Decision": _decision_text(decision, "Decision"),
+        "ActorID": _decision_text(actor_id, "ActorID"),
+        "Reason": _decision_text(reason, "Reason"),
+        "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+        "MaterialRiskAcknowledged": bool(
+            material_risk_acknowledged
+        ),
+    }
+    return canonical_fingerprint(identity)
+
+
+def prepare_mto_acceptance(
+    *,
+    evaluation: Mapping[str, object],
+    existing_commitments: Mapping[str, dict[str, object]],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> PlanningReservationWriteSet:
+    normalized_decision_id = _decision_text(decision_id, "DecisionID")
+    normalized_actor = _decision_text(decided_by, "DecidedBy")
+    _decision_text(reason, "Reason")
+    decided_at = _utc(require_aware(decided_at, "DecidedAt"))
+    if evaluation["Status"] != "AwaitingPlannerDecision":
+        raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
+    context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
+    if (
+        context is None
+        or decision not in evaluation["Recommendation"]["AllowedActions"]
+    ):
+        raise OrderCommitmentConflict("Decision is not allowed.")
+    capacity_status, material_status, candidate_key = context
+    if evaluation["ShadowSchedule"]["Status"] != capacity_status:
+        raise OrderCommitmentConflict(
+            "Decision capacity context does not match."
         )
-    ),
-    "ExternalOrderAcceptance": "NotPerformed",
-    "PlanningRunCreation": "NotPerformed",
-    "ProductionMutation": "NotPerformed",
-})
-demand = normalize_demand_commitment(demand)
+    if evaluation["MaterialAssessment"]["Status"] != material_status:
+        raise OrderCommitmentConflict(
+            "Decision material context does not match."
+        )
+    requirements = action_acknowledgement_requirements(
+        action=decision,
+        requires_ccr_acknowledgement=bool(
+            evaluation["Recommendation"]["RequiresCcrAcknowledgement"]
+        ),
+        requires_material_acknowledgement=bool(
+            evaluation["Recommendation"][
+                "RequiresMaterialAcknowledgement"
+            ]
+        ),
+    )
+    if (
+        requirements["RequiresCcrAcknowledgement"]
+        and not ccr_risk_acknowledged
+    ):
+        raise OrderCommitmentConflict(
+            "CCR risk acknowledgement is required."
+        )
+    if (
+        requirements["RequiresMaterialAcknowledgement"]
+        and not material_risk_acknowledged
+    ):
+        raise OrderCommitmentConflict(
+            "Material risk acknowledgement is required."
+        )
+    candidate = evaluation["ShadowSchedule"].get(candidate_key)
+    if not isinstance(candidate, Mapping):
+        raise OrderCommitmentConflict(
+            "Selected capacity assessment is missing."
+        )
+    accepted_promise_at = _parse_aware(candidate["PromiseAt"])
+    for row in candidate.get("ReservationRequests", []):
+        if _parse_aware(row["LatestAllowedCompletionAt"]) <= decided_at:
+            raise OrderCommitmentConflict(
+                "Selected reservation window has expired."
+            )
+
+    order = evaluation["Order"]
+    demand = create_demand_commitment(
+        demand_source_type="MTOCustomerOrder",
+        source_system=order["SourceSystem"],
+        source_object_type=order["SourceObjectType"],
+        source_object_id=order["OrderID"],
+        source_object_version=order["OrderVersion"],
+        demand_line_id=order["DemandLineID"],
+        item_or_product_id=order["ProductID"],
+        location_id=order["LocationID"],
+        quantity=order["Quantity"],
+        uom=order["Uom"],
+        required_at=accepted_promise_at,
+        demand_class="MTO",
+        trace_id=order["TraceID"],
+    )
+    demand.update({
+        "OrderCommitmentEvaluationID": evaluation["EvaluationID"],
+        "BaselinePlanningRunID": evaluation["Basis"][
+            "BaselinePlanningRunID"
+        ],
+        "OperatingModelConfigurationID": evaluation["Basis"][
+            "OperatingModelConfigurationID"
+        ],
+        "OperatingModelFingerprint": evaluation["Basis"][
+            "OperatingModelFingerprint"
+        ],
+        "SchedulingConfigurationID": evaluation["Basis"][
+            "SchedulingConfigurationID"
+        ],
+        "DDMRPConfigurationID": evaluation["Basis"][
+            "DDMRPConfigurationID"
+        ],
+        "ReleasePolicyVersionID": evaluation["Basis"][
+            "ReleasePolicyVersionID"
+        ],
+        "RoutingID": order["RoutingID"],
+        "BusinessPriority": order["BusinessPriority"],
+        "AcceptedPromiseAt": accepted_promise_at.isoformat(),
+        "MaterialCommitmentStatus": (
+            "PlannedAllocationPrepared"
+            if material_status == "Feasible"
+            else "PendingConfirmation"
+        ),
+        "PendingMaterialRequirements": (
+            []
+            if material_status == "Feasible"
+            else deepcopy(
+                evaluation["MaterialAssessment"]["PendingRequirements"]
+            )
+        ),
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    })
+    demand = normalize_demand_commitment(demand)
+    material_requests = (
+        evaluation["MaterialAssessment"]["AllocationRequests"]
+        if material_status == "Feasible"
+        else []
+    )
+    return prepare_reservation_confirmation(
+        demand_commitment=demand,
+        existing_commitments=existing_commitments,
+        confirmation_id=normalized_decision_id,
+        confirmed_by=normalized_actor,
+        confirmed_at=decided_at,
+        capacity_requests=candidate.get("ReservationRequests", []),
+        material_requests=material_requests,
+    )
 ~~~
 
-Call `prepare_reservation_confirmation` with `confirmation_id=decision_id`, exact candidate reservation requests, and material requests only for `Feasible`.
-
-- [ ] **Step 3: Implement fingerprint and immutable records**
-
-Use the exact decision identity in the global contract. `accepted_evaluation_record` and `rejected_evaluation_record` deep-copy the evaluation, increment `RecordVersion`, and set:
+- [ ] **Step 3: Install complete immutable accepted/rejected record builders**
 
 ~~~python
-updated["Decision"] = {
-    "DecisionID": normalized_decision_id,
-    "DecisionFingerprint": canonical_decision_fingerprint(
+def _decision_evidence(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    normalized_decision_id = _decision_text(decision_id, "DecisionID")
+    normalized_actor = _decision_text(decided_by, "DecidedBy")
+    normalized_reason = _decision_text(reason, "Reason")
+    decided_at = _utc(require_aware(decided_at, "DecidedAt"))
+    return {
+        "DecisionID": normalized_decision_id,
+        "DecisionFingerprint": canonical_decision_fingerprint(
+            evaluation=evaluation,
+            decision_id=normalized_decision_id,
+            decision=decision,
+            actor_id=normalized_actor,
+            reason=normalized_reason,
+            ccr_risk_acknowledged=ccr_risk_acknowledged,
+            material_risk_acknowledged=material_risk_acknowledged,
+        ),
+        "Decision": decision,
+        "DecidedBy": normalized_actor,
+        "DecidedAt": decided_at.isoformat(),
+        "Reason": normalized_reason,
+        "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+        "MaterialRiskAcknowledged": bool(
+            material_risk_acknowledged
+        ),
+    }
+
+
+def accepted_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    write_set: PlanningReservationWriteSet,
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    if evaluation["Status"] != "AwaitingPlannerDecision":
+        raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
+    if decision not in ACCEPTANCE_ACTION_CONTEXT:
+        raise OrderCommitmentConflict("Decision is not an acceptance action.")
+    updated = deepcopy(dict(evaluation))
+    evidence = _decision_evidence(
         evaluation=evaluation,
         decision_id=decision_id,
         decision=decision,
-        actor_id=decided_by,
+        decided_by=decided_by,
+        decided_at=decided_at,
         reason=reason,
         ccr_risk_acknowledged=ccr_risk_acknowledged,
         material_risk_acknowledged=material_risk_acknowledged,
-    ),
-    "Decision": decision,
-    "DecidedBy": normalized_actor,
-    "DecidedAt": decided_at.isoformat(),
-    "Reason": normalized_reason,
-    "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
-    "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
-}
+    )
+    evidence.update({
+        "AcceptedPromiseAt": write_set.demand_commitment[
+            "AcceptedPromiseAt"
+        ],
+        "DemandCommitmentID": write_set.demand_commitment[
+            "DemandCommitmentID"
+        ],
+        "ReservationBatchID": write_set.batch["ReservationBatchID"],
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    })
+    updated["Decision"] = evidence
+    updated["Status"] = "AcceptedPendingFormalSchedule"
+    updated["RecordVersion"] = int(evaluation["RecordVersion"]) + 1
+    return updated
+
+
+def rejected_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    if (
+        evaluation["Status"] != "AwaitingPlannerDecision"
+        or decision != "Reject"
+        or decision not in evaluation["Recommendation"]["AllowedActions"]
+    ):
+        raise OrderCommitmentConflict("Rejection is not allowed.")
+    updated = deepcopy(dict(evaluation))
+    updated["Decision"] = _decision_evidence(
+        evaluation=evaluation,
+        decision_id=decision_id,
+        decision=decision,
+        decided_by=decided_by,
+        decided_at=decided_at,
+        reason=reason,
+        ccr_risk_acknowledged=ccr_risk_acknowledged,
+        material_risk_acknowledged=material_risk_acknowledged,
+    )
+    updated["Status"] = "Rejected"
+    updated["RecordVersion"] = int(evaluation["RecordVersion"]) + 1
+    return updated
 ~~~
 
-Acceptance additionally records `AcceptedPromiseAt`, `DemandCommitmentID`, `ReservationBatchID`, `ExternalOrderAcceptance`, `PlanningRunCreation`, and `ProductionMutation`, and sets `Status="AcceptedPendingFormalSchedule"`. Rejection sets `Status="Rejected"` and no demand/batch fields.
-
-- [ ] **Step 4: Verify and commit**
+- [ ] **Step 4A (acceptance contexts RED): run the four candidate/action items**
 
 ~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_feasible_builds_canonical_mto_demand_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_skipped_builds_pending_material_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_feasible_uses_recommended_promise tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_skipped_uses_conditional_recommended_action_and_zero_allocations --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_feasible_builds_canonical_mto_demand_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_skipped_builds_pending_material_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_feasible_uses_recommended_promise tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_skipped_uses_conditional_recommended_action_and_zero_allocations -q --basetemp .tmp/pytest-mto-prep-context-red -p no:cacheprovider
+~~~
+
+Expected: exactly four items collect and fail.
+
+- [ ] **Step 4B (acceptance contexts implement): install `prepare_mto_acceptance` and its validation helpers above**
+
+- [ ] **Step 4C (acceptance contexts GREEN/commit): verify four items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_feasible_builds_canonical_mto_demand_and_material_rows tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_requested_skipped_builds_pending_material_and_zero_allocations tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_feasible_uses_recommended_promise tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_later_skipped_uses_conditional_recommended_action_and_zero_allocations -q --basetemp .tmp/pytest-mto-prep-context-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: prepare MTO acceptance contexts"
+~~~
+
+Expected: exactly four items pass.
+
+- [ ] **Step 5A (acknowledgement/guard RED): run the five guard items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_reference_and_exceeded_selected_candidates_require_ccr_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_skipped_acceptance_actions_require_material_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_reject_never_requires_ccr_or_material_acknowledgement tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_insufficient_shortage_and_not_assessable_reject_acceptance tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_expired_latest_completion_rejects_acceptance --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_reference_and_exceeded_selected_candidates_require_ccr_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_skipped_acceptance_actions_require_material_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_reject_never_requires_ccr_or_material_acknowledgement tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_insufficient_shortage_and_not_assessable_reject_acceptance tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_expired_latest_completion_rejects_acceptance -q --basetemp .tmp/pytest-mto-prep-guards-red -p no:cacheprovider
+~~~
+
+Expected: exactly five items collect and fail on missing action-specific guards.
+
+- [ ] **Step 5B (acknowledgement/guard implement): wire `action_acknowledgement_requirements`, allowed-action checks, and `_parse_aware` expiry checks exactly as shown**
+
+- [ ] **Step 5C (acknowledgement/guard GREEN/commit): verify five items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_reference_and_exceeded_selected_candidates_require_ccr_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_all_skipped_acceptance_actions_require_material_ack tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_reject_never_requires_ccr_or_material_acknowledgement tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_insufficient_shortage_and_not_assessable_reject_acceptance tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_expired_latest_completion_rejects_acceptance -q --basetemp .tmp/pytest-mto-prep-guards-green -p no:cacheprovider
+git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
+git commit -m "feat: enforce MTO decision acknowledgements"
+~~~
+
+Expected: exactly five items pass.
+
+- [ ] **Step 6A (fingerprint/records RED): run the two canonical-record items**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_decision_fingerprint_excludes_decided_at_and_covers_every_canonical_field tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context --collect-only -q
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_decision_fingerprint_excludes_decided_at_and_covers_every_canonical_field tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context -q --basetemp .tmp/pytest-mto-prep-record-red -p no:cacheprovider
+~~~
+
+Expected: exactly two items collect and fail.
+
+- [ ] **Step 6B (fingerprint/records implement): install `canonical_decision_fingerprint`, `_decision_evidence`, and both terminal record builders above**
+
+- [ ] **Step 6C (fingerprint/records GREEN/commit): verify two items, all eleven class items, and Phase 0 regressions**
+
+~~~powershell
+pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_decision_fingerprint_excludes_decided_at_and_covers_every_canonical_field tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation::test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context -q --basetemp .tmp/pytest-mto-prep-record-green -p no:cacheprovider
 pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation --collect-only -q
 pytest tests/test_order_commitment_evaluation.py tests/test_planning_commitments.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py -q --basetemp .tmp/pytest-mto-domain-green -p no:cacheprovider
 git add -- sdbr/order_commitment_evaluation.py tests/test_order_commitment_evaluation.py
-git commit -m "feat: prepare option2 MTO reservations"
+git commit -m "feat: persist canonical MTO decision evidence"
 ~~~
 
-Expected: ten class tests and all shared-ledger regressions pass.
+Expected: the focused items pass, exactly eleven class items collect, and all shared-ledger regressions pass.
 
 ---
 
@@ -3409,64 +4360,249 @@ pytest tests/test_test_data.py::TestOrderCommitmentBrowserSeed -q --basetemp .tm
 
 Expected: four failures because fixture seed is absent.
 
-- [ ] **Step 2: Seed exact prerequisites**
+- [ ] **Step 2: Install the complete repeatable fixture persistence body**
 
-Use `captured_at.astimezone(timezone.utc)` and dates `captured_at.date()+2` and `+3`. Create:
+Extend `sdbr/test_data.py` imports with:
 
 ~~~python
-day_calendar = WorkCalendar(
-    calendar_id="TST-MTO-CAL-DAY",
-    working_weekdays=set(range(7)),
-    shifts=[Shift("Day", time(8, 0), time(16, 0))],
-    maintenance_windows=[],
-    holidays=set(),
-)
-resources = [
-    Resource(
-        "TST-MTO-CCR-1", "MTO Constraint", True,
-        {due_date: 480, next_date: 480},
-        calendar=day_calendar,
-        capacity_units=1, efficiency_percent=100,
-    ),
-    Resource(
-        "TST-MTO-NCR-1", "MTO Pack", False,
-        {due_date: 480, next_date: 480},
-        calendar=day_calendar,
-    ),
-]
-routing = Routing(
-    product_id="TST-MTO-FG-1",
-    routing_id="PRIMARY",
-    is_primary=True,
-    operations=[
-        Operation("CCR-CUT", "TST-MTO-CCR-1", 60, 10),
-        Operation("PACK", "TST-MTO-NCR-1", 30, 20),
-    ],
-)
+from sdbr.plan_publication import schedule_fingerprint
+from sdbr.planner_view import InventoryBufferPolicy
 ~~~
 
-Master version uses `CalendarTimezone="UTC"`, valid validation, no mutation after seed. Snapshot captured at `captured_at - 5 minutes` has `TST-MTO-RM-1/TST-MAIN` on-hand 100 and authority allocation 0.
-
-Baseline run is `Completed` and `Published`, with schedule fingerprint from `plan_publication.schedule_fingerprint`, 180 processing minutes on `TST-MTO-CCR-1` in 08:00-11:00, `TimeBufferMinutes=60`, empty frozen calendar overrides/setup transitions, and exact frozen references:
+Then install this complete function. It clears only the MTO/Phase 0 runtime
+collections owned by this test fixture, persists the master/snapshot/run, and
+returns every identifier consumed by the API and browser tests.
 
 ~~~python
-{
-    "OperatingModelConfigurationID": None,
-    "OperatingModelFingerprint": None,
-    "SchedulingConfigurationID": None,
-    "DDMRPConfigurationID": None,
-    "ReleasePolicyVersionID": "TST-MTO-RELEASE-POLICY-1",
-    "FrozenReleasePolicy": {
+def seed_mto_order_commitment_fixture(
+    store: WorkbenchStateStore,
+    *,
+    captured_at: datetime,
+) -> dict[str, object]:
+    if captured_at.tzinfo is None or captured_at.utcoffset() is None:
+        raise ValueError("MTO fixture time must be timezone-aware.")
+    captured_at = captured_at.astimezone(timezone.utc)
+    due_date = captured_at.date() + timedelta(days=2)
+    next_date = captured_at.date() + timedelta(days=3)
+    due_start = datetime.combine(
+        due_date, time(8, 0), tzinfo=timezone.utc
+    )
+    due_end = datetime.combine(
+        due_date, time(16, 0), tzinfo=timezone.utc
+    )
+    next_start = datetime.combine(
+        next_date, time(8, 0), tzinfo=timezone.utc
+    )
+    next_end = datetime.combine(
+        next_date, time(16, 0), tzinfo=timezone.utc
+    )
+
+    store.order_commitment_evaluations.clear()
+    store.order_commitment_events.clear()
+    store.planning_demand_commitments.clear()
+    store.planning_reservation_batches.clear()
+    store.ccr_capacity_reservations.clear()
+    store.material_planning_allocations.clear()
+    store.planning_reservation_events.clear()
+    store.processed_planning_event_keys.clear()
+
+    day_calendar = WorkCalendar(
+        calendar_id="TST-MTO-CAL-DAY",
+        working_weekdays=set(range(7)),
+        shifts=[Shift("Day", time(8, 0), time(16, 0))],
+        maintenance_windows=[],
+        holidays=set(),
+    )
+    resources = [
+        Resource(
+            "TST-MTO-CCR-1",
+            "MTO Constraint",
+            True,
+            {due_date: 480, next_date: 480},
+            calendar=day_calendar,
+            capacity_units=1,
+            efficiency_percent=100,
+        ),
+        Resource(
+            "TST-MTO-NCR-1",
+            "MTO Pack",
+            False,
+            {due_date: 480, next_date: 480},
+            calendar=day_calendar,
+        ),
+    ]
+    routing = Routing(
+        product_id="TST-MTO-FG-1",
+        routing_id="PRIMARY",
+        is_primary=True,
+        operations=[
+            Operation("CCR-CUT", "TST-MTO-CCR-1", 60, 10),
+            Operation("PACK", "TST-MTO-NCR-1", 30, 20),
+        ],
+    )
+    inventory_buffers = [
+        InventoryBufferPolicy(
+            "TST-MTO-RM-1", "TST-MAIN", 100.0, 20.0, 40.0, 80.0
+        )
+    ]
+    validation = validate_master_data(
+        resources=resources,
+        routings=[routing],
+        orders=[],
+        inventory_buffers=inventory_buffers,
+        material_requirements=[],
+        calendar_timezone="UTC",
+    )
+    if not validation.is_valid:
+        raise ValueError("MTO fixture master data must validate.")
+    store.master_data_versions[MTO_COMMITMENT_MASTER_DATA_VERSION_ID] = {
+        "VersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "CapturedAt": captured_at.isoformat(),
+        "SourceSystem": "SDBR-TestData",
+        "CreatedBy": "sdbr-test-data",
+        "CalendarTimezone": "UTC",
+        "Status": "Valid",
+        "Resources": _resources_to_dict(resources),
+        "Routings": _routings_to_dict([routing]),
+        "Orders": [],
+        "InventoryBuffers": _inventory_buffers_to_dict(
+            inventory_buffers
+        ),
+        "MaterialRequirements": [],
+        "Validation": _validation_to_dict(validation),
+    }
+
+    snapshot = create_operational_state_snapshot(
+        snapshot_id=MTO_COMMITMENT_OPERATIONAL_STATE_ID,
+        captured_at=captured_at - timedelta(minutes=5),
+        inventory_buffers=inventory_buffers,
+        material_availability=import_material_availability_from_rows([
+            MaterialAvailabilityImportRow(
+                "TST-MTO-RM-1", "TST-MAIN", 0.0, 0.0, None
+            )
+        ]),
+        wip_limits=[],
+    )
+    store.operational_state_snapshots[snapshot.snapshot_id] = snapshot
+
+    schedule = {
+        "GeneratedAt": captured_at.isoformat(),
+        "GanttRows": [
+            {
+                "ResourceID": "TST-MTO-CCR-1",
+                "Bars": [
+                    {
+                        "OrderID": "TST-MTO-BASELOAD",
+                        "OperationID": "TST-MTO-BASELOAD:CCR-CUT",
+                        "BarType": "Processing",
+                        "Start": due_start.isoformat(),
+                        "End": (
+                            due_start + timedelta(minutes=180)
+                        ).isoformat(),
+                        "DurationMinutes": 180,
+                    }
+                ],
+            }
+        ],
+        "Orders": [],
+        "Diagnostics": [],
+    }
+    frozen_release_policy = {
         "VersionID": "TST-MTO-RELEASE-POLICY-1",
         "RopeBufferMinutes": 60,
         "MaterialCheckWindowMinutes": 1440,
-    },
-}
+    }
+    run = {
+        "RunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+        "ProblemID": "TST-MTO-PROBLEM-BASELINE",
+        "Status": "Completed",
+        "PublicationStatus": "Published",
+        "MasterDataVersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "OperatingModelConfigurationID": None,
+        "OperatingModelFingerprint": None,
+        "SchedulingConfigurationID": None,
+        "DDMRPConfigurationID": None,
+        "ReleasePolicyVersionID": frozen_release_policy["VersionID"],
+        "FrozenReleasePolicy": frozen_release_policy,
+        "FrozenBaseCalendars": [],
+        "FrozenResourceCalendarAssignments": [],
+        "FrozenCalendarOverrides": [],
+        "SetupTransitions": [],
+        "TimeBufferMinutes": 60,
+        "RequestedBy": "sdbr-test-data",
+        "RequestedAt": captured_at.isoformat(),
+        "StartedAt": captured_at.isoformat(),
+        "CompletedAt": captured_at.isoformat(),
+        "Schedule": schedule,
+        "PublicationHistory": [],
+    }
+    run["ScheduleFingerprint"] = schedule_fingerprint(run)
+    store.planning_runs[MTO_COMMITMENT_BASELINE_RUN_ID] = run
+
+    return {
+        "MasterDataVersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "BaselinePlanningRunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+        "CapacityWindowKeys": [
+            (
+                "TST-MTO-CCR-1",
+                due_start.isoformat(),
+                due_end.isoformat(),
+            ),
+            (
+                "TST-MTO-CCR-1",
+                next_start.isoformat(),
+                next_end.isoformat(),
+            ),
+        ],
+        "IntakePayloadTemplate": {
+            "SourceSystem": "MockERP",
+            "SourceObjectType": "CustomerOrder",
+            "OrderID": "TST-MTO-SO-ORDINARY",
+            "OrderVersion": "1",
+            "DemandLineID": "10",
+            "ProductID": "TST-MTO-FG-1",
+            "LocationID": "TST-MAIN",
+            "Quantity": 1.0,
+            "Uom": "EA",
+            "RequestedDueAt": datetime.combine(
+                due_date, time(18, 0), tzinfo=timezone.utc
+            ).isoformat(),
+            "BusinessPriority": 100,
+            "ReceivedAt": captured_at.isoformat(),
+            "TraceID": "TRACE-TST-MTO-ORDINARY",
+            "BaselinePlanningRunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+            "RoutingID": "PRIMARY",
+            "OperationalStateSnapshotID": snapshot.snapshot_id,
+            "MaterialRequirements": [
+                {
+                    "RequirementLineID": (
+                        "TST-MTO-SO-ORDINARY:10:TST-MTO-RM-1"
+                    ),
+                    "ItemID": "TST-MTO-RM-1",
+                    "LocationID": "TST-MAIN",
+                    "RequiredQty": 5.0,
+                    "Uom": "EA",
+                }
+            ],
+        },
+    }
 ~~~
 
-Return fixed IDs plus an `IntakePayloadTemplate` whose requested due is 18:00 UTC on due date, quantity 1, and material requirement 5.
-
 - [ ] **Step 3: Add a test-only public reset endpoint**
+
+Extend the existing `sdbr.test_data` import in `sdbr/api.py` with
+`seed_mto_order_commitment_fixture` before adding the route:
+
+~~~python
+from sdbr.test_data import (
+    reset_test_case_state,
+    seed_baseline_test_data,
+    seed_mto_order_commitment_fixture,
+    test_case_catalog_payload,
+)
+~~~
 
 ~~~python
 @app.post("/planner/workbench/test-data/order-commitment/reset")
@@ -3679,19 +4815,51 @@ from sdbr.ccr_shadow_scheduler import (
     evaluate_ccr_shadow_schedule,
 )
 from sdbr.order_commitment_evaluation import (
+    ACCEPTANCE_DECISIONS,
     OrderCommitmentConflict,
+    OrderCommitmentSnapshotNotFound,
     REFERENCE_CCR_PROTECTION_POLICY,
+    _parse_aware,
+    accepted_evaluation_record,
     build_order_commitment_basis,
     candidate_demand_commitment_id,
+    canonical_decision_fingerprint,
     canonical_fingerprint,
+    canonical_json,
+    canonical_order_commitment_decision_facts,
     create_order_commitment_evaluation,
     evaluate_mto_material_availability,
+    exact_order_commitment_intake_replay,
+    normalize_mto_order,
+    prepare_mto_acceptance,
+    register_order_commitment_evaluation,
+    rejected_evaluation_record,
     select_order_commitment_operational_snapshot,
+    supersede_open_order_commitment_evaluations,
 )
-from sdbr.plan_publication import schedule_fingerprint as planning_schedule_fingerprint
+from sdbr.order_commitment_view import (
+    SAFE_AUDIT_DETAIL_FIELDS,
+    build_order_commitment_detail,
+    build_order_commitment_workbench,
+)
+from sdbr.planning_reservations import (
+    ReservationConflict,
+    ReservationLegacyMigrationRequired,
+    apply_reservation_write_set,
+)
+from sdbr.plan_publication import (
+    publication_state,
+    schedule_fingerprint as planning_schedule_fingerprint,
+)
 from sdbr.release_policy import release_policy_evidence, release_policy_settings
 from sdbr.scheduling_solver import build_capacity_buckets_from_resources
 ~~~
+
+These are the complete MTO imports for Tasks 16-21. Do not add a second,
+partial import block in a later route task. Existing `api.py` imports already
+provide `deepcopy`, `datetime`, `sha256`, `timezone`, `Mapping`, `ZoneInfo`,
+`JSONResponse`, `Request`, payload rehydrators, calendar applicators, and the
+live store aliases.
 
 **Produces**
 
@@ -3720,12 +4888,16 @@ def _order_commitment_error(
 def _not_assessable_shadow(
     *,
     order: Mapping[str, object],
+    evaluated_at: datetime,
     code: str,
     message: str,
 ) -> dict[str, object]:
     return {
         "Algorithm": deepcopy(SHADOW_ALGORITHM),
         "Status": "NotAssessable",
+        "CapacityAssessmentCutoffAt": (
+            evaluated_at.astimezone(timezone.utc).isoformat()
+        ),
         "RequestedDueAt": order["RequestedDueAt"],
         "LatestCcrCompletionAt": None,
         "RequestedDateAssessment": {"Feasible": False},
@@ -3770,106 +4942,10 @@ pytest tests/test_order_commitment_api.py::TestOrderCommitmentApiOrchestration -
 
 Expected: eight failures because resolver is absent.
 
-- [ ] **Step 2: Resolve baseline, route, calendar, and frozen policies**
+- [ ] **Step 2: Add the exact tolerant ledger prefilters**
 
-Exact top-level failures:
-
-~~~python
-run = planning_runs.get(order["BaselinePlanningRunID"])
-if run is None:
-    return _order_commitment_error(
-        endpoint=endpoint, status_code=404,
-        status="PlanningRunNotFound",
-        message="Baseline Planning Run was not found.",
-    )
-if run.get("Status") != "Completed":
-    return _order_commitment_error(
-        endpoint=endpoint, status_code=409,
-        status="PlanningRunNotCompleted",
-        message="Baseline Planning Run must be completed.",
-    )
-if publication_state(run) not in {"Approved", "Published"}:
-    return _order_commitment_error(
-        endpoint=endpoint, status_code=409,
-        status="PlanningRunNotApprovedOrPublished",
-        message="Baseline plan must be approved or published.",
-    )
-schedule = run.get("Schedule")
-if not isinstance(schedule, dict):
-    return _order_commitment_error(
-        endpoint=endpoint, status_code=409,
-        status="PlanningRunScheduleMissing",
-        message="Baseline schedule evidence is missing.",
-    )
-master = master_data_versions.get(run.get("MasterDataVersionID"))
-if not isinstance(master, dict):
-    return _order_commitment_error(
-        endpoint=endpoint, status_code=404,
-        status="MasterDataVersionNotFound",
-        message="Baseline master-data version was not found.",
-    )
-orchestration_issue = None
-if not isinstance(master.get("CalendarTimezone"), str) or not str(
-    master["CalendarTimezone"]
-).strip():
-    orchestration_issue = (
-        "CALENDAR_TIMEZONE_REQUIRED",
-        "A calendar timezone is required for MTO shadow capacity.",
-    )
-~~~
-
-Rehydrate with current helpers:
-
-~~~python
-resources = _resources_from_payload([
-    ResourcePayload(**row) for row in master["Resources"]
-])
-resources = apply_base_calendar_assignments(
-    resources=resources,
-    calendars=run.get("FrozenBaseCalendars") or [],
-    assignments=run.get("FrozenResourceCalendarAssignments") or [],
-).resources
-resources = apply_calendar_overrides(
-    resources=resources,
-    overrides=run.get("FrozenCalendarOverrides") or [],
-).resources
-routings = _routings_from_payload([
-    RoutingPayload(**row) for row in master["Routings"]
-])
-routing_matches = [
-    row for row in routings
-    if row.product_id == order["ProductID"]
-    and row.routing_id == order["RoutingID"]
-    and row.is_primary is True
-]
-routing = routing_matches[0] if len(routing_matches) == 1 else None
-if routing is None:
-    orchestration_issue = (
-        "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
-        "Exactly one matching primary route is required.",
-    )
-capacity_buckets = (
-    []
-    if orchestration_issue is not None
-    else build_capacity_buckets_from_resources(
-        resources, tzinfo=ZoneInfo(master["CalendarTimezone"])
-    )
-)
-frozen_release_policy = _release_policy_for_evaluation(
-    planning_run=run,
-    requested_policy_id=None,
-    dbr_release_policies=dbr_release_policies,
-)
-material_window = release_policy_settings(
-    frozen_release_policy
-).material_lookahead_minutes
-~~~
-
-Route/resource/calendar/setup defects become a persisted `NotAssessable` shadow issue, not a 500. Missing top-level IDs use standard 404/409 responses.
-
-- [ ] **Step 3: Evaluate and build exact basis**
-
-Before the calls below, prefilter live rows with these exact helpers. They use only tolerant key reads; strict validation remains in the domain functions:
+They use only tolerant key reads; strict validation remains in the domain
+functions:
 
 ~~~python
 def _prefilter_mto_capacity_rows(
@@ -3903,91 +4979,409 @@ def _prefilter_mto_material_rows(
     ]
 ~~~
 
-After route/bucket construction calculate `ccr_resource_ids`, `capacity_input_keys`, and `material_input_keys` exactly:
+- [ ] **Step 3: Install the complete state-to-evaluation resolver**
+
+This is the entire body, including every return and fail-closed route/resource
+branch. `_parse_aware` is the only parse name. In particular, it never reads
+`routing.operations` until a unique route exists and never indexes a resource
+dictionary before checking missing IDs.
 
 ~~~python
-resources_by_id = {row.resource_id: row for row in resources}
-ccr_resource_ids = {
-    operation.resource_id
-    for operation in routing.operations
-    if resources_by_id[operation.resource_id].is_constraint
-}
-capacity_input_keys = {
-    (
-        bucket.resource_id,
-        bucket.bucket_start.astimezone(timezone.utc).isoformat(),
-        bucket.bucket_end.astimezone(timezone.utc).isoformat(),
-    )
-    for bucket in capacity_buckets
-    if bucket.resource_id in ccr_resource_ids
-}
-material_input_keys = {
-    (str(row["ItemID"]), str(row["LocationID"]))
-    for row in order["MaterialRequirements"]
-}
-relevant_capacity_rows = _prefilter_mto_capacity_rows(
-    rows=list(ccr_capacity_reservations.values()),
-    allowed_keys=capacity_input_keys,
-)
-relevant_material_rows = _prefilter_mto_material_rows(
-    rows=list(material_planning_allocations.values()),
-    allowed_keys=material_input_keys,
-)
-relevant_gantt_rows = [
-    deepcopy(row)
-    for row in schedule.get("GanttRows", [])
-    if str(row.get("ResourceID") or "") in ccr_resource_ids
-]
-~~~
+def _build_order_commitment_evaluation_from_state(
+    *,
+    endpoint: str,
+    order: Mapping[str, object],
+    evaluated_at: datetime,
+    check_material_availability: bool,
+    material_check_skip_reason: str | None,
+    requested_operational_state_snapshot_id: str | None,
+) -> dict[str, object] | JSONResponse:
+    evaluated_at = _parse_aware(evaluated_at)
+    run = planning_runs.get(str(order["BaselinePlanningRunID"]))
+    if run is None:
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=404,
+            status="PlanningRunNotFound",
+            message="Baseline Planning Run was not found.",
+        )
+    if run.get("Status") != "Completed":
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=409,
+            status="PlanningRunNotCompleted",
+            message="Baseline Planning Run must be completed.",
+        )
+    if publication_state(run) not in {"Approved", "Published"}:
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=409,
+            status="PlanningRunNotApprovedOrPublished",
+            message="Baseline plan must be approved or published.",
+        )
+    schedule = run.get("Schedule")
+    if not isinstance(schedule, dict):
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=409,
+            status="PlanningRunScheduleMissing",
+            message="Baseline schedule evidence is missing.",
+        )
+    master = master_data_versions.get(str(run.get("MasterDataVersionID")))
+    if not isinstance(master, dict):
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=404,
+            status="MasterDataVersionNotFound",
+            message="Baseline master-data version was not found.",
+        )
 
-~~~python
-selection = select_order_commitment_operational_snapshot(
-    snapshots=operational_state_snapshots,
-    evaluated_at=evaluated_at,
-    requested_snapshot_id=requested_operational_state_snapshot_id,
-)
-shadow = (
-    _not_assessable_shadow(
-        order=order,
-        code=orchestration_issue[0],
-        message=orchestration_issue[1],
+    orchestration_issue: tuple[str, str] | None = None
+    resources: list[Resource] = []
+    routings: list[Routing] = []
+    routing: Routing | None = None
+    setup_transitions: list[SetupTransition] = []
+    capacity_buckets = []
+    timezone_name = master.get("CalendarTimezone")
+    if not isinstance(timezone_name, str) or not timezone_name.strip():
+        orchestration_issue = (
+            "CALENDAR_TIMEZONE_REQUIRED",
+            "A calendar timezone is required for MTO shadow capacity.",
+        )
+    try:
+        resource_rows = master.get("Resources")
+        routing_rows = master.get("Routings")
+        if not isinstance(resource_rows, list) or not isinstance(
+            routing_rows, list
+        ):
+            raise ValueError("Master resource/routing rows must be lists.")
+        resources = _resources_from_payload([
+            ResourcePayload(**row) for row in resource_rows
+        ])
+        resources = apply_base_calendar_assignments(
+            resources=resources,
+            calendars=run.get("FrozenBaseCalendars") or [],
+            assignments=(
+                run.get("FrozenResourceCalendarAssignments") or []
+            ),
+        ).resources
+        resources = apply_calendar_overrides(
+            resources=resources,
+            overrides=run.get("FrozenCalendarOverrides") or [],
+        ).resources
+        routings = _routings_from_payload([
+            RoutingPayload(**row) for row in routing_rows
+        ])
+        setup_rows = run.get("SetupTransitions") or []
+        if not isinstance(setup_rows, list):
+            raise ValueError("SetupTransitions must be a list.")
+        setup_transitions = _setup_transitions_from_payload([
+            SetupTransitionPayload(**row) for row in setup_rows
+        ])
+    except (KeyError, TypeError, ValueError) as error:
+        orchestration_issue = (
+            "MASTER_ROUTE_CALENDAR_EVIDENCE_INVALID",
+            str(error),
+        )
+
+    if orchestration_issue is None:
+        routing_matches = [
+            row
+            for row in routings
+            if row.product_id == order["ProductID"]
+            and row.routing_id == order["RoutingID"]
+            and row.is_primary is True
+        ]
+        if len(routing_matches) != 1:
+            orchestration_issue = (
+                "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
+                "Exactly one matching primary route is required.",
+            )
+        else:
+            routing = routing_matches[0]
+
+    resources_by_id = {row.resource_id: row for row in resources}
+    if orchestration_issue is None and routing is not None:
+        missing_resource_ids = sorted({
+            operation.resource_id
+            for operation in routing.operations
+            if operation.resource_id not in resources_by_id
+        })
+        if missing_resource_ids:
+            orchestration_issue = (
+                "ROUTE_RESOURCE_NOT_FOUND",
+                "Route references missing resources: "
+                + ", ".join(missing_resource_ids),
+            )
+
+    ccr_resource_ids: set[str] = set()
+    if orchestration_issue is None and routing is not None:
+        ccr_resource_ids = {
+            operation.resource_id
+            for operation in routing.operations
+            if resources_by_id[operation.resource_id].is_constraint
+        }
+        if not ccr_resource_ids:
+            orchestration_issue = (
+                "CCR_OPERATION_NOT_FOUND",
+                "The primary route has no CCR operation.",
+            )
+
+    if orchestration_issue is None:
+        try:
+            capacity_buckets = build_capacity_buckets_from_resources(
+                resources,
+                tzinfo=ZoneInfo(str(timezone_name)),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            orchestration_issue = (
+                "CALENDAR_CAPACITY_EVIDENCE_INVALID",
+                str(error),
+            )
+
+    frozen_release_policy = _release_policy_for_evaluation(
+        planning_run=run,
+        requested_policy_id=None,
+        dbr_release_policies=dbr_release_policies,
     )
-    if orchestration_issue is not None
-    else evaluate_ccr_shadow_schedule(
-        order_id=order["PlanningOrderID"],
-        quantity=order["Quantity"],
-        routing=routing,
-        resources=resources,
-        capacity_buckets=capacity_buckets,
-        setup_transitions=_setup_transitions_from_payload([
-            SetupTransitionPayload(**row)
-            for row in run.get("SetupTransitions", [])
-        ]),
-        gantt_rows=relevant_gantt_rows,
-        active_capacity_reservations=relevant_capacity_rows,
-        requested_due_at=parse_aware(order["RequestedDueAt"]),
-        evaluated_at=evaluated_at,
-        downstream_protection_minutes=int(
-            run.get("TimeBufferMinutes", 0)
+    material_window = release_policy_settings(
+        frozen_release_policy
+    ).material_lookahead_minutes
+    material_input_keys = {
+        (str(row["ItemID"]), str(row["LocationID"]))
+        for row in order["MaterialRequirements"]
+    }
+    capacity_input_keys = {
+        (
+            bucket.resource_id,
+            bucket.bucket_start.astimezone(timezone.utc).isoformat(),
+            bucket.bucket_end.astimezone(timezone.utc).isoformat(),
+        )
+        for bucket in capacity_buckets
+        if bucket.resource_id in ccr_resource_ids
+    }
+    relevant_capacity_rows = _prefilter_mto_capacity_rows(
+        rows=list(ccr_capacity_reservations.values()),
+        allowed_keys=capacity_input_keys,
+    )
+    relevant_material_rows = _prefilter_mto_material_rows(
+        rows=list(material_planning_allocations.values()),
+        allowed_keys=material_input_keys,
+    )
+    raw_gantt_rows = schedule.get("GanttRows", [])
+    if not isinstance(raw_gantt_rows, list):
+        orchestration_issue = (
+            "SCHEDULE_GANTT_EVIDENCE_INVALID",
+            "Schedule GanttRows must be a list.",
+        )
+        raw_gantt_rows = []
+    relevant_gantt_rows = [
+        deepcopy(row)
+        for row in raw_gantt_rows
+        if isinstance(row, Mapping)
+        and str(row.get("ResourceID") or "") in ccr_resource_ids
+    ]
+
+    try:
+        selection = select_order_commitment_operational_snapshot(
+            snapshots=operational_state_snapshots,
+            evaluated_at=evaluated_at,
+            requested_snapshot_id=(
+                requested_operational_state_snapshot_id
+            ),
+        )
+    except OrderCommitmentSnapshotNotFound as error:
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=404,
+            status=error.status,
+            message=str(error),
+            details={"OperationalStateSnapshotID": error.snapshot_id},
+        )
+
+    shadow = (
+        _not_assessable_shadow(
+            order=order,
+            evaluated_at=evaluated_at,
+            code=orchestration_issue[0],
+            message=orchestration_issue[1],
+        )
+        if orchestration_issue is not None
+        else evaluate_ccr_shadow_schedule(
+            order_id=str(order["PlanningOrderID"]),
+            quantity=float(order["Quantity"]),
+            routing=routing,
+            resources=resources,
+            capacity_buckets=capacity_buckets,
+            setup_transitions=setup_transitions,
+            gantt_rows=relevant_gantt_rows,
+            active_capacity_reservations=relevant_capacity_rows,
+            requested_due_at=_parse_aware(order["RequestedDueAt"]),
+            evaluated_at=evaluated_at,
+            downstream_protection_minutes=int(
+                run.get("TimeBufferMinutes", 0)
+            ),
+            protection_threshold_percent=80.0,
+        )
+    )
+    try:
+        material = evaluate_mto_material_availability(
+            order=order,
+            snapshot_selection=selection,
+            active_material_allocations=relevant_material_rows,
+            current_demand_commitment_id=(
+                candidate_demand_commitment_id(order)
+            ),
+            evaluated_at=evaluated_at,
+            material_check_window_minutes=material_window,
+            check_material_availability=check_material_availability,
+            skip_reason=material_check_skip_reason,
+        )
+    except OrderCommitmentConflict as error:
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=409,
+            status=error.status,
+            message=str(error),
+        )
+
+    route_projection = (
+        None
+        if routing is None
+        else {
+            "ProductID": routing.product_id,
+            "RoutingID": routing.routing_id,
+            "IsPrimary": routing.is_primary,
+            "Operations": [
+                {
+                    "OperationID": row.operation_id,
+                    "ResourceID": row.resource_id,
+                    "DurationMinutes": row.duration_minutes,
+                    "Sequence": row.sequence,
+                    "AlternateResourceIDs": sorted(
+                        row.alternate_resource_ids or []
+                    ),
+                    "SetupFamily": row.setup_family,
+                }
+                for row in sorted(
+                    routing.operations, key=lambda item: item.sequence
+                )
+            ],
+        }
+    )
+    calendar_projection = {
+        "CalendarTimezone": timezone_name,
+        "CapacityBuckets": [
+            {
+                "ResourceID": row.resource_id,
+                "WindowStartAt": row.bucket_start.astimezone(
+                    timezone.utc
+                ).isoformat(),
+                "WindowEndAt": row.bucket_end.astimezone(
+                    timezone.utc
+                ).isoformat(),
+                "CapacityMinutes": row.capacity_minutes,
+            }
+            for row in sorted(
+                capacity_buckets,
+                key=lambda item: (
+                    item.resource_id,
+                    item.bucket_start,
+                    item.bucket_end,
+                ),
+            )
+        ],
+        "FrozenBaseCalendars": deepcopy(
+            run.get("FrozenBaseCalendars") or []
         ),
-        protection_threshold_percent=80.0,
+        "FrozenResourceCalendarAssignments": deepcopy(
+            run.get("FrozenResourceCalendarAssignments") or []
+        ),
+        "FrozenCalendarOverrides": deepcopy(
+            run.get("FrozenCalendarOverrides") or []
+        ),
+    }
+    selected_snapshot = selection["OperationalStateSnapshot"]
+    inventory_rows = (
+        list(selected_snapshot.inventory_buffers)
+        if isinstance(selected_snapshot, OperationalStateSnapshot)
+        else []
     )
-)
-material = evaluate_mto_material_availability(
-    order=order,
-    snapshot_selection=selection,
-    active_material_allocations=relevant_material_rows,
-    current_demand_commitment_id=candidate_demand_commitment_id(order),
-    evaluated_at=evaluated_at,
-    material_check_window_minutes=material_window,
-    check_material_availability=check_material_availability,
-    skip_reason=material_check_skip_reason,
-)
+    availability_rows = (
+        list(selected_snapshot.material_availability)
+        if isinstance(selected_snapshot, OperationalStateSnapshot)
+        else []
+    )
+    material_cutoff_value = material["MaterialEligibilityCutoffAt"]
+    try:
+        basis = build_order_commitment_basis(
+            baseline_planning_run_id=str(run["RunID"]),
+            baseline_operational_state_snapshot_id=(
+                str(run["OperationalStateSnapshotID"])
+                if run.get("OperationalStateSnapshotID") is not None
+                else None
+            ),
+            baseline_schedule_fingerprint=(
+                planning_schedule_fingerprint(run)
+                or canonical_fingerprint(schedule)
+            ),
+            master_data_version_id=str(master["VersionID"]),
+            operating_model_configuration_id=run.get(
+                "OperatingModelConfigurationID"
+            ),
+            operating_model_fingerprint=run.get(
+                "OperatingModelFingerprint"
+            ),
+            scheduling_configuration_id=run.get(
+                "SchedulingConfigurationID"
+            ),
+            ddmrp_configuration_id=run.get("DDMRPConfigurationID"),
+            release_policy_version_id=run.get("ReleasePolicyVersionID"),
+            frozen_release_policy_fingerprint=canonical_fingerprint(
+                release_policy_evidence(frozen_release_policy)
+            ),
+            routing_fingerprint=canonical_fingerprint(route_projection),
+            calendar_fingerprint=canonical_fingerprint(
+                calendar_projection
+            ),
+            time_buffer_minutes=int(run.get("TimeBufferMinutes", 0)),
+            material_check_window_minutes=material_window,
+            capacity_assessment_cutoff_at=_parse_aware(
+                shadow["CapacityAssessmentCutoffAt"]
+            ),
+            material_eligibility_cutoff_at=(
+                _parse_aware(material_cutoff_value)
+                if material_cutoff_value is not None
+                else None
+            ),
+            check_material_availability=check_material_availability,
+            material_skip_reason=material_check_skip_reason,
+            snapshot_selection=selection,
+            relevant_capacity_window_keys=[
+                tuple(row) for row in shadow["RelevantCapacityWindowKeys"]
+            ],
+            capacity_ledger_rows=relevant_capacity_rows,
+            relevant_material_keys=sorted(material_input_keys),
+            inventory_buffer_rows=inventory_rows,
+            material_availability_rows=availability_rows,
+            material_ledger_rows=relevant_material_rows,
+        )
+        return create_order_commitment_evaluation(
+            order=order,
+            shadow_schedule=shadow,
+            material_assessment=material,
+            basis=basis,
+            protection_policy=REFERENCE_CCR_PROTECTION_POLICY,
+            evaluated_at=evaluated_at,
+        )
+    except OrderCommitmentConflict as error:
+        return _order_commitment_error(
+            endpoint=endpoint,
+            status_code=409,
+            status=error.status,
+            message=str(error),
+        )
 ~~~
-
-Compute schedule fingerprint with `plan_publication.schedule_fingerprint(run)` and fallback to `canonical_fingerprint(schedule)` only if absent. Calendar fingerprint covers sorted effective bucket projections and frozen calendar rows. Route fingerprint covers the selected canonical route. Frozen release fingerprint covers `FrozenReleasePolicy` (or resolved version), including `None`.
-
-Call `build_order_commitment_basis` with all exact run/config fields, `shadow["RelevantCapacityWindowKeys"]`, requirement item/location keys, selected snapshot rows, and live ledgers. Then call `create_order_commitment_evaluation` with `REFERENCE_CCR_PROTECTION_POLICY`.
 
 - [ ] **Step 4: Verify and commit**
 

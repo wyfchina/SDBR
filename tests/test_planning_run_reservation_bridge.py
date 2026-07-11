@@ -16,22 +16,30 @@ def _batches(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, ob
     return {
         "PRB-1": {
             "ReservationBatchID": "PRB-1",
+            "DemandCommitmentID": "DC-1",
+            "DemandClass": "MTO",
             "Status": status,
+            "CapacityReservationIDs": ["CCR-1"],
+            "MaterialAllocationIDs": ["MA-1"],
             "Details": {"source": "planner-confirmation"},
         },
         "PRB-2": {
             "ReservationBatchID": "PRB-2",
+            "DemandCommitmentID": "DC-2",
+            "DemandClass": "MTA",
             "Status": "LinkedToFormalOrder",
+            "CapacityReservationIDs": ["CCR-2"],
+            "MaterialAllocationIDs": ["MA-2"],
         },
     }
 
 
-def _capacities() -> dict[str, dict[str, object]]:
+def _capacities(*, status: str = "ActivePlanReservation") -> dict[str, dict[str, object]]:
     return {
         "CCR-1": {
             "CapacityReservationID": "CCR-1",
             "ReservationBatchID": "PRB-1",
-            "Status": "ActivePlanReservation",
+            "Status": status,
             "Details": {"resource": "CCR-A"},
         },
         "CCR-2": {
@@ -74,7 +82,32 @@ def _occurred_at() -> datetime:
     return datetime(2026, 7, 20, 12, tzinfo=timezone.utc)
 
 
-def test_freeze_copies_only_explicit_eligible_batches_in_caller_order():
+def _run_graph_operation(
+    operation: str,
+    *,
+    batches: dict[str, dict[str, object]],
+    capacities: dict[str, dict[str, object]],
+    allocations: dict[str, dict[str, object]],
+) -> object:
+    if operation == "freeze":
+        return freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+    return transition_planning_reservations_for_run(
+        run_id="RUN-1",
+        run_status="Completed",
+        batch_ids=["PRB-1"],
+        occurred_at=_occurred_at(),
+        batches=batches,
+        capacity_reservations=capacities,
+        material_allocations=allocations,
+    )
+
+
+def test_freeze_copies_only_explicit_eligible_batches_in_caller_and_ledger_order():
     frozen = freeze_planning_reservations(
         batch_ids=["PRB-2", "PRB-1"],
         batches=_batches(),
@@ -88,12 +121,12 @@ def test_freeze_copies_only_explicit_eligible_batches_in_caller_order():
         "PRB-1",
     ]
     assert [row["CapacityReservationID"] for row in frozen["CapacityReservations"]] == [
-        "CCR-1",
         "CCR-2",
+        "CCR-1",
     ]
     assert [row["MaterialAllocationID"] for row in frozen["MaterialAllocations"]] == [
-        "MA-1",
         "MA-2",
+        "MA-1",
     ]
 
 
@@ -117,7 +150,7 @@ def test_freeze_rejects_duplicate_missing_or_ineligible_batch_references(
         )
 
 
-def test_freeze_deep_copies_selected_batches_and_linked_children_without_aliasing():
+def test_freeze_deep_copies_selected_batches_and_declared_children_without_aliasing():
     batches = _batches()
     capacities = _capacities()
     allocations = _allocations()
@@ -143,7 +176,9 @@ def test_freeze_deep_copies_selected_batches_and_linked_children_without_aliasin
     assert frozen["CapacityReservations"][0]["Details"] == {
         "resource": "changed-result"
     }
-    assert frozen["MaterialAllocations"][0]["Details"] == {"item": "changed-result"}
+    assert frozen["MaterialAllocations"][0]["Details"] == {
+        "item": "changed-result"
+    }
 
 
 def test_completed_run_converts_capacity_but_keeps_material_until_authority_handoff():
@@ -195,13 +230,14 @@ def test_failed_or_dead_letter_run_holds_batch_capacity_and_still_active_materia
     assert result["MaterialAllocations"]["MA-2"]["EventType"] == f"PlanningRun{run_status}"
 
 
-def test_queued_run_returns_linked_record_copies_without_premature_transition():
-    batches = _batches()
-    capacities = _capacities()
-    allocations = _allocations()
+def test_queued_recovery_from_held_batch_returns_unchanged_deep_copies():
+    batches = _batches(status="HeldForPlanningError")
+    capacities = _capacities(status="HeldForPlanningError")
+    allocations = _allocations(status="HeldForPlanningError")
+    before = deepcopy((batches, capacities, allocations))
 
     result = transition_planning_reservations_for_run(
-        run_id="RUN-1",
+        run_id="RUN-RECOVERY",
         run_status="Queued",
         batch_ids=["PRB-1"],
         occurred_at=_occurred_at(),
@@ -210,14 +246,176 @@ def test_queued_run_returns_linked_record_copies_without_premature_transition():
         material_allocations=allocations,
     )
 
-    assert result["Batches"]["PRB-1"]["Status"] == "ActivePlanReservation"
-    assert result["CapacityReservations"]["CCR-1"]["Status"] == "ActivePlanReservation"
-    assert result["MaterialAllocations"]["MA-1"]["Status"] == "ActivePlanReservation"
+    assert (batches, capacities, allocations) == before
+    assert result["Batches"] == batches
+    assert result["CapacityReservations"] == capacities
+    assert result["MaterialAllocations"] == allocations
     assert "PlanningRunID" not in result["Batches"]["PRB-1"]
     result["Batches"]["PRB-1"]["Details"]["source"] = "changed-result"  # type: ignore[index]
     assert batches["PRB-1"]["Details"] == {"source": "planner-confirmation"}
-    assert capacities == _capacities()
-    assert allocations == _allocations()
+
+
+def test_completed_recovery_converts_held_batch_and_capacity_without_releasing_material():
+    result = transition_planning_reservations_for_run(
+        run_id="RUN-RECOVERY",
+        run_status="Completed",
+        batch_ids=["PRB-1"],
+        occurred_at=_occurred_at(),
+        batches=_batches(status="HeldForPlanningError"),
+        capacity_reservations=_capacities(status="HeldForPlanningError"),
+        material_allocations=_allocations(status="HeldForPlanningError"),
+    )
+
+    assert result["Batches"]["PRB-1"]["Status"] == "ConvertedToScheduledOccupancy"
+    assert (
+        result["CapacityReservations"]["CCR-1"]["Status"]
+        == "ConvertedToScheduledOccupancy"
+    )
+    assert result["MaterialAllocations"]["MA-1"]["Status"] == "HeldForPlanningError"
+    assert result["MaterialAllocations"]["MA-1"]["EventType"] == "PlanningRunCompleted"
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_missing_declared_child_before_freeze_or_transition(operation: str):
+    batches = _batches()
+    capacities = _capacities()
+    capacities.pop("CCR-1")
+
+    with pytest.raises(ReservationBatchReferenceError, match="missing"):
+        _run_graph_operation(
+            operation,
+            batches=batches,
+            capacities=capacities,
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_orphan_child_linked_to_selected_batch(operation: str):
+    capacities = _capacities()
+    capacities["CCR-ORPHAN"] = {
+        "CapacityReservationID": "CCR-ORPHAN",
+        "ReservationBatchID": "PRB-1",
+        "Status": "ActivePlanReservation",
+    }
+
+    with pytest.raises(ReservationBatchReferenceError, match="orphan"):
+        _run_graph_operation(
+            operation,
+            batches=_batches(),
+            capacities=capacities,
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_child_canonical_id_that_differs_from_mapping_key_or_ledger_id(
+    operation: str,
+):
+    capacities = _capacities()
+    capacities["CCR-1"]["CapacityReservationID"] = "CCR-MISMATCH"
+
+    with pytest.raises(ReservationBatchReferenceError, match="canonical ID"):
+        _run_graph_operation(
+            operation,
+            batches=_batches(),
+            capacities=capacities,
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_duplicate_canonical_child_identity(operation: str):
+    batches = _batches()
+    batches["PRB-1"]["CapacityReservationIDs"] = ["CCR-1", "CCR-DUP"]
+    capacities = _capacities()
+    capacities["CCR-DUP"] = {
+        "CapacityReservationID": "CCR-1",
+        "ReservationBatchID": "PRB-1",
+        "Status": "ActivePlanReservation",
+    }
+
+    with pytest.raises(ReservationBatchReferenceError, match="duplicate canonical"):
+        _run_graph_operation(
+            operation,
+            batches=batches,
+            capacities=capacities,
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_declared_child_with_wrong_batch_link(operation: str):
+    capacities = _capacities()
+    capacities["CCR-1"]["ReservationBatchID"] = "PRB-2"
+
+    with pytest.raises(ReservationBatchReferenceError, match="wrong ReservationBatchID"):
+        _run_graph_operation(
+            operation,
+            batches=_batches(),
+            capacities=capacities,
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize("field", ["CapacityReservationIDs", "MaterialAllocationIDs"])
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_rejects_malformed_authoritative_child_lists(field: str, operation: str):
+    batches = _batches()
+    batches["PRB-1"][field] = "not-a-list"
+
+    with pytest.raises(ReservationBatchReferenceError, match="must be a list"):
+        _run_graph_operation(
+            operation,
+            batches=batches,
+            capacities=_capacities(),
+            allocations=_allocations(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("collection", "record_id", "field"),
+    [
+        ("capacities", "CCR-1", "CapacityReservationID"),
+        ("allocations", "MA-1", "MaterialAllocationID"),
+        ("capacities", "CCR-1", "ReservationBatchID"),
+        ("allocations", "MA-1", "ReservationBatchID"),
+    ],
+)
+def test_rejects_declared_children_with_missing_identity_fields(
+    collection: str, record_id: str, field: str
+):
+    capacities = _capacities()
+    allocations = _allocations()
+    records = capacities if collection == "capacities" else allocations
+    records[record_id].pop(field)
+
+    with pytest.raises(ReservationBatchReferenceError, match="identity"):
+        freeze_planning_reservations(
+            batch_ids=["PRB-1"],
+            batches=_batches(),
+            capacity_reservations=capacities,
+            material_allocations=allocations,
+        )
+
+
+@pytest.mark.parametrize("operation", ["freeze", "transition"])
+def test_invalid_graph_never_mutates_inputs_or_returns_partial_results(operation: str):
+    batches = _batches()
+    capacities = _capacities()
+    allocations = _allocations()
+    capacities.pop("CCR-1")
+    before = deepcopy((batches, capacities, allocations))
+
+    with pytest.raises(ReservationBatchReferenceError, match="missing"):
+        _run_graph_operation(
+            operation,
+            batches=batches,
+            capacities=capacities,
+            allocations=allocations,
+        )
+
+    assert (batches, capacities, allocations) == before
 
 
 @pytest.mark.parametrize(

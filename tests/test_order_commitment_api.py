@@ -179,6 +179,55 @@ ALLOWED_STORE_CHANGES = {
 }
 
 
+class TestOrderCommitmentUiContract:
+    """UI-COMMIT-001 / BE-SDBR-010: safe MTO read-model consumption."""
+
+    def test_api_ui_contract_contains_every_field_consumed_by_javascript(self):
+        client, _, fixture = _order_commitment_client()
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+
+        workbench = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        )
+        detail = client.get(
+            f"/planner/workbench/order-commitments/{evaluation_id}",
+            headers=_planner_headers(),
+        )
+
+        assert workbench.status_code == 200
+        assert detail.status_code == 200
+        row = workbench.json()["Data"]["Rows"][0]
+        body = detail.json()["Data"]
+        assert set(row) == set(ORDER_COMMITMENT_ROW_FIELDS)
+        assert set(body) == set(DETAIL_FIELDS)
+        assert {
+            "OrderID", "DemandLineID", "ProductID", "Quantity", "Uom",
+            "RequestedDueAt", "BusinessPriority",
+        } <= set(body["Order"])
+        assert {
+            "Status", "RequestedDateAssessment", "EarliestSafeAssessment",
+            "SelectedAssessment",
+        } == set(body["CapacityEvidence"])
+        assert {
+            "Status", "CheckEnabled", "SkipReason", "OperationalStateSnapshotID",
+            "OperationalStateFreshnessStatus", "Lines",
+        } <= set(body["MaterialEvidence"])
+        assert {
+            "Decision", "AllowedActions", "ThresholdState",
+            "RequiresPlannerDecision", "RequiresCcrAcknowledgement",
+            "RequiresMaterialAcknowledgement", "ActionAcknowledgementRequirements",
+        } == set(body["Recommendation"])
+        assert {"Decision", "DecidedBy", "DecidedAt", "Reason", "AcceptedPromiseAt"} <= set(body["Decision"])
+        assert {"DemandCommitmentID", "ReservationBatchID", "Status"} == set(body["Reservation"])
+        assert {"RecommendationOnly", "ExternalOrderAcceptance", "PlanningRunCreation", "ProductionMutation"} <= set(body["Boundary"])
+
+
 def _public_store_snapshot(store: WorkbenchStateStore):
     return {
         name: deepcopy(getattr(store, name))

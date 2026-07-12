@@ -5767,6 +5767,113 @@ class TestOrderCommitmentUiShell:
         ]
 
 
+class TestOrderCommitmentUiReadFlow:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_script_uses_workbench_detail_endpoints_and_revision_header(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "/planner/workbench/order-commitments/workbench" in script
+        assert "/planner/workbench/order-commitments/" in script
+        assert '"X-Workbench-Revision"' in script
+        assert "loadOrderCommitments" in script
+        assert "openOrderCommitmentDetail" in script
+
+    def test_every_backend_enum_has_exact_chinese_and_english_label(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        labels = {
+            "RecommendAccept": ("建议接受", "Recommend accept"),
+            "PlannerConfirmationRequired": ("需计划员确认", "Planner confirmation required"),
+            "CapacityAcceptableMaterialPending": ("产能可接受，物料待确认", "Capacity acceptable, material pending"),
+            "MaterialEvidenceRequired": ("待物料确认", "Material evidence required"),
+            "RecommendLaterPromise": ("建议调整交期", "Recommend later promise"),
+            "DoNotRecommendAccept": ("暂不建议接受", "Do not recommend acceptance"),
+            "Feasible": ("物料可行", "Material feasible"),
+            "SkippedPendingConfirmation": ("物料待确认（已跳过检查）", "Material pending (check skipped)"),
+            "EvidenceInsufficient": ("物料证据不足", "Material evidence insufficient"),
+            "Shortage": ("物料短缺", "Material shortage"),
+            "OnTime": ("可按请求日期完成", "On time"),
+            "LaterSafeDate": ("需采用后续安全日期", "Later safe date"),
+            "NotAssessable": ("暂不可评估", "Not assessable"),
+            "Fresh": ("新鲜", "Fresh"), "Stale": ("已过期", "Stale"),
+            "Future": ("时间异常", "Future"), "Missing": ("缺失", "Missing"),
+            "Protected": ("保护范围内", "Protected"), "Watch": ("需要关注", "Watch"),
+            "NearLimit": ("接近上限", "Near limit"), "Overloaded": ("超载", "Overloaded"),
+            "ApprovedWithin": ("批准保护线内", "Within approved threshold"),
+            "ApprovedExceeded": ("超过批准保护线", "Approved threshold exceeded"),
+            "Covered": ("已覆盖", "Covered"),
+            "PlannedAllocationPrepared": ("计划分配已准备", "Planned allocation prepared"),
+            "PendingConfirmation": ("待确认", "Pending confirmation"),
+            "AwaitingPlannerDecision": ("待计划员决定", "Awaiting planner decision"),
+            "AcceptedPendingFormalSchedule": ("已接受，待正式排程", "Accepted, pending formal schedule"),
+            "Rejected": ("已拒绝", "Rejected"), "Superseded": ("已由新评估替代", "Superseded by newer evaluation"),
+            "NotReserved": ("尚未预留", "Not reserved"),
+            "ActivePlanReservation": ("计划预留有效", "Active plan reservation"),
+            "LinkedToFormalOrder": ("已关联正式订单", "Linked to formal order"),
+            "ConvertedToScheduledOccupancy": ("已转正式排程占用", "Converted to scheduled occupancy"),
+            "HeldForPlanningError": ("排程异常待处理", "Held for planning error"),
+            "AdjustmentRequired": ("需要调整", "Adjustment required"),
+            "Released": ("已释放", "Released"), "Cancelled": ("已取消", "Cancelled"),
+            "ReservationEvidenceMissing": ("预留证据缺失", "Reservation evidence missing"),
+            "None": ("无异常", "No exception"), "AssessmentBlocked": ("评估受阻", "Assessment blocked"),
+            "MaterialEvidenceBlocked": ("物料证据受阻", "Material evidence blocked"),
+            "PlanningErrorPending": ("排程异常待处理", "Planning error pending"),
+            "ReferenceFallback": ("80% 默认参考，需确认", "80% reference fallback; confirmation required"),
+            "ApprovedOperatingModel": ("批准的运行模型保护线", "Approved operating-model threshold"),
+            "AcceptRequestedDate": ("接受请求日期", "Accept requested date"),
+            "ConditionallyAcceptRequestedDate": ("条件接受请求日期", "Conditionally accept requested date"),
+            "AcceptRecommendedDate": ("接受建议日期", "Accept recommended date"),
+            "ConditionallyAcceptRecommendedDate": ("条件接受建议日期", "Conditionally accept recommended date"),
+            "Reevaluate": ("重新评估", "Re-evaluate"), "Reject": ("拒绝", "Reject"),
+            "OrderCommitmentEvaluated": ("已评估", "Commitment evaluated"),
+            "OrderCommitmentReevaluated": ("已重新评估", "Commitment re-evaluated"),
+            "OrderCommitmentEvaluationSuperseded": ("评估已替代", "Evaluation superseded"),
+            "OrderCommitmentAccepted": ("已接受", "Commitment accepted"),
+            "OrderCommitmentRejected": ("已拒绝", "Commitment rejected"),
+            "LatestCurrent": ("最新当前快照", "Latest current snapshot"),
+            "Explicit": ("显式快照", "Explicit snapshot"),
+            "OnHand": ("在手", "On hand"),
+            "OnHandAndInbound": ("在手与在途", "On hand and inbound"),
+            "NotPerformed": ("未执行", "Not performed"),
+        }
+        for enum, (zh, en) in labels.items():
+            assert f'{enum}: "{zh}"' in script
+            assert f'{enum}: "{en}"' in script
+
+    def test_render_uses_reservation_exception_and_allowed_actions_fields(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function renderOrderCommitments" in script
+        assert "row.ReservationStatus" in script
+        assert "row.ExceptionStatus" in script
+        assert "row.AllowedActions" in script
+        assert "viewDetails" in script
+
+    def test_detail_renderer_has_no_json_stringify_or_raw_payload_path(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        start = script.index("function renderOrderCommitmentDetail")
+        detail_renderer = script[start:script.index("document.addEventListener", start)]
+
+        assert "JSON.stringify" not in detail_renderer
+        assert ".Basis" not in detail_renderer
+        assert "SourcePayload" not in detail_renderer
+        assert "businessValue(detail.MaterialEvidence?.CheckEnabled)" in detail_renderer
+        assert "businessValue(detail.Recommendation?.RequiresPlannerDecision)" in detail_renderer
+        assert "businessValue(detail.Boundary?.RecommendationOnly)" in detail_renderer
+        for field in (
+            "Order", "CapacityEvidence", "MaterialEvidence", "Recommendation",
+            "Decision", "Reservation", "AuditHistory", "TechnicalDetails",
+        ):
+            assert f"detail.{field}" in detail_renderer
+
+
 def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     # UI-CALENDAR-001 / BE-DATA-010
     client = TestClient(create_app())

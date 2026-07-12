@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 5.35 |
+| 文档版本 | 5.36 |
 | 日期 | 2026-07-11 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
@@ -272,7 +272,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-DDMRP-003 DDMRP 版本化评估与契约门控工作台
 
-**状态：未开始**
+**状态：已验证待用户确认**
 
 页面位置：独立导航页 `物料计划 / Materials Planning` 的版本化只读补货评估工作台。
 
@@ -289,6 +289,8 @@ UI 必须帮助计划员快速回答五个问题：
 - 直接展示契约校验后的权威结果，不接收或展示调用方自报 Advice/BOM/物料/产能证据，不在界面推导目标日期或重新计算 DDAE 主参数。
 - 日常计划员流程不得暴露原始 DDAE、ERP/MRP 或主数据 JSON；技术追溯信息以安全摘要和稳定标识展示。
 - 公开演示、Reviewed Draft 或其他非生产权威证据只能解释只读行，不得显示为可执行或影响共享运行预留台账。
+
+验证证据：2026-07-12 使用 `tests.ddmrp_browser_acceptance_app:create_runtime_app` 在 `http://127.0.0.1:8011/planner/workbench#material-planning` 完成 seeded/empty/error/403/409 浏览器矩阵；定向测试 398 passed、全量测试 848 passed（各保留 1 个既有 `StarletteDeprecationWarning`），`python -m compileall -q sdbr` 和本地 Node `--check sdbr/web/planner-workbench.js` 均退出 0。浏览器记录为 `.tmp/ddmrp-ui-acceptance/browser-report.md`，截图为 `.tmp/ddmrp-ui-acceptance/seeded-1280x720.png`、`.tmp/ddmrp-ui-acceptance/seeded-1920x1080.png`、`.tmp/ddmrp-ui-acceptance/seeded-390x844.png`、`.tmp/ddmrp-ui-acceptance/empty-1280x720.png`、`.tmp/ddmrp-ui-acceptance/error-1280x720.png`、`.tmp/ddmrp-ui-acceptance/403-1280x720.png`、`.tmp/ddmrp-ui-acceptance/409-1280x720.png`。未开始 `UI-DDMRP-004`，不得视为用户确认或开启 `CONTRACT-GATE-DDMRP-ACTIVATION-001`。
 
 ### UI-DDMRP-004 DDMRP Buy/Make 计划员确认
 
@@ -1151,6 +1153,7 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.36 | 2026-07-11 | `UI-DDMRP-003` 完成 seeded/empty/error/403/409 浏览器矩阵及 1280x720、1920x1080、390x844 响应式验证，状态推进为已验证待用户确认；保留只读边界，不提供确认、候选、预留、分配或外部订单动作。`UI-DDMRP-004` 保持未开始，且不构成用户确认或 Activation gate 开启。 |
 | 5.35 | 2026-07-11 | 新增 `UI-DDMRP-003` 版本化只读补货评估与契约门控工作台，以及后续 `UI-DDMRP-004` Buy/Make 人工确认单元；两单元分开验收，当前不暴露确认动作或外部订单创建 |
 | 5.34 | 2026-07-09 | 完成 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if 第一版：排程结果页新增冲击评估面板，仿真结果页新增 Simio 使用条件 hover/focus 提示；状态为已验证待用户确认 |
 | 5.33 | 2026-07-09 | 启动 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if UI 规格：排程结果页规划只读/轻编辑 what-if 面板，并在仿真结果页规划 Simio 使用条件 hover/focus 提示；状态待实现、未用户确认 |

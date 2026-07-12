@@ -69,3 +69,11 @@ No browser page was opened. The following required artifacts do not exist and mu
 4. The `sdbr-reset-test-data` console entrypoint is unavailable on `PATH`; `python -m sdbr.test_data` is a successful project-module fallback, not a substitute for a registered console-script installation.
 
 Resolving item 1 requires an explicitly approved follow-up to make the Task 11 factory import path runtime-importable. No such scope change was made here.
+
+## Completion Evidence After 5d664c2 (2026-07-12)
+
+- `5d664c2` made the required `tests.ddmrp_browser_acceptance_app:create_runtime_app` target importable. The package marker exposed one pre-existing test-only sibling import; changing `tests/test_ddmrp_replenishment_view.py` to import `tests.test_ddmrp_replenishment` restored collection without changing production behavior.
+- Fresh verification used writable basetemps outside the inherited locked `.tmp` path: `python -m compileall -q sdbr` and local `node.exe --check sdbr/web/planner-workbench.js` exited 0; the exact Task 12 focused selection passed 398 tests and the full suite passed 848 tests. Each suite emitted one existing `StarletteDeprecationWarning`.
+- The deterministic acceptance database was rebuilt through `python -m sdbr.test_data --database-path .tmp/ddmrp-ui-acceptance/workbench-state.db`. The bounded fixture lifecycle started on port 8011, passed its health check, found exactly one `TST-DDMRP-REPLENISHMENT-READONLY-20260711` catalog case, and verified the exact seeded summary and four-row set.
+- Browser evidence completed for seeded 1280x720, 1920x1080, and 390x844 plus empty/error/403/409 at 1280x720. Explicit HTTP observations were seeded 200, empty 200, error 500, 403 403, and 409 409. The report and seven fixed screenshot paths exist under `.tmp/ddmrp-ui-acceptance/`.
+- The server was stopped and port 8011 was independently confirmed free. `BE-DDMRP-007` is now `[VERIFIED]`; `UI-DDMRP-003` is `已验证待用户确认`. `BE-DDMRP-008`, `BE-DDMRP-009`, `UI-DDMRP-004`, Activation A1-A8, and `CONTRACT-GATE-DDMRP-ACTIVATION-001` remain unchanged and closed. No user confirmation was recorded.

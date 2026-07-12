@@ -14,7 +14,14 @@ from sdbr.operational_state import (
     OperationalStateSnapshot,
     evaluate_operational_state_freshness,
 )
-from sdbr.planning_commitments import create_demand_commitment
+from sdbr.planning_commitments import (
+    create_demand_commitment,
+    normalize_demand_commitment,
+)
+from sdbr.planning_reservations import (
+    PlanningReservationWriteSet,
+    prepare_reservation_confirmation,
+)
 from sdbr.planning_reservation_view import (
     ACTIVE_PLANNING_STATUSES,
     planning_allocated_qty_for_other_demands,
@@ -1290,3 +1297,128 @@ def supersede_open_order_commitment_evaluations(
         updated["RecordVersion"] = int(row["RecordVersion"]) + 1
         updates[evaluation_id] = updated
     return updates
+
+
+def _decision_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise OrderCommitmentConflict(f"{field} is required.")
+    return value.strip()
+
+
+def prepare_mto_acceptance(
+    *,
+    evaluation: Mapping[str, object],
+    existing_commitments: Mapping[str, dict[str, object]],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> PlanningReservationWriteSet:
+    normalized_decision_id = _decision_text(decision_id, "DecisionID")
+    normalized_actor = _decision_text(decided_by, "DecidedBy")
+    _decision_text(reason, "Reason")
+    decided_at = _utc(require_aware(decided_at, "DecidedAt"))
+    if evaluation["Status"] != "AwaitingPlannerDecision":
+        raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
+    context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
+    if (
+        context is None
+        or decision not in evaluation["Recommendation"]["AllowedActions"]
+    ):
+        raise OrderCommitmentConflict("Decision is not allowed.")
+    capacity_status, material_status, candidate_key = context
+    if evaluation["ShadowSchedule"]["Status"] != capacity_status:
+        raise OrderCommitmentConflict("Decision capacity context does not match.")
+    if evaluation["MaterialAssessment"]["Status"] != material_status:
+        raise OrderCommitmentConflict("Decision material context does not match.")
+    requirements = action_acknowledgement_requirements(
+        action=decision,
+        requires_ccr_acknowledgement=bool(
+            evaluation["Recommendation"]["RequiresCcrAcknowledgement"]
+        ),
+        requires_material_acknowledgement=bool(
+            evaluation["Recommendation"]["RequiresMaterialAcknowledgement"]
+        ),
+    )
+    if requirements["RequiresCcrAcknowledgement"] and not ccr_risk_acknowledged:
+        raise OrderCommitmentConflict("CCR risk acknowledgement is required.")
+    if (
+        requirements["RequiresMaterialAcknowledgement"]
+        and not material_risk_acknowledged
+    ):
+        raise OrderCommitmentConflict("Material risk acknowledgement is required.")
+    candidate = evaluation["ShadowSchedule"].get(candidate_key)
+    if not isinstance(candidate, Mapping):
+        raise OrderCommitmentConflict("Selected capacity assessment is missing.")
+    accepted_promise_at = _parse_aware(candidate["PromiseAt"])
+    for row in candidate.get("ReservationRequests", []):
+        if _parse_aware(row["LatestAllowedCompletionAt"]) <= decided_at:
+            raise OrderCommitmentConflict("Selected reservation window has expired.")
+
+    order = evaluation["Order"]
+    demand = create_demand_commitment(
+        demand_source_type="MTOCustomerOrder",
+        source_system=order["SourceSystem"],
+        source_object_type=order["SourceObjectType"],
+        source_object_id=order["OrderID"],
+        source_object_version=order["OrderVersion"],
+        demand_line_id=order["DemandLineID"],
+        item_or_product_id=order["ProductID"],
+        location_id=order["LocationID"],
+        quantity=order["Quantity"],
+        uom=order["Uom"],
+        required_at=accepted_promise_at,
+        demand_class="MTO",
+        trace_id=order["TraceID"],
+    )
+    demand.update({
+        "OrderCommitmentEvaluationID": evaluation["EvaluationID"],
+        "BaselinePlanningRunID": evaluation["Basis"]["BaselinePlanningRunID"],
+        "OperatingModelConfigurationID": evaluation["Basis"][
+            "OperatingModelConfigurationID"
+        ],
+        "OperatingModelFingerprint": evaluation["Basis"][
+            "OperatingModelFingerprint"
+        ],
+        "SchedulingConfigurationID": evaluation["Basis"][
+            "SchedulingConfigurationID"
+        ],
+        "DDMRPConfigurationID": evaluation["Basis"]["DDMRPConfigurationID"],
+        "ReleasePolicyVersionID": evaluation["Basis"][
+            "ReleasePolicyVersionID"
+        ],
+        "RoutingID": order["RoutingID"],
+        "BusinessPriority": order["BusinessPriority"],
+        "AcceptedPromiseAt": accepted_promise_at.isoformat(),
+        "MaterialCommitmentStatus": (
+            "PlannedAllocationPrepared"
+            if material_status == "Feasible"
+            else "PendingConfirmation"
+        ),
+        "PendingMaterialRequirements": (
+            []
+            if material_status == "Feasible"
+            else deepcopy(evaluation["MaterialAssessment"]["PendingRequirements"])
+        ),
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    })
+    demand = normalize_demand_commitment(demand)
+    material_requests = (
+        evaluation["MaterialAssessment"]["AllocationRequests"]
+        if material_status == "Feasible"
+        else []
+    )
+    return prepare_reservation_confirmation(
+        demand_commitment=demand,
+        existing_commitments=existing_commitments,
+        confirmation_id=normalized_decision_id,
+        confirmed_by=normalized_actor,
+        confirmed_at=decided_at,
+        capacity_requests=candidate.get("ReservationRequests", []),
+        material_requests=material_requests,
+    )

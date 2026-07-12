@@ -1454,3 +1454,314 @@ class TestOrderCommitmentEvaluationIdentity:
             candidate=candidate,
             superseded_at=self.evaluated_at,
         ) == {}
+
+
+class TestOrderCommitmentAcceptancePreparation:
+    """BE-SDBR-006 through BE-SDBR-010: MTO decision preparation."""
+
+    evaluated_at = TestOrderCommitmentEvaluationIdentity.evaluated_at
+
+    @classmethod
+    def _evaluation(cls, **changes: object) -> dict[str, object]:
+        return TestOrderCommitmentEvaluationIdentity._evaluation(**changes)
+
+    @classmethod
+    def _shadow_for_action(cls, action: str, *, threshold_exceeded: bool = False) -> dict[str, object]:
+        candidate = TestOrderCommitmentEvaluationIdentity._shadow()[
+            "RequestedDateAssessment"
+        ]
+        assert isinstance(candidate, dict)
+        candidate = deepcopy(candidate)
+        if action in {
+            "AcceptRecommendedDate",
+            "ConditionallyAcceptRecommendedDate",
+        }:
+            candidate["PromiseAt"] = (
+                cls.evaluated_at + timedelta(hours=2)
+            ).isoformat()
+            return TestOrderCommitmentEvaluationIdentity._shadow(
+                Status="LaterSafeDate",
+                SelectedAssessment={"ThresholdExceeded": threshold_exceeded},
+                EarliestSafeAssessment=candidate,
+            )
+        return TestOrderCommitmentEvaluationIdentity._shadow(
+            SelectedAssessment={"ThresholdExceeded": threshold_exceeded}
+        )
+
+    @classmethod
+    def _material_for_action(cls, action: str) -> dict[str, object]:
+        if action in {
+            "ConditionallyAcceptRequestedDate",
+            "ConditionallyAcceptRecommendedDate",
+        }:
+            return TestOrderCommitmentEvaluationIdentity._material(
+                Status="SkippedPendingConfirmation",
+                CheckEnabled=False,
+                SkipReason="Planner requested capacity-only assessment.",
+                AllocationRequests=[],
+                PendingRequirements=[{
+                    "RequirementLineID": "10",
+                    "ItemID": "RM-1",
+                    "LocationID": "MAIN",
+                    "RequiredQty": 2.0,
+                    "Uom": "EA",
+                }],
+            )
+        return TestOrderCommitmentEvaluationIdentity._material()
+
+    @classmethod
+    def _evaluation_for_action(
+        cls,
+        action: str,
+        *,
+        policy: CcrProtectionPolicy | None = None,
+        threshold_exceeded: bool = False,
+    ) -> dict[str, object]:
+        return cls._evaluation(
+            shadow_schedule=cls._shadow_for_action(
+                action,
+                threshold_exceeded=threshold_exceeded,
+            ),
+            material_assessment=cls._material_for_action(action),
+            protection_policy=policy or CcrProtectionPolicy(
+                75.0, "ApprovedOperatingModel", True, "OMC-1"
+            ),
+        )
+
+    @classmethod
+    def _prepare(
+        cls,
+        evaluation: dict[str, object],
+        action: str,
+        **changes: object,
+    ) -> object:
+        values: dict[str, object] = {
+            "evaluation": evaluation,
+            "existing_commitments": {},
+            "decision_id": "DEC-MTO-1",
+            "decision": action,
+            "decided_by": "planner-1",
+            "decided_at": cls.evaluated_at,
+            "reason": "Planner reviewed frozen evidence.",
+            "ccr_risk_acknowledged": False,
+            "material_risk_acknowledged": False,
+        }
+        values.update(changes)
+        return order_commitment_evaluation.prepare_mto_acceptance(**values)  # type: ignore[arg-type]
+
+    def test_requested_feasible_builds_canonical_mto_demand_and_material_rows(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+
+        write_set = self._prepare(
+            evaluation,
+            "AcceptRequestedDate",
+        )
+
+        assert write_set.demand_commitment["DemandSourceType"] == "MTOCustomerOrder"
+        assert write_set.demand_commitment["DemandClass"] == "MTO"
+        assert write_set.demand_commitment["Status"] == "Active"
+        assert write_set.demand_commitment["AcceptedPromiseAt"] == (
+            self.evaluated_at + timedelta(hours=1)
+        ).isoformat()
+        assert len(write_set.capacity_reservations) == 1
+        assert len(write_set.material_allocations) == 1
+        assert write_set.batch["DemandCommitmentID"] == write_set.demand_commitment[
+            "DemandCommitmentID"
+        ]
+
+    def test_requested_skipped_builds_pending_material_and_zero_allocations(self):
+        evaluation = self._evaluation_for_action(
+            "ConditionallyAcceptRequestedDate"
+        )
+
+        write_set = self._prepare(
+            evaluation,
+            "ConditionallyAcceptRequestedDate",
+            material_risk_acknowledged=True,
+        )
+
+        assert write_set.demand_commitment["MaterialCommitmentStatus"] == "PendingConfirmation"
+        assert write_set.demand_commitment["PendingMaterialRequirements"] == [{
+            "RequirementLineID": "10",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "RequiredQty": 2.0,
+            "Uom": "EA",
+        }]
+        assert len(write_set.capacity_reservations) == 1
+        assert write_set.material_allocations == ()
+
+    def test_later_feasible_uses_recommended_promise(self):
+        evaluation = self._evaluation_for_action("AcceptRecommendedDate")
+
+        write_set = self._prepare(evaluation, "AcceptRecommendedDate")
+
+        assert write_set.demand_commitment["AcceptedPromiseAt"] == (
+            self.evaluated_at + timedelta(hours=2)
+        ).isoformat()
+        assert write_set.demand_commitment["RequiredAt"] == (
+            self.evaluated_at + timedelta(hours=2)
+        ).isoformat()
+
+    def test_later_skipped_uses_conditional_recommended_action_and_zero_allocations(self):
+        evaluation = self._evaluation_for_action(
+            "ConditionallyAcceptRecommendedDate"
+        )
+
+        write_set = self._prepare(
+            evaluation,
+            "ConditionallyAcceptRecommendedDate",
+            material_risk_acknowledged=True,
+        )
+
+        assert write_set.demand_commitment["AcceptedPromiseAt"] == (
+            self.evaluated_at + timedelta(hours=2)
+        ).isoformat()
+        assert write_set.material_allocations == ()
+
+    def test_all_reference_and_exceeded_selected_candidates_require_ccr_ack(self):
+        for action in order_commitment_evaluation.ACCEPTANCE_DECISIONS:
+            for policy, threshold_exceeded in (
+                (REFERENCE_CCR_PROTECTION_POLICY, False),
+                (CcrProtectionPolicy(75.0, "ApprovedOperatingModel", True, "OMC-1"), True),
+            ):
+                evaluation = self._evaluation_for_action(
+                    action,
+                    policy=policy,
+                    threshold_exceeded=threshold_exceeded,
+                )
+                with pytest.raises(OrderCommitmentConflict, match="CCR risk"):
+                    self._prepare(
+                        evaluation,
+                        action,
+                        material_risk_acknowledged=(
+                            action.startswith("Conditionally")
+                        ),
+                    )
+
+    def test_all_skipped_acceptance_actions_require_material_ack(self):
+        for action in (
+            "ConditionallyAcceptRequestedDate",
+            "ConditionallyAcceptRecommendedDate",
+        ):
+            with pytest.raises(OrderCommitmentConflict, match="Material risk"):
+                self._prepare(self._evaluation_for_action(action), action)
+
+    def test_reject_never_requires_ccr_or_material_acknowledgement(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+
+        record = order_commitment_evaluation.rejected_evaluation_record(
+            evaluation=evaluation,
+            decision_id="DEC-MTO-REJECT",
+            decision="Reject",
+            decided_by="planner-1",
+            decided_at=self.evaluated_at,
+            reason="Planner rejected the recommendation.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+
+        assert order_commitment_evaluation.action_acknowledgement_requirements(
+            action="Reject",
+            requires_ccr_acknowledgement=True,
+            requires_material_acknowledgement=True,
+        ) == {
+            "RequiresCcrAcknowledgement": False,
+            "RequiresMaterialAcknowledgement": False,
+        }
+        assert record["Status"] == "Rejected"
+
+    def test_insufficient_shortage_and_not_assessable_reject_acceptance(self):
+        for capacity_status, material_status in (
+            ("NotAssessable", "Feasible"),
+            ("OnTime", "EvidenceInsufficient"),
+            ("OnTime", "Shortage"),
+        ):
+            evaluation = self._evaluation(
+                shadow_schedule=TestOrderCommitmentEvaluationIdentity._shadow(
+                    Status=capacity_status
+                ),
+                material_assessment=TestOrderCommitmentEvaluationIdentity._material(
+                    Status=material_status
+                ),
+            )
+            with pytest.raises(OrderCommitmentConflict, match="Decision is not allowed"):
+                self._prepare(evaluation, "AcceptRequestedDate")
+
+    def test_expired_latest_completion_rejects_acceptance(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+
+        with pytest.raises(OrderCommitmentConflict, match="window has expired"):
+            self._prepare(
+                evaluation,
+                "AcceptRequestedDate",
+                decided_at=self.evaluated_at + timedelta(hours=1),
+            )
+
+    def test_decision_fingerprint_excludes_decided_at_and_covers_every_canonical_field(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+        base = {
+            "evaluation": evaluation,
+            "decision_id": "DEC-MTO-1",
+            "decision": "AcceptRequestedDate",
+            "actor_id": "planner-1",
+            "reason": "Planner reviewed frozen evidence.",
+            "ccr_risk_acknowledged": False,
+            "material_risk_acknowledged": False,
+        }
+        fingerprint = order_commitment_evaluation.canonical_decision_fingerprint(
+            **base
+        )
+
+        assert fingerprint == order_commitment_evaluation.canonical_decision_fingerprint(
+            **base
+        )
+        changed_evaluation_id = deepcopy(evaluation)
+        changed_evaluation_id["EvaluationID"] = "OCE-CHANGED"
+        changed_evaluation_fingerprint = deepcopy(evaluation)
+        changed_evaluation_fingerprint["EvaluationFingerprint"] = "sha256:changed"
+        variations = (
+            {**base, "evaluation": changed_evaluation_id},
+            {**base, "evaluation": changed_evaluation_fingerprint},
+            {**base, "decision_id": "DEC-MTO-2"},
+            {**base, "decision": "Reject"},
+            {**base, "actor_id": "planner-2"},
+            {**base, "reason": "Different reason."},
+            {**base, "ccr_risk_acknowledged": True},
+            {**base, "material_risk_acknowledged": True},
+        )
+        assert all(
+            order_commitment_evaluation.canonical_decision_fingerprint(**variant)
+            != fingerprint
+            for variant in variations
+        )
+
+    def test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+        calls: list[dict[str, object]] = []
+        original = order_commitment_evaluation.normalize_demand_commitment
+
+        def record_normalization(value: object) -> dict[str, object]:
+            assert isinstance(value, dict)
+            calls.append(deepcopy(value))
+            return original(value)
+
+        monkeypatch.setattr(
+            order_commitment_evaluation,
+            "normalize_demand_commitment",
+            record_normalization,
+        )
+
+        write_set = self._prepare(evaluation, "AcceptRequestedDate")
+
+        assert len(calls) == 1
+        assert calls[0]["OrderCommitmentEvaluationID"] == evaluation["EvaluationID"]
+        assert calls[0]["BaselinePlanningRunID"] == evaluation["Basis"][
+            "BaselinePlanningRunID"
+        ]
+        assert write_set.demand_commitment["ExternalOrderAcceptance"] == "NotPerformed"
+        assert write_set.demand_commitment["PlanningRunCreation"] == "NotPerformed"
+        assert write_set.demand_commitment["ProductionMutation"] == "NotPerformed"

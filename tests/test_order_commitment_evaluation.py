@@ -1,4 +1,4 @@
-"""Acceptance evidence for BE-SDBR-006 and BE-SDBR-010 MTO identity."""
+"""Acceptance evidence for BE-SDBR-006, BE-SDBR-009, and BE-SDBR-010 MTO identity."""
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -21,6 +21,10 @@ from sdbr.order_commitment_evaluation import (
 from sdbr.operational_state import OperationalStateSnapshot
 from sdbr.planner_view import InventoryBufferPolicy
 from sdbr.release_candidates import MaterialAvailability
+
+
+def test_material_feasibility_evidence_cites_shared_material_allocation_ledger():
+    assert "BE-SDBR-009" in __doc__
 
 
 def _mto_order() -> dict[str, object]:

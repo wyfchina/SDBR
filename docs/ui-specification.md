@@ -278,7 +278,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-COMMIT-001 MTO 订单承诺工作台
 
-**状态：未开始**
+**状态：已验证待用户确认**
 
 页面位置：独立导航页 `订单承诺 / Order Commitments`。
 
@@ -1187,7 +1187,7 @@ UI 不得直接构造或修改 SQLite 数据。
 
 - 规格：`UI-COMMIT-001`
 - 后台依赖：`BE-SDBR-006` 至 `BE-SDBR-010`、`BE-RUN-011`
-- 状态：未开始
+- 状态：已验证待用户确认
 - 范围：独立 MTO 订单承诺工作台，提供服务端当前证据驱动的 CCR 优先自动评估、重新评估、建议和计划员最终决定。
 - 读模型：列表、详情、操作确认要求和安全审计严格使用 `UI-COMMIT-001` 定义的白名单字段；显示 `ReservationStatus`、`ExceptionStatus` 和生命周期派生的 `AllowedActions`，不显示原始 JSON。
 - 决定边界：接收和重新评估只产生建议；option-2 接受结束于 `AcceptedPendingFormalSchedule`，不自动创建 Planning Run，不发送外部订单确认，不修改 DDAE、主数据、ERP/WMS、MES、供应商或生产权威状态。

@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from threading import Event, Lock, get_ident
 from time import sleep
 
@@ -5666,18 +5667,27 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'id="primary-navigation"' in html
     assert 'id="top-context"' in html
     assert 'id="workspace"' in html
-    assert 'data-route="overview"' in html
-    assert 'data-route="operational-metrics"' in html
-    assert 'data-route="data-readiness"' in html
-    assert 'data-route="material-planning"' in html
-    assert 'data-route="planning-runs"' in html
-    assert 'data-route="schedule-results"' in html
-    assert 'data-route="release-management"' in html
-    assert 'data-route="calendar"' in html
-    assert 'data-route="dispatch-suggestions"' in html
-    assert 'data-route="exceptions"' in html
-    assert 'data-route="administration"' in html
-    assert html.count("data-nav-help") == 13
+    routes = re.findall(
+        r'<a class="nav-item"[^>]+data-route="([^"]+)"[^>]+data-nav-help>',
+        html,
+    )
+    indices = re.findall(
+        r'<span class="nav-index" aria-hidden="true">([^<]+)</span>',
+        html,
+    )
+    assert routes == [
+        "overview", "operational-metrics", "data-readiness",
+        "material-planning", "order-commitments", "planning-runs",
+        "schedule-results", "release-management", "buffer-board",
+        "dispatch-suggestions", "exceptions", "calendar",
+        "administration", "public-demo",
+    ]
+    assert indices == [
+        "01", "02", "03", "04", "05", "06", "07",
+        "08", "09", "10", "11", "12", "13", "D1",
+    ]
+    assert routes.count("order-commitments") == 1
+    assert len(routes) == len(set(routes))
     assert 'id="nav-business-tooltip"' in html
     assert 'role="tooltip"' in html
     assert 'id="master-data-version"' in html
@@ -5688,7 +5698,10 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'value="zh"' in html
     assert 'value="en"' in html
     assert "需求驱动计划员工作台" in html
-    assert 'href="/planner/assets/planner-workbench.css"' in html
+    assert (
+        'href="/planner/assets/planner-workbench.css?v=20260711-mto-order-commitment"'
+        in html
+    )
     assert "/mock-operational-state-refresh" in script
     assert "/process-queued" in script
     assert "createReplanRunFromCurrentSchedule" in script
@@ -5700,6 +5713,58 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert "diag_ORTOOLS_TIME_LIMIT_CONFIGURED" in script
     assert "technical-detail" in script
     assert 'processQueue: "处理队列"' in script
+
+
+class TestOrderCommitmentUiShell:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_shell_has_independent_view_exact_columns_drawer_and_dialog(self):
+        client = TestClient(create_app())
+
+        html = client.get("/planner/workbench").text
+
+        for element_id in (
+            "order-commitments-view",
+            "order-commitment-error",
+            "order-commitment-content",
+            "order-commitment-search",
+            "order-commitment-status-filter",
+            "refresh-order-commitments",
+            "order-commitment-table",
+            "order-commitment-table-body",
+            "order-commitment-empty",
+            "order-commitment-detail",
+            "order-commitment-detail-title",
+            "close-order-commitment-detail",
+            "order-commitment-detail-content",
+            "order-commitment-reevaluation-form",
+            "order-commitment-material-check",
+            "order-commitment-material-skip-field",
+            "order-commitment-material-skip-reason",
+            "reevaluate-order-commitment",
+            "order-commitment-actions",
+            "order-commitment-decision-dialog",
+            "order-commitment-decision-form",
+            "order-commitment-decision-title",
+            "order-commitment-decision-summary",
+            "order-commitment-ccr-ack-field",
+            "order-commitment-ccr-ack",
+            "order-commitment-material-ack-field",
+            "order-commitment-material-ack",
+            "order-commitment-decision-reason",
+            "order-commitment-decision-error",
+            "cancel-order-commitment-decision",
+            "submit-order-commitment-decision",
+        ):
+            assert f'id="{element_id}"' in html
+
+        assert re.findall(
+            r'<th data-i18n="([^"]+)">',
+            html[html.index('id="order-commitment-table"'):],
+        )[:11] == [
+            "order", "product", "requestedDueAt", "earliestSafePromise",
+            "ccrLoadBeforeAfter", "protectionThresholdSource", "materialStatus",
+            "recommendation", "reservationStatus", "exceptionStatus", "actions",
+        ]
 
 
 def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
@@ -5752,7 +5817,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260709-mto-safe-date-priority"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260711-mto-order-commitment"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 

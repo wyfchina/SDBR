@@ -61,6 +61,10 @@ REFERENCE_CCR_PROTECTION_POLICY = CcrProtectionPolicy(
 )
 
 ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES = 60
+PENDING_CAPACITY_RESERVATION_STATUSES = frozenset({
+    "ActivePlanReservation",
+    "HeldForPlanningError",
+})
 
 ACCEPTANCE_DECISIONS = frozenset(
     {
@@ -840,17 +844,23 @@ def build_order_commitment_basis(
         for item_id, location_id in relevant_material_keys
     })
     capacity_key_set = set(capacity_keys)
+    relevant_capacity_resources = {key[0] for key in capacity_keys}
     material_key_set = set(material_keys)
 
     capacity_projection: list[dict[str, object]] = []
     seen_capacity_ids: set[str] = set()
     for raw in capacity_ledger_rows:
-        if raw.get("Status") not in ACTIVE_PLANNING_STATUSES:
+        if raw.get("Status") not in PENDING_CAPACITY_RESERVATION_STATUSES:
             continue
+        resource_id = str(raw.get("ResourceID") or "")
+        if resource_id not in relevant_capacity_resources:
+            continue
+        start = _parse_aware(raw.get("WindowStartAt"))
+        end = _parse_aware(raw.get("WindowEndAt"))
         raw_key = (
-            str(raw.get("ResourceID") or ""),
-            str(raw.get("WindowStartAt") or ""),
-            str(raw.get("WindowEndAt") or ""),
+            resource_id,
+            start.isoformat(),
+            end.isoformat(),
         )
         if raw_key not in capacity_key_set:
             continue
@@ -859,8 +869,6 @@ def build_order_commitment_basis(
             raise OrderCommitmentConflict(
                 "Relevant capacity reservation ID is duplicated."
             )
-        start = _parse_aware(raw["WindowStartAt"])
-        end = _parse_aware(raw["WindowEndAt"])
         latest = _parse_aware(raw["LatestAllowedCompletionAt"])
         if end <= start or not start < latest <= end:
             raise OrderCommitmentConflict(

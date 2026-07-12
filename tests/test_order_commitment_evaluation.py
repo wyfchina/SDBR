@@ -1298,6 +1298,29 @@ class TestOrderCommitmentEvaluationIdentity:
 
         assert changed["AuditBasisFingerprint"] != original["AuditBasisFingerprint"]
 
+    def test_timezone_equivalent_aware_capacity_window_is_included(self):
+        local_timezone = timezone(timedelta(hours=8))
+        local_row = self._capacity_row(
+            WindowStartAt=self.evaluated_at.astimezone(local_timezone).isoformat(),
+            WindowEndAt=(
+                self.evaluated_at + timedelta(hours=2)
+            ).astimezone(local_timezone).isoformat(),
+            LatestAllowedCompletionAt=(
+                self.evaluated_at + timedelta(hours=1)
+            ).astimezone(local_timezone).isoformat(),
+        )
+
+        basis = self._basis(capacity_ledger_rows=[local_row])
+
+        assert basis["RelevantCapacityLedger"] == [self._capacity_row()]
+
+    def test_linked_to_formal_order_capacity_reservation_is_excluded(self):
+        basis = self._basis(capacity_ledger_rows=[
+            self._capacity_row(Status="LinkedToFormalOrder")
+        ])
+
+        assert basis["RelevantCapacityLedger"] == []
+
     def test_unrelated_capacity_resource_or_window_does_not_change_basis(self):
         original = self._basis()
         changed = self._basis(capacity_ledger_rows=[

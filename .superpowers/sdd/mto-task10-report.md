@@ -41,3 +41,31 @@ Applicable backend specification IDs: `BE-SDBR-006`, `BE-SDBR-010`.
 ## Concern
 
 The full suite emits one existing FastAPI/Starlette warning about `httpx` compatibility in `fastapi.testclient`; it does not fail tests and is outside Task 10 scope.
+
+## Review Finding Remediation
+
+Date: 2026-07-12
+
+Applicable backend specification IDs: `BE-SDBR-010`.
+
+- Corrected Task 10 relevant-capacity matching to compare timezone-aware windows after canonical UTC normalization, so equivalent offset representations freeze the same reservation evidence.
+- Restricted Task 10 pending-capacity basis capture to `ActivePlanReservation` and `HeldForPlanningError`; `LinkedToFormalOrder` remains available to broader reservation read models but is excluded because it has crossed into the formal-order side of the intake boundary.
+- Added regressions for both review findings without changing API, UI, persistence, or later-task behavior.
+
+### Verification Evidence
+
+1. RED:
+   `pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_timezone_equivalent_aware_capacity_window_is_included tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_linked_to_formal_order_capacity_reservation_is_excluded -q --basetemp .tmp/pytest-mto-task10-review-red -p no:cacheprovider`
+   Result: `2 failed` as expected: the offset-equivalent row was omitted and the `LinkedToFormalOrder` row was included.
+2. Focused GREEN:
+   `pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_timezone_equivalent_aware_capacity_window_is_included tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity::test_linked_to_formal_order_capacity_reservation_is_excluded -q --basetemp .tmp/pytest-mto-task10-review-green -p no:cacheprovider`
+   Result: `2 passed in 0.10s`.
+3. Task 10 identity coverage:
+   `pytest tests/test_order_commitment_evaluation.py::TestOrderCommitmentEvaluationIdentity -q --basetemp .tmp/pytest-mto-task10-review-identity -p no:cacheprovider`
+   Result: `17 passed in 0.23s`.
+4. Related evaluator suite:
+   `pytest tests/test_order_commitment_evaluation.py -q --basetemp .tmp/pytest-mto-task10-review-related -p no:cacheprovider`
+   Result: `119 passed in 0.45s`.
+5. Compile check:
+   `python -m compileall -q sdbr`
+   Result: exit code `0` with no output.

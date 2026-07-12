@@ -41,6 +41,10 @@ from sdbr.calendar_overrides import (
     calendar_override_driver_status,
 )
 from sdbr.calendar_preview import build_calendar_preview
+from sdbr.ccr_shadow_scheduler import (
+    SHADOW_ALGORITHM,
+    evaluate_ccr_shadow_schedule,
+)
 from sdbr.data_readiness import build_data_readiness
 from sdbr.dispatch_priority import (
     build_mes_dispatch_priority_queue,
@@ -96,11 +100,45 @@ from sdbr.operational_state import (
     create_operational_state_snapshot,
     evaluate_operational_state_freshness,
 )
+from sdbr.order_commitment_evaluation import (
+    ACCEPTANCE_DECISIONS,
+    OrderCommitmentConflict,
+    OrderCommitmentSnapshotNotFound,
+    REFERENCE_CCR_PROTECTION_POLICY,
+    _parse_aware,
+    accepted_evaluation_record,
+    build_order_commitment_basis,
+    candidate_demand_commitment_id,
+    canonical_decision_fingerprint,
+    canonical_fingerprint,
+    canonical_json,
+    canonical_order_commitment_decision_facts,
+    create_order_commitment_evaluation,
+    evaluate_mto_material_availability,
+    exact_order_commitment_intake_replay,
+    normalize_mto_order,
+    prepare_mto_acceptance,
+    register_order_commitment_evaluation,
+    rejected_evaluation_record,
+    select_order_commitment_operational_snapshot,
+    supersede_open_order_commitment_evaluations,
+)
+from sdbr.order_commitment_view import (
+    SAFE_AUDIT_DETAIL_FIELDS,
+    build_order_commitment_detail,
+    build_order_commitment_workbench,
+)
 from sdbr.plan_publication import (
     build_plan_publication_view,
     mark_superseded,
     publication_state,
+    schedule_fingerprint as planning_schedule_fingerprint,
     transition_publication_state,
+)
+from sdbr.planning_reservations import (
+    ReservationConflict,
+    ReservationLegacyMigrationRequired,
+    apply_reservation_write_set,
 )
 from sdbr.public_demo_golden_loop import (
     get_public_demo_golden_loop_status,
@@ -170,7 +208,7 @@ from sdbr.release_candidates import (
     WipLimit,
     release_candidate_rows_from_schedule,
 )
-from sdbr.release_policy import release_policy_evidence
+from sdbr.release_policy import release_policy_evidence, release_policy_settings
 from sdbr.release_authorization import (
     ReleaseAuthorization,
     build_dispatch_package,
@@ -203,6 +241,7 @@ from sdbr.scheduling_solver import (
     SetupTransition,
     SimioValidationAdapter,
     build_scheduling_problem,
+    build_capacity_buckets_from_resources,
     create_solver_engine,
 )
 from sdbr.simio_validation import (
@@ -1368,6 +1407,478 @@ def create_app(
             snapshot.wip_limits,
             snapshot,
         )
+
+    def _order_commitment_error(
+        *,
+        endpoint: str,
+        status_code: int,
+        status: str,
+        message: str,
+        details: Mapping[str, object] | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "Endpoint": endpoint,
+                "StatusCode": status_code,
+                "Data": {
+                    "Status": status,
+                    "Message": message,
+                    **deepcopy(dict(details or {})),
+                },
+            },
+        )
+
+    def _not_assessable_shadow(
+        *,
+        order: Mapping[str, object],
+        evaluated_at: datetime,
+        code: str,
+        message: str,
+    ) -> dict[str, object]:
+        return {
+            "Algorithm": deepcopy(SHADOW_ALGORITHM),
+            "Status": "NotAssessable",
+            "CapacityAssessmentCutoffAt": (
+                evaluated_at.astimezone(timezone.utc).isoformat()
+            ),
+            "RequestedDueAt": order["RequestedDueAt"],
+            "LatestCcrCompletionAt": None,
+            "RequestedDateAssessment": {"Feasible": False},
+            "EarliestSafeAssessment": None,
+            "SelectedAssessment": None,
+            "RelevantCapacityWindowKeys": [],
+            "Issues": [{"Code": code, "Message": message}],
+            "Summary": {
+                "CcrOperationCount": 0,
+                "SelectedWindowCount": 0,
+                "MaximumLoadAfterPercent": None,
+            },
+        }
+
+    def _prefilter_mto_capacity_rows(
+        *,
+        rows: list[dict[str, object]],
+        allowed_keys: set[tuple[str, str, str]],
+    ) -> list[dict[str, object]]:
+        return [
+            deepcopy(row)
+            for row in rows
+            if (
+                str(row.get("ResourceID") or ""),
+                str(row.get("WindowStartAt") or ""),
+                str(row.get("WindowEndAt") or ""),
+            ) in allowed_keys
+        ]
+
+    def _prefilter_mto_material_rows(
+        *,
+        rows: list[dict[str, object]],
+        allowed_keys: set[tuple[str, str]],
+    ) -> list[dict[str, object]]:
+        return [
+            deepcopy(row)
+            for row in rows
+            if (
+                str(row.get("ItemID") or ""),
+                str(row.get("LocationID") or ""),
+            ) in allowed_keys
+        ]
+
+    def _build_order_commitment_evaluation_from_state(
+        *,
+        endpoint: str,
+        order: Mapping[str, object],
+        evaluated_at: datetime,
+        check_material_availability: bool,
+        material_check_skip_reason: str | None,
+        requested_operational_state_snapshot_id: str | None,
+    ) -> dict[str, object] | JSONResponse:
+        evaluated_at = _parse_aware(evaluated_at)
+        run = planning_runs.get(str(order["BaselinePlanningRunID"]))
+        if run is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="PlanningRunNotFound",
+                message="Baseline Planning Run was not found.",
+            )
+        if run.get("Status") != "Completed":
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunNotCompleted",
+                message="Baseline Planning Run must be completed.",
+            )
+        if publication_state(run) not in {"Approved", "Published"}:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunNotApprovedOrPublished",
+                message="Baseline plan must be approved or published.",
+            )
+        schedule = run.get("Schedule")
+        if not isinstance(schedule, dict):
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunScheduleMissing",
+                message="Baseline schedule evidence is missing.",
+            )
+        master = master_data_versions.get(str(run.get("MasterDataVersionID")))
+        if not isinstance(master, dict):
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="MasterDataVersionNotFound",
+                message="Baseline master-data version was not found.",
+            )
+
+        orchestration_issue: tuple[str, str] | None = None
+        resources: list[Resource] = []
+        routings: list[Routing] = []
+        routing: Routing | None = None
+        setup_transitions: list[SetupTransition] = []
+        capacity_buckets = []
+        timezone_name = master.get("CalendarTimezone")
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            orchestration_issue = (
+                "CALENDAR_TIMEZONE_REQUIRED",
+                "A calendar timezone is required for MTO shadow capacity.",
+            )
+        try:
+            resource_rows = master.get("Resources")
+            routing_rows = master.get("Routings")
+            if not isinstance(resource_rows, list) or not isinstance(
+                routing_rows, list
+            ):
+                raise ValueError("Master resource/routing rows must be lists.")
+            resources = _resources_from_payload([
+                ResourcePayload(**row) for row in resource_rows
+            ])
+            resources = apply_base_calendar_assignments(
+                resources=resources,
+                calendars=run.get("FrozenBaseCalendars") or [],
+                assignments=(
+                    run.get("FrozenResourceCalendarAssignments") or []
+                ),
+            ).resources
+            resources = apply_calendar_overrides(
+                resources=resources,
+                overrides=run.get("FrozenCalendarOverrides") or [],
+            ).resources
+            routings = _routings_from_payload([
+                RoutingPayload(**row) for row in routing_rows
+            ])
+            setup_rows = run.get("SetupTransitions") or []
+            if not isinstance(setup_rows, list):
+                raise ValueError("SetupTransitions must be a list.")
+            setup_transitions = _setup_transitions_from_payload([
+                SetupTransitionPayload(**row) for row in setup_rows
+            ])
+        except (KeyError, TypeError, ValueError) as error:
+            orchestration_issue = (
+                "MASTER_ROUTE_CALENDAR_EVIDENCE_INVALID",
+                str(error),
+            )
+
+        if orchestration_issue is None:
+            routing_matches = [
+                row
+                for row in routings
+                if row.product_id == order["ProductID"]
+                and row.routing_id == order["RoutingID"]
+                and row.is_primary is True
+            ]
+            if len(routing_matches) != 1:
+                orchestration_issue = (
+                    "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
+                    "Exactly one matching primary route is required.",
+                )
+            else:
+                routing = routing_matches[0]
+
+        resources_by_id = {row.resource_id: row for row in resources}
+        if orchestration_issue is None and routing is not None:
+            missing_resource_ids = sorted({
+                operation.resource_id
+                for operation in routing.operations
+                if operation.resource_id not in resources_by_id
+            })
+            if missing_resource_ids:
+                orchestration_issue = (
+                    "ROUTE_RESOURCE_NOT_FOUND",
+                    "Route references missing resources: "
+                    + ", ".join(missing_resource_ids),
+                )
+
+        ccr_resource_ids: set[str] = set()
+        if orchestration_issue is None and routing is not None:
+            ccr_resource_ids = {
+                operation.resource_id
+                for operation in routing.operations
+                if resources_by_id[operation.resource_id].is_constraint
+            }
+            if not ccr_resource_ids:
+                orchestration_issue = (
+                    "CCR_OPERATION_NOT_FOUND",
+                    "The primary route has no CCR operation.",
+                )
+
+        if orchestration_issue is None:
+            try:
+                capacity_buckets = build_capacity_buckets_from_resources(
+                    resources,
+                    tzinfo=ZoneInfo(str(timezone_name)),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                orchestration_issue = (
+                    "CALENDAR_CAPACITY_EVIDENCE_INVALID",
+                    str(error),
+                )
+
+        frozen_release_policy = _release_policy_for_evaluation(
+            planning_run=run,
+            requested_policy_id=None,
+            dbr_release_policies=dbr_release_policies,
+        )
+        material_window = release_policy_settings(
+            frozen_release_policy
+        ).material_lookahead_minutes
+        material_input_keys = {
+            (str(row["ItemID"]), str(row["LocationID"]))
+            for row in order["MaterialRequirements"]
+        }
+        capacity_input_keys = {
+            (
+                bucket.resource_id,
+                bucket.bucket_start.astimezone(timezone.utc).isoformat(),
+                bucket.bucket_end.astimezone(timezone.utc).isoformat(),
+            )
+            for bucket in capacity_buckets
+            if bucket.resource_id in ccr_resource_ids
+        }
+        relevant_capacity_rows = _prefilter_mto_capacity_rows(
+            rows=list(ccr_capacity_reservations.values()),
+            allowed_keys=capacity_input_keys,
+        )
+        relevant_material_rows = _prefilter_mto_material_rows(
+            rows=list(material_planning_allocations.values()),
+            allowed_keys=material_input_keys,
+        )
+        raw_gantt_rows = schedule.get("GanttRows", [])
+        if not isinstance(raw_gantt_rows, list):
+            orchestration_issue = (
+                "SCHEDULE_GANTT_EVIDENCE_INVALID",
+                "Schedule GanttRows must be a list.",
+            )
+            raw_gantt_rows = []
+        relevant_gantt_rows = [
+            deepcopy(row)
+            for row in raw_gantt_rows
+            if isinstance(row, Mapping)
+            and str(row.get("ResourceID") or "") in ccr_resource_ids
+        ]
+
+        try:
+            selection = select_order_commitment_operational_snapshot(
+                snapshots=operational_state_snapshots,
+                evaluated_at=evaluated_at,
+                requested_snapshot_id=(
+                    requested_operational_state_snapshot_id
+                ),
+            )
+        except OrderCommitmentSnapshotNotFound as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status=error.status,
+                message=str(error),
+                details={"OperationalStateSnapshotID": error.snapshot_id},
+            )
+
+        shadow = (
+            _not_assessable_shadow(
+                order=order,
+                evaluated_at=evaluated_at,
+                code=orchestration_issue[0],
+                message=orchestration_issue[1],
+            )
+            if orchestration_issue is not None
+            else evaluate_ccr_shadow_schedule(
+                order_id=str(order["PlanningOrderID"]),
+                quantity=float(order["Quantity"]),
+                routing=routing,
+                resources=resources,
+                capacity_buckets=capacity_buckets,
+                setup_transitions=setup_transitions,
+                gantt_rows=relevant_gantt_rows,
+                active_capacity_reservations=relevant_capacity_rows,
+                requested_due_at=_parse_aware(order["RequestedDueAt"]),
+                evaluated_at=evaluated_at,
+                downstream_protection_minutes=int(
+                    run.get("TimeBufferMinutes", 0)
+                ),
+                protection_threshold_percent=80.0,
+            )
+        )
+        try:
+            material = evaluate_mto_material_availability(
+                order=order,
+                snapshot_selection=selection,
+                active_material_allocations=relevant_material_rows,
+                current_demand_commitment_id=(
+                    candidate_demand_commitment_id(order)
+                ),
+                evaluated_at=evaluated_at,
+                material_check_window_minutes=material_window,
+                check_material_availability=check_material_availability,
+                skip_reason=material_check_skip_reason,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
+
+        route_projection = (
+            None
+            if routing is None
+            else {
+                "ProductID": routing.product_id,
+                "RoutingID": routing.routing_id,
+                "IsPrimary": routing.is_primary,
+                "Operations": [
+                    {
+                        "OperationID": row.operation_id,
+                        "ResourceID": row.resource_id,
+                        "DurationMinutes": row.duration_minutes,
+                        "Sequence": row.sequence,
+                        "AlternateResourceIDs": sorted(
+                            row.alternate_resource_ids or []
+                        ),
+                        "SetupFamily": row.setup_family,
+                    }
+                    for row in sorted(
+                        routing.operations, key=lambda item: item.sequence
+                    )
+                ],
+            }
+        )
+        calendar_projection = {
+            "CalendarTimezone": timezone_name,
+            "CapacityBuckets": [
+                {
+                    "ResourceID": row.resource_id,
+                    "WindowStartAt": row.bucket_start.astimezone(
+                        timezone.utc
+                    ).isoformat(),
+                    "WindowEndAt": row.bucket_end.astimezone(
+                        timezone.utc
+                    ).isoformat(),
+                    "CapacityMinutes": row.capacity_minutes,
+                }
+                for row in sorted(
+                    capacity_buckets,
+                    key=lambda item: (
+                        item.resource_id,
+                        item.bucket_start,
+                        item.bucket_end,
+                    ),
+                )
+            ],
+            "FrozenBaseCalendars": deepcopy(
+                run.get("FrozenBaseCalendars") or []
+            ),
+            "FrozenResourceCalendarAssignments": deepcopy(
+                run.get("FrozenResourceCalendarAssignments") or []
+            ),
+            "FrozenCalendarOverrides": deepcopy(
+                run.get("FrozenCalendarOverrides") or []
+            ),
+        }
+        selected_snapshot = selection["OperationalStateSnapshot"]
+        inventory_rows = (
+            list(selected_snapshot.inventory_buffers)
+            if isinstance(selected_snapshot, OperationalStateSnapshot)
+            else []
+        )
+        availability_rows = (
+            list(selected_snapshot.material_availability)
+            if isinstance(selected_snapshot, OperationalStateSnapshot)
+            else []
+        )
+        material_cutoff_value = material["MaterialEligibilityCutoffAt"]
+        try:
+            basis = build_order_commitment_basis(
+                baseline_planning_run_id=str(run["RunID"]),
+                baseline_operational_state_snapshot_id=(
+                    str(run["OperationalStateSnapshotID"])
+                    if run.get("OperationalStateSnapshotID") is not None
+                    else None
+                ),
+                baseline_schedule_fingerprint=(
+                    planning_schedule_fingerprint(run)
+                    or canonical_fingerprint(schedule)
+                ),
+                master_data_version_id=str(master["VersionID"]),
+                operating_model_configuration_id=run.get(
+                    "OperatingModelConfigurationID"
+                ),
+                operating_model_fingerprint=run.get(
+                    "OperatingModelFingerprint"
+                ),
+                scheduling_configuration_id=run.get(
+                    "SchedulingConfigurationID"
+                ),
+                ddmrp_configuration_id=run.get("DDMRPConfigurationID"),
+                release_policy_version_id=run.get("ReleasePolicyVersionID"),
+                frozen_release_policy_fingerprint=canonical_fingerprint(
+                    release_policy_evidence(frozen_release_policy)
+                ),
+                routing_fingerprint=canonical_fingerprint(route_projection),
+                calendar_fingerprint=canonical_fingerprint(
+                    calendar_projection
+                ),
+                time_buffer_minutes=int(run.get("TimeBufferMinutes", 0)),
+                material_check_window_minutes=material_window,
+                capacity_assessment_cutoff_at=_parse_aware(
+                    shadow["CapacityAssessmentCutoffAt"]
+                ),
+                material_eligibility_cutoff_at=(
+                    _parse_aware(material_cutoff_value)
+                    if material_cutoff_value is not None
+                    else None
+                ),
+                check_material_availability=check_material_availability,
+                material_skip_reason=material_check_skip_reason,
+                snapshot_selection=selection,
+                relevant_capacity_window_keys=[
+                    tuple(row) for row in shadow["RelevantCapacityWindowKeys"]
+                ],
+                capacity_ledger_rows=relevant_capacity_rows,
+                relevant_material_keys=sorted(material_input_keys),
+                inventory_buffer_rows=inventory_rows,
+                material_availability_rows=availability_rows,
+                material_ledger_rows=relevant_material_rows,
+            )
+            return create_order_commitment_evaluation(
+                order=order,
+                shadow_schedule=shadow,
+                material_assessment=material,
+                basis=basis,
+                protection_policy=REFERENCE_CCR_PROTECTION_POLICY,
+                evaluated_at=evaluated_at,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
 
     @app.get("/planner/workbench/demo")
     def planner_workbench_demo(solver_backend_id: str = "baseline-finite") -> dict[str, object]:

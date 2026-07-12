@@ -16,7 +16,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -301,6 +301,93 @@ class RoutingPayload(BaseModel):
     Operations: list[OperationPayload]
     RoutingID: str = "PRIMARY"
     IsPrimary: bool = True
+
+
+class MtoMaterialRequirementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    RequirementLineID: str
+    ItemID: str
+    LocationID: str
+    RequiredQty: float = Field(gt=0)
+    Uom: str = "EA"
+
+
+class MtoOrderCommitmentIntakePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    SourceSystem: str = "MockERP"
+    SourceObjectType: str = "CustomerOrder"
+    OrderID: str
+    OrderVersion: str
+    DemandLineID: str = "1"
+    ProductID: str
+    LocationID: str
+    Quantity: float = Field(gt=0)
+    Uom: str = "EA"
+    RequestedDueAt: AwareDatetime
+    BusinessPriority: int = Field(default=100, ge=1, le=999)
+    ReceivedAt: AwareDatetime
+    TraceID: str
+    BaselinePlanningRunID: str
+    RoutingID: str = "PRIMARY"
+    OperationalStateSnapshotID: str | None = None
+    MaterialRequirements: list[MtoMaterialRequirementPayload] = Field(
+        default_factory=list
+    )
+
+
+class MtoOrderCommitmentReevaluationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    RequestedBy: str
+    BaselinePlanningRunID: str | None = None
+    OperationalStateSnapshotID: str | None = None
+    CheckMaterialAvailability: bool = True
+    MaterialCheckSkipReason: str | None = None
+
+
+class MtoOrderCommitmentDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    DecisionID: str
+    Decision: Literal[
+        "AcceptRequestedDate",
+        "ConditionallyAcceptRequestedDate",
+        "AcceptRecommendedDate",
+        "ConditionallyAcceptRecommendedDate",
+        "Reject",
+    ]
+    DecidedBy: str
+    Reason: str
+    ExpectedEvaluationFingerprint: str
+    CcrRiskAcknowledged: bool = False
+    MaterialRiskAcknowledged: bool = False
+
+
+def _mto_order_from_payload(
+    payload: MtoOrderCommitmentIntakePayload,
+) -> dict[str, object]:
+    return {
+        "SourceSystem": payload.SourceSystem,
+        "SourceObjectType": payload.SourceObjectType,
+        "OrderID": payload.OrderID,
+        "OrderVersion": payload.OrderVersion,
+        "DemandLineID": payload.DemandLineID,
+        "ProductID": payload.ProductID,
+        "LocationID": payload.LocationID,
+        "Quantity": payload.Quantity,
+        "Uom": payload.Uom,
+        "RequestedDueAt": payload.RequestedDueAt,
+        "BusinessPriority": payload.BusinessPriority,
+        "ReceivedAt": payload.ReceivedAt,
+        "TraceID": payload.TraceID,
+        "BaselinePlanningRunID": payload.BaselinePlanningRunID,
+        "RoutingID": payload.RoutingID,
+        "MaterialRequirements": [
+            row.model_dump() for row in payload.MaterialRequirements
+        ],
+    }
 
 
 class OrderPayload(BaseModel):
@@ -1140,6 +1227,8 @@ def create_app(
     planning_reservation_events = active_store.planning_reservation_events
     processed_planning_event_keys = active_store.processed_planning_event_keys
     audit_events = active_store.audit_events
+    order_commitment_evaluations = active_store.order_commitment_evaluations
+    order_commitment_events = active_store.order_commitment_events
     if not simio_template_registry:
         simio_template_registry.update(default_simio_template_registry())
         active_store.active_simio_template_id = next(iter(simio_template_registry))
@@ -1181,6 +1270,7 @@ def create_app(
             (
                 "/planner/workbench/planning-runs",
                 "/planner/workbench/planning-reservations",
+                "/planner/workbench/order-commitments",
             )
         ):
             auth_error = _planning_run_authorization_error(request)

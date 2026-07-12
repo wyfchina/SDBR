@@ -15,6 +15,9 @@ from sdbr.operational_state import (
     evaluate_operational_state_freshness,
 )
 from sdbr.planning_commitments import create_demand_commitment
+from sdbr.planning_reservation_view import (
+    planning_allocated_qty_for_other_demands,
+)
 
 
 class OrderCommitmentConflict(ValueError):
@@ -445,28 +448,149 @@ def evaluate_mto_material_availability(
             order=order,
             code="OPERATIONAL_STATE_EVIDENCE_MISSING",
         )
+    requirements = sorted(
+        deepcopy(order["MaterialRequirements"]),
+        key=lambda row: (
+            str(row["ItemID"]),
+            str(row["LocationID"]),
+            str(row["RequirementLineID"]),
+        ),
+    )
     relevant_keys = {
         (str(row["ItemID"]), str(row["LocationID"]))
-        for row in order["MaterialRequirements"]
+        for row in requirements
     }
-    buffer_keys = {
-        (row.item_id, row.location_id)
+    relevant_allocations = deepcopy(active_material_allocations)
+    buffers = {
+        (row.item_id, row.location_id): row
         for row in snapshot.inventory_buffers
         if (row.item_id, row.location_id) in relevant_keys
     }
-    availability_keys = {
-        (row.item_id, row.location_id)
+    availability_rows = {
+        (row.item_id, row.location_id): row
         for row in snapshot.material_availability
         if (row.item_id, row.location_id) in relevant_keys
     }
-    if buffer_keys != relevant_keys or availability_keys != relevant_keys:
+    if set(buffers) != relevant_keys or set(availability_rows) != relevant_keys:
         return _material_evidence_insufficient(
             evidence=evidence,
             order=order,
             code="REQUIRED_MATERIAL_EVIDENCE_MISSING",
         )
-    return _material_evidence_insufficient(
-        evidence=evidence,
-        order=order,
-        code="MATERIAL_EVALUATION_NOT_IMPLEMENTED",
-    )
+    lines: list[dict[str, object]] = []
+    allocation_requests: list[dict[str, object]] = []
+    try:
+        supply_by_key: dict[
+            tuple[str, str], dict[str, float | str]
+        ] = {}
+        for key in sorted(relevant_keys):
+            buffer = buffers[key]
+            availability = availability_rows[key]
+            inbound_at = availability.inbound_available_at
+            if inbound_at is not None:
+                inbound_at = _utc(inbound_at)
+            eligible_inbound = (
+                float(availability.inbound_qty)
+                if inbound_at is not None and inbound_at <= material_cutoff
+                else 0.0
+            )
+            other_planning = planning_allocated_qty_for_other_demands(
+                allocations=relevant_allocations,
+                item_id=key[0],
+                location_id=key[1],
+                current_demand_commitment_id=current_demand_commitment_id,
+            )
+            qualified = float(buffer.on_hand_qty) + eligible_inbound
+            uncommitted = max(
+                qualified
+                - float(availability.allocated_qty)
+                - other_planning,
+                0.0,
+            )
+            supply_by_key[key] = {
+                "OnHandQty": float(buffer.on_hand_qty),
+                "EligibleInboundQty": eligible_inbound,
+                "AuthorityAllocatedQty": float(availability.allocated_qty),
+                "OtherPlanningAllocatedQty": other_planning,
+                "QualifiedSupplyQty": qualified,
+                "UncommittedAvailabilityQty": uncommitted,
+                "SupplySourceType": (
+                    "OnHandAndInbound" if eligible_inbound > 0 else "OnHand"
+                ),
+            }
+
+        remaining_by_key = {
+            key: float(row["UncommittedAvailabilityQty"])
+            for key, row in supply_by_key.items()
+        }
+        for requirement in requirements:
+            key = (
+                str(requirement["ItemID"]),
+                str(requirement["LocationID"]),
+            )
+            supply = supply_by_key[key]
+            required = float(requirement["RequiredQty"])
+            available_before_line = remaining_by_key[key]
+            covered = available_before_line >= required
+            if covered:
+                remaining_by_key[key] = available_before_line - required
+            lines.append(
+                {
+                    "RequirementLineID": requirement["RequirementLineID"],
+                    "ItemID": key[0],
+                    "LocationID": key[1],
+                    "Uom": requirement["Uom"],
+                    "RequiredQty": required,
+                    "OnHandQty": supply["OnHandQty"],
+                    "EligibleInboundQty": supply["EligibleInboundQty"],
+                    "AuthorityAllocatedQty": supply[
+                        "AuthorityAllocatedQty"
+                    ],
+                    "OtherPlanningAllocatedQty": supply[
+                        "OtherPlanningAllocatedQty"
+                    ],
+                    "QualifiedSupplyQty": supply["QualifiedSupplyQty"],
+                    "UncommittedAvailabilityQty": available_before_line,
+                    "CoverageStatus": "Covered" if covered else "Shortage",
+                }
+            )
+            if covered:
+                allocation_requests.append(
+                    {
+                        "RequirementLineID": requirement[
+                            "RequirementLineID"
+                        ],
+                        "ItemID": key[0],
+                        "LocationID": key[1],
+                        "Uom": requirement["Uom"],
+                        "AllocatedQty": required,
+                        "SupplySourceType": supply["SupplySourceType"],
+                        "MaterialSnapshotID": selection[
+                            "OperationalStateSnapshotID"
+                        ],
+                    }
+                )
+    except (TypeError, ValueError, OverflowError) as error:
+        return _material_evidence_insufficient(
+            evidence=evidence,
+            order=order,
+            code="MATERIAL_EVIDENCE_INVALID",
+            details={"Message": str(error)},
+        )
+    if any(row["CoverageStatus"] == "Shortage" for row in lines):
+        return {
+            **evidence,
+            "Status": "Shortage",
+            "Lines": lines,
+            "AllocationRequests": [],
+            "PendingRequirements": deepcopy(requirements),
+            "Issues": [],
+        }
+    return {
+        **evidence,
+        "Status": "Feasible",
+        "Lines": lines,
+        "AllocationRequests": allocation_requests,
+        "PendingRequirements": [],
+        "Issues": [],
+    }

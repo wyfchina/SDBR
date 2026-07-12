@@ -432,6 +432,7 @@ const I18N = {
     searchOrderOrProduct: "搜索订单或产品", allStatuses: "全部状态", order: "订单", product: "产品", requestedDueAt: "请求交期", earliestSafePromise: "建议安全日期",
     ccrLoadBeforeAfter: "CCR 负荷前后", protectionThresholdSource: "保护线来源", materialStatus: "物料状态", recommendation: "建议", reservationStatus: "预留状态", exceptionStatus: "异常状态",
     actions: "操作", viewDetails: "查看详情", orderCommitmentEvaluation: "订单承诺评估", orderCommitmentLoadFailed: "无法读取订单承诺评估", orderCommitmentRetryAdvice: "请确认服务可用后重试。",
+    materialSkipReasonRequired: "关闭物料检查时，请填写业务原因。", orderCommitmentRevisionConflict: "工作台状态已更新，已刷新当前评估；请复核后再操作。", orderCommitmentReevaluationFailed: "无法重新评估当前订单承诺。", orderCommitmentNotReevaluatable: "当前评估已结束或已被替代，不能重新评估。", orderCommitmentNotFound: "未找到订单承诺评估，请刷新后重试。",
     noOrderCommitments: "当前没有订单承诺评估。", orderDetails: "订单信息", capacityEvidence: "产能证据", materialEvidence: "物料证据", decision: "计划员决定", reservation: "计划预留",
     auditHistory: "审计记录", technicalDetails: "技术追溯", selectedPromise: "选定承诺日期", earliestSafeAssessment: "最早安全日期", requestedDateAssessment: "请求日期评估",
     loadBefore: "评估前负荷", loadAfter: "评估后负荷", loadPercent: "负荷率", protectionThreshold: "保护线", thresholdState: "保护线状态", materialCheck: "物料检查",
@@ -883,6 +884,7 @@ const I18N = {
     searchOrderOrProduct: "Search order or product", allStatuses: "All statuses", order: "Order", product: "Product", requestedDueAt: "Requested due", earliestSafePromise: "Earliest safe promise",
     ccrLoadBeforeAfter: "CCR load before / after", protectionThresholdSource: "Protection threshold source", materialStatus: "Material status", recommendation: "Recommendation", reservationStatus: "Reservation status", exceptionStatus: "Exception status",
     actions: "Actions", viewDetails: "View details", orderCommitmentEvaluation: "Order commitment evaluation", orderCommitmentLoadFailed: "Order commitment evaluations could not be loaded", orderCommitmentRetryAdvice: "Check the service and retry.",
+    materialSkipReasonRequired: "Provide a business reason when material checking is turned off.", orderCommitmentRevisionConflict: "Workbench state changed. The current evaluation was refreshed; review it before acting again.", orderCommitmentReevaluationFailed: "This order commitment could not be re-evaluated.", orderCommitmentNotReevaluatable: "This evaluation is closed or superseded and cannot be re-evaluated.", orderCommitmentNotFound: "The order commitment evaluation was not found. Refresh and try again.",
     noOrderCommitments: "No order commitment evaluations are available.", orderDetails: "Order details", capacityEvidence: "Capacity evidence", materialEvidence: "Material evidence", decision: "Planner decision", reservation: "Planning reservation",
     auditHistory: "Audit history", technicalDetails: "Technical trace", selectedPromise: "Selected promise", earliestSafeAssessment: "Earliest safe assessment", requestedDateAssessment: "Requested-date assessment",
     loadBefore: "Load before", loadAfter: "Load after", loadPercent: "Load percent", protectionThreshold: "Protection threshold", thresholdState: "Threshold state", materialCheck: "Material check",
@@ -1024,6 +1026,7 @@ function applyLanguage(language) {
   refreshDdmrpDetailsAction();
   renderMaterialPlanningTable();
   renderOperationalMetrics();
+  if (selectedOrderCommitment) renderOrderCommitmentDetail();
 }
 
 function currentRoute() {
@@ -6032,6 +6035,125 @@ function orderCommitmentAuditText(event) {
     .filter(Boolean).join(" · ");
 }
 
+function showOrderCommitmentError(message) {
+  const error = document.getElementById("order-commitment-error");
+  error.textContent = message;
+  error.hidden = false;
+  showNotification(message, "error");
+}
+
+function orderCommitmentAllowedActions() {
+  return new Set(
+    selectedOrderCommitment?.Recommendation?.AllowedActions || []
+  );
+}
+
+function renderOrderCommitmentActions() {
+  const allowed = orderCommitmentAllowedActions();
+  const reevaluationForm = document.getElementById(
+    "order-commitment-reevaluation-form"
+  );
+  reevaluationForm.hidden = !allowed.has("Reevaluate");
+  const actions = document.getElementById("order-commitment-actions");
+  actions.replaceChildren();
+  [
+    "AcceptRequestedDate",
+    "ConditionallyAcceptRequestedDate",
+    "AcceptRecommendedDate",
+    "ConditionallyAcceptRecommendedDate",
+    "Reject"
+  ].filter((action) => allowed.has(action)).forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = action === "Reject" ? "button danger" : "button primary";
+    button.textContent = orderCommitmentLabel(action);
+    button.addEventListener("click", () => {
+      openOrderCommitmentDecision(action);
+    });
+    actions.append(button);
+  });
+}
+
+function updateOrderCommitmentMaterialSkipField() {
+  const enabled = document.getElementById(
+    "order-commitment-material-check"
+  ).checked;
+  const field = document.getElementById(
+    "order-commitment-material-skip-field"
+  );
+  const reason = document.getElementById(
+    "order-commitment-material-skip-reason"
+  );
+  field.hidden = enabled;
+  reason.required = !enabled;
+}
+
+function orderCommitmentReevaluationErrorMessage(status) {
+  if (status === "StateStoreRevisionConflict") {
+    return translate("orderCommitmentRevisionConflict");
+  }
+  if (status === "OrderCommitmentEvaluationNotReevaluatable") {
+    return translate("orderCommitmentNotReevaluatable");
+  }
+  if (status === "OrderCommitmentEvaluationNotFound") {
+    return translate("orderCommitmentNotFound");
+  }
+  return translate("orderCommitmentReevaluationFailed");
+}
+
+async function reevaluateOrderCommitment(event) {
+  event.preventDefault();
+  if (!orderCommitmentAllowedActions().has("Reevaluate")) return;
+  const enabled = document.getElementById(
+    "order-commitment-material-check"
+  ).checked;
+  const reason = document.getElementById(
+    "order-commitment-material-skip-reason"
+  ).value.trim();
+  if (!enabled && !reason) {
+    showOrderCommitmentError(translate("materialSkipReasonRequired"));
+    return;
+  }
+  const evaluationId = selectedOrderCommitment.EvaluationID;
+  const response = await fetch(
+    "/planner/workbench/order-commitments/"
+      + encodeURIComponent(evaluationId) + "/reevaluate",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": orderCommitmentRevision
+      },
+      body: JSON.stringify({
+        RequestedBy: "planner-1",
+        OperationalStateSnapshotID: null,
+        CheckMaterialAvailability: enabled,
+        MaterialCheckSkipReason: enabled ? null : reason
+      })
+    }
+  );
+  orderCommitmentRevision = response.headers.get(
+    "X-Workbench-Revision"
+  ) || orderCommitmentRevision;
+  const payload = await response.json();
+  if (!response.ok) {
+    const status = payload?.Data?.Status;
+    if (status === "StateStoreRevisionConflict") {
+      await loadOrderCommitments();
+      await openOrderCommitmentDetail(evaluationId);
+      showOrderCommitmentError(
+        orderCommitmentReevaluationErrorMessage(status)
+      );
+      return;
+    }
+    showOrderCommitmentError(orderCommitmentReevaluationErrorMessage(status));
+    return;
+  }
+  const newId = payload.Data.Evaluation.EvaluationID;
+  await loadOrderCommitments();
+  await openOrderCommitmentDetail(newId);
+}
+
 function renderOrderCommitmentDetail() {
   const detail = selectedOrderCommitment;
   if (!detail) return;
@@ -6089,6 +6211,8 @@ function renderOrderCommitmentDetail() {
   ].filter(([, value]) => value);
   technical.append(summary, detailSection("technicalDetails", technicalRows));
   content.append(technical);
+  renderOrderCommitmentActions();
+  updateOrderCommitmentMaterialSkipField();
 }
 
 async function openOrderCommitmentDetail(evaluationId) {
@@ -6202,6 +6326,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refresh-order-commitments").addEventListener("click", loadOrderCommitments);
   document.getElementById("order-commitment-search").addEventListener("input", renderOrderCommitments);
   document.getElementById("order-commitment-status-filter").addEventListener("change", renderOrderCommitments);
+  document.getElementById("order-commitment-material-check").addEventListener("change", updateOrderCommitmentMaterialSkipField);
+  document.getElementById("order-commitment-reevaluation-form").addEventListener("submit", reevaluateOrderCommitment);
   document.getElementById("close-order-commitment-detail").addEventListener("click", () => closeSideDrawer("order-commitment-detail"));
   document.getElementById("operational-metrics-run-select").addEventListener("change", loadOperationalMetrics);
   document.getElementById("operational-metrics-evaluated-at").addEventListener("change", loadOperationalMetrics);
@@ -6211,7 +6337,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("close-issues-drawer").addEventListener("click", closeIssuesDrawer);
   document.getElementById("drawer-backdrop").addEventListener("click", () => {
     closeIssuesDrawer();
-    ["planning-run-detail", "scheduled-order-detail", "release-reason-detail", "dispatch-package-detail", "buffer-order-detail", "exception-detail"].forEach((id) => closeSideDrawer(id));
+    ["order-commitment-detail", "planning-run-detail", "scheduled-order-detail", "release-reason-detail", "dispatch-package-detail", "buffer-order-detail", "exception-detail"].forEach((id) => closeSideDrawer(id));
   });
   document.getElementById("select-planning-inputs").addEventListener("click", selectPlanningInputs);
   document.getElementById("create-master-data-version").addEventListener("click", () => { window.location.hash = "administration"; });

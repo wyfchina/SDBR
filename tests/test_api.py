@@ -5889,6 +5889,89 @@ class TestOrderCommitmentUiReadFlow:
             assert f"detail.{field}" in detail_renderer
 
 
+class TestOrderCommitmentUiReevaluation:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_reevaluation_form_is_driven_only_by_allowed_actions(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function orderCommitmentAllowedActions" in script
+        assert "selectedOrderCommitment?.Recommendation?.AllowedActions || []" in script
+        assert 'allowed.has("Reevaluate")' in script
+        assert "function renderOrderCommitmentActions" in script
+
+    def test_terminal_detail_has_no_reevaluation_or_decision_controls(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        action_renderer = script[
+            script.index("function renderOrderCommitmentActions"):
+            script.index("function updateOrderCommitmentMaterialSkipField")
+        ]
+
+        assert "reevaluationForm.hidden = !allowed.has(\"Reevaluate\")" in action_renderer
+        assert "actions.replaceChildren()" in action_renderer
+        assert ".filter((action) => allowed.has(action))" in action_renderer
+
+    def test_material_toggle_requires_reason_when_disabled(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function updateOrderCommitmentMaterialSkipField" in script
+        assert "reason.required = !enabled" in script
+        assert "if (!enabled && !reason)" in script
+        assert 'translate("materialSkipReasonRequired")' in script
+        error_helper = script[
+            script.index("function showOrderCommitmentError"):
+            script.index("function orderCommitmentAllowedActions")
+        ]
+        assert 'showNotification(message, "error")' in error_helper
+
+    def test_reevaluation_request_contains_no_material_window(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index("function openSideDrawer", script.index("async function reevaluateOrderCommitment"))
+        ]
+
+        assert "OperationalStateSnapshotID: null" in request
+        assert "CheckMaterialAvailability: enabled" in request
+        assert "MaterialCheckSkipReason: enabled ? null : reason" in request
+        assert "MaterialCheckWindowMinutes" not in request
+        assert "MaterialLookaheadMinutes" not in request
+
+    def test_success_refreshes_revision_list_and_new_detail(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index("function openSideDrawer", script.index("async function reevaluateOrderCommitment"))
+        ]
+
+        assert '"If-Match": orderCommitmentRevision' in request
+        assert 'response.headers.get("X-Workbench-Revision")' in request
+        assert "await loadOrderCommitments()" in request
+        assert "await openOrderCommitmentDetail(newId)" in request
+        assert "StateStoreRevisionConflict" in request
+        assert "orderCommitmentReevaluationErrorMessage(status)" in request
+        assert 'translate("orderCommitmentRevisionConflict")' in script
+        assert (
+            'if (status === "StateStoreRevisionConflict") {\n'
+            '      await loadOrderCommitments();\n'
+            '      await openOrderCommitmentDetail(evaluationId);\n'
+            '      showOrderCommitmentError(\n'
+            '        orderCommitmentReevaluationErrorMessage(status)\n'
+            '      );\n'
+            '      return;\n'
+            '    }'
+        ) in request
+
+
 def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     # UI-CALENDAR-001 / BE-DATA-010
     client = TestClient(create_app())

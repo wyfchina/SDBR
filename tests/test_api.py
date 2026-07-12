@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 from threading import Event, Lock, get_ident
 from time import sleep
 
@@ -5666,18 +5667,27 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'id="primary-navigation"' in html
     assert 'id="top-context"' in html
     assert 'id="workspace"' in html
-    assert 'data-route="overview"' in html
-    assert 'data-route="operational-metrics"' in html
-    assert 'data-route="data-readiness"' in html
-    assert 'data-route="material-planning"' in html
-    assert 'data-route="planning-runs"' in html
-    assert 'data-route="schedule-results"' in html
-    assert 'data-route="release-management"' in html
-    assert 'data-route="calendar"' in html
-    assert 'data-route="dispatch-suggestions"' in html
-    assert 'data-route="exceptions"' in html
-    assert 'data-route="administration"' in html
-    assert html.count("data-nav-help") == 13
+    routes = re.findall(
+        r'<a class="nav-item"[^>]+data-route="([^"]+)"[^>]+data-nav-help>',
+        html,
+    )
+    indices = re.findall(
+        r'<span class="nav-index" aria-hidden="true">([^<]+)</span>',
+        html,
+    )
+    assert routes == [
+        "overview", "operational-metrics", "data-readiness",
+        "material-planning", "order-commitments", "planning-runs",
+        "schedule-results", "release-management", "buffer-board",
+        "dispatch-suggestions", "exceptions", "calendar",
+        "administration", "public-demo",
+    ]
+    assert indices == [
+        "01", "02", "03", "04", "05", "06", "07",
+        "08", "09", "10", "11", "12", "13", "D1",
+    ]
+    assert routes.count("order-commitments") == 1
+    assert len(routes) == len(set(routes))
     assert 'id="nav-business-tooltip"' in html
     assert 'role="tooltip"' in html
     assert 'id="master-data-version"' in html
@@ -5688,7 +5698,10 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'value="zh"' in html
     assert 'value="en"' in html
     assert "需求驱动计划员工作台" in html
-    assert 'href="/planner/assets/planner-workbench.css"' in html
+    assert (
+        'href="/planner/assets/planner-workbench.css?v=20260711-mto-order-commitment"'
+        in html
+    )
     assert "/mock-operational-state-refresh" in script
     assert "/process-queued" in script
     assert "createReplanRunFromCurrentSchedule" in script
@@ -5700,6 +5713,575 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert "diag_ORTOOLS_TIME_LIMIT_CONFIGURED" in script
     assert "technical-detail" in script
     assert 'processQueue: "处理队列"' in script
+
+
+class TestOrderCommitmentUiShell:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_shell_has_independent_view_exact_columns_drawer_and_dialog(self):
+        client = TestClient(create_app())
+
+        html = client.get("/planner/workbench").text
+
+        for element_id in (
+            "order-commitments-view",
+            "order-commitment-error",
+            "order-commitment-content",
+            "order-commitment-search",
+            "order-commitment-status-filter",
+            "refresh-order-commitments",
+            "order-commitment-table",
+            "order-commitment-table-body",
+            "order-commitment-empty",
+            "order-commitment-detail",
+            "order-commitment-detail-title",
+            "close-order-commitment-detail",
+            "order-commitment-detail-content",
+            "order-commitment-reevaluation-form",
+            "order-commitment-material-check",
+            "order-commitment-material-skip-field",
+            "order-commitment-material-skip-reason",
+            "reevaluate-order-commitment",
+            "order-commitment-actions",
+            "order-commitment-decision-dialog",
+            "order-commitment-decision-form",
+            "order-commitment-decision-title",
+            "order-commitment-decision-summary",
+            "order-commitment-ccr-ack-field",
+            "order-commitment-ccr-ack",
+            "order-commitment-material-ack-field",
+            "order-commitment-material-ack",
+            "order-commitment-decision-reason",
+            "order-commitment-decision-error",
+            "cancel-order-commitment-decision",
+            "submit-order-commitment-decision",
+        ):
+            assert f'id="{element_id}"' in html
+
+        assert re.findall(
+            r'<th data-i18n="([^"]+)">',
+            html[html.index('id="order-commitment-table"'):],
+        )[:11] == [
+            "order", "product", "requestedDueAt", "earliestSafePromise",
+            "ccrLoadBeforeAfter", "protectionThresholdSource", "materialStatus",
+            "recommendation", "reservationStatus", "exceptionStatus", "actions",
+        ]
+
+
+def test_ui_commit_specification_is_verified_pending_confirmation_after_task_28():
+    # UI-COMMIT-001: Task 28 verifies the unit but cannot confirm it for the user.
+    specification = Path("docs/ui-specification.md").read_text(encoding="utf-8")
+    capability = specification.split("### UI-COMMIT-001", 1)[1].split(
+        "### UI-DDOM-001", 1
+    )[0]
+    acceptance_record = specification.split("### 17.13", 1)[1].split(
+        "## 18.", 1
+    )[0]
+
+    assert "| 文档版本 | 5.36 |" in specification
+    assert "**状态：已验证待用户确认**" in capability
+    assert "- 状态：已验证待用户确认" in acceptance_record
+    assert "用户已确认" not in capability
+    assert "用户已确认" not in acceptance_record
+
+
+class TestOrderCommitmentUiReadFlow:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_detail_and_reevaluation_copy_has_bilingual_business_labels(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        for key, zh, en in (
+            ("quantity", "数量", "Quantity"),
+            ("businessPriority", "业务优先级", "Business priority"),
+            (
+                "checkMaterialAvailability",
+                "检查物料计划可用性",
+                "Check material planning availability",
+            ),
+            (
+                "orderCommitmentMaterialGateReminder",
+                "释放阶段仍执行物料硬门控",
+                "Material hard gate still applies at release",
+            ),
+            ("materialSkipReason", "跳过原因", "Skip reason"),
+            ("plannerDecision", "计划员决定", "Planner decision"),
+            (
+                "acknowledgeCcrRisk",
+                "我已复核 CCR 保护负荷风险",
+                "I reviewed the CCR protection-load risk",
+            ),
+            (
+                "acknowledgeMaterialPending",
+                "我确认物料仍待处理，且释放阶段继续硬门控",
+                "I acknowledge material remains pending and the release hard gate still applies",
+            ),
+            (
+                "orderCommitmentExternalBoundary",
+                "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES",
+                "This action does not accept the external order, create a Planning Run, or change ERP/MES",
+            ),
+            ("evaluationFingerprint", "评估指纹", "Evaluation fingerprint"),
+            ("decisionFingerprint", "决定指纹", "Decision fingerprint"),
+            ("traceId", "追踪编号", "Trace ID"),
+        ):
+            assert f'{key}: "{zh}"' in script
+            assert f'{key}: "{en}"' in script
+
+    def test_script_uses_workbench_detail_endpoints_and_revision_header(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "/planner/workbench/order-commitments/workbench" in script
+        assert "/planner/workbench/order-commitments/" in script
+        assert '"X-Workbench-Revision"' in script
+        assert "loadOrderCommitments" in script
+        assert "openOrderCommitmentDetail" in script
+
+    def test_every_backend_enum_has_exact_chinese_and_english_label(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        labels = {
+            "RecommendAccept": ("建议接受", "Recommend accept"),
+            "PlannerConfirmationRequired": ("需计划员确认", "Planner confirmation required"),
+            "CapacityAcceptableMaterialPending": ("产能可接受，物料待确认", "Capacity acceptable, material pending"),
+            "MaterialEvidenceRequired": ("待物料确认", "Material evidence required"),
+            "RecommendLaterPromise": ("建议调整交期", "Recommend later promise"),
+            "DoNotRecommendAccept": ("暂不建议接受", "Do not recommend acceptance"),
+            "Feasible": ("物料可行", "Material feasible"),
+            "SkippedPendingConfirmation": ("物料待确认（已跳过检查）", "Material pending (check skipped)"),
+            "EvidenceInsufficient": ("物料证据不足", "Material evidence insufficient"),
+            "Shortage": ("物料短缺", "Material shortage"),
+            "OnTime": ("可按请求日期完成", "On time"),
+            "LaterSafeDate": ("需采用后续安全日期", "Later safe date"),
+            "NotAssessable": ("暂不可评估", "Not assessable"),
+            "Fresh": ("新鲜", "Fresh"), "Stale": ("已过期", "Stale"),
+            "Future": ("时间异常", "Future"), "Missing": ("缺失", "Missing"),
+            "Protected": ("保护范围内", "Protected"), "Watch": ("需要关注", "Watch"),
+            "NearLimit": ("接近上限", "Near limit"), "Overloaded": ("超载", "Overloaded"),
+            "ApprovedWithin": ("批准保护线内", "Within approved threshold"),
+            "ApprovedExceeded": ("超过批准保护线", "Approved threshold exceeded"),
+            "Covered": ("已覆盖", "Covered"),
+            "PlannedAllocationPrepared": ("计划分配已准备", "Planned allocation prepared"),
+            "PendingConfirmation": ("待确认", "Pending confirmation"),
+            "AwaitingPlannerDecision": ("待计划员决定", "Awaiting planner decision"),
+            "AcceptedPendingFormalSchedule": ("已接受，待正式排程", "Accepted, pending formal schedule"),
+            "Rejected": ("已拒绝", "Rejected"), "Superseded": ("已由新评估替代", "Superseded by newer evaluation"),
+            "NotReserved": ("尚未预留", "Not reserved"),
+            "ActivePlanReservation": ("计划预留有效", "Active plan reservation"),
+            "LinkedToFormalOrder": ("已关联正式订单", "Linked to formal order"),
+            "ConvertedToScheduledOccupancy": ("已转正式排程占用", "Converted to scheduled occupancy"),
+            "HeldForPlanningError": ("排程异常待处理", "Held for planning error"),
+            "AdjustmentRequired": ("需要调整", "Adjustment required"),
+            "Released": ("已释放", "Released"), "Cancelled": ("已取消", "Cancelled"),
+            "ReservationEvidenceMissing": ("预留证据缺失", "Reservation evidence missing"),
+            "None": ("无异常", "No exception"), "AssessmentBlocked": ("评估受阻", "Assessment blocked"),
+            "MaterialEvidenceBlocked": ("物料证据受阻", "Material evidence blocked"),
+            "PlanningErrorPending": ("排程异常待处理", "Planning error pending"),
+            "ReferenceFallback": ("80% 默认参考，需确认", "80% reference fallback; confirmation required"),
+            "ApprovedOperatingModel": ("批准的运行模型保护线", "Approved operating-model threshold"),
+            "AcceptRequestedDate": ("接受请求日期", "Accept requested date"),
+            "ConditionallyAcceptRequestedDate": ("条件接受请求日期", "Conditionally accept requested date"),
+            "AcceptRecommendedDate": ("接受建议日期", "Accept recommended date"),
+            "ConditionallyAcceptRecommendedDate": ("条件接受建议日期", "Conditionally accept recommended date"),
+            "Reevaluate": ("重新评估", "Re-evaluate"), "Reject": ("拒绝", "Reject"),
+            "OrderCommitmentEvaluated": ("已评估", "Commitment evaluated"),
+            "OrderCommitmentReevaluated": ("已重新评估", "Commitment re-evaluated"),
+            "OrderCommitmentEvaluationSuperseded": ("评估已替代", "Evaluation superseded"),
+            "OrderCommitmentAccepted": ("已接受", "Commitment accepted"),
+            "OrderCommitmentRejected": ("已拒绝", "Commitment rejected"),
+            "LatestCurrent": ("最新当前快照", "Latest current snapshot"),
+            "Explicit": ("显式快照", "Explicit snapshot"),
+            "OnHand": ("在手", "On hand"),
+            "OnHandAndInbound": ("在手与在途", "On hand and inbound"),
+            "NotPerformed": ("未执行", "Not performed"),
+        }
+        for enum, (zh, en) in labels.items():
+            assert f'{enum}: "{zh}"' in script
+            assert f'{enum}: "{en}"' in script
+
+    def test_render_uses_reservation_exception_and_allowed_actions_fields(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function renderOrderCommitments" in script
+        assert "row.ReservationStatus" in script
+        assert "row.ExceptionStatus" in script
+        assert "row.AllowedActions" in script
+        assert "viewDetails" in script
+
+    def test_detail_renderer_has_no_json_stringify_or_raw_payload_path(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        start = script.index("function renderOrderCommitmentDetail")
+        detail_renderer = script[start:script.index("document.addEventListener", start)]
+
+        assert "JSON.stringify" not in detail_renderer
+        assert ".Basis" not in detail_renderer
+        assert "SourcePayload" not in detail_renderer
+        assert "businessValue(detail.MaterialEvidence?.CheckEnabled)" in detail_renderer
+        assert "businessValue(detail.Recommendation?.RequiresPlannerDecision)" in detail_renderer
+        assert "businessValue(detail.Boundary?.RecommendationOnly)" in detail_renderer
+        for field in (
+            "Order", "CapacityEvidence", "MaterialEvidence", "Recommendation",
+            "Decision", "Reservation", "AuditHistory", "TechnicalDetails",
+        ):
+            assert f"detail.{field}" in detail_renderer
+
+    def test_audit_facts_use_localized_dates_and_business_boolean_labels(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        audit_renderer = script[
+            script.index("function orderCommitmentAuditFactText"):
+            script.index("function showOrderCommitmentError")
+        ]
+
+        assert "AcceptedPromiseAt: formatDate(details.AcceptedPromiseAt)" in audit_renderer
+        assert "CcrRiskAcknowledged: businessValue(details.CcrRiskAcknowledged)" in audit_renderer
+        assert "MaterialRiskAcknowledged: businessValue(details.MaterialRiskAcknowledged)" in audit_renderer
+        assert "MaterialCheckEnabled: businessValue(details.MaterialCheckEnabled)" in audit_renderer
+        assert "orderCommitmentLabel(value)" not in audit_renderer
+
+    def test_detail_fetch_has_localized_loading_error_and_retry_states(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        detail_fetch = script[
+            script.index("async function openOrderCommitmentDetail"):
+            script.index("function openSideDrawer", script.index("async function openOrderCommitmentDetail"))
+        ]
+
+        assert 'renderOrderCommitmentDetailState(translate("orderCommitmentDetailLoading"))' in detail_fetch
+        assert 'renderOrderCommitmentDetailState(' in detail_fetch
+        assert 'translate("orderCommitmentDetailLoadFailed")' in detail_fetch
+        assert 'translate("orderCommitmentRetryAdvice")' in detail_fetch
+        assert "retry: () => openOrderCommitmentDetail(evaluationId)" in detail_fetch
+
+
+class TestOrderCommitmentUiReevaluation:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_reevaluation_form_is_driven_only_by_allowed_actions(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function orderCommitmentAllowedActions" in script
+        assert "selectedOrderCommitment?.Recommendation?.AllowedActions || []" in script
+        assert 'allowed.has("Reevaluate")' in script
+        assert "function renderOrderCommitmentActions" in script
+
+    def test_terminal_detail_has_no_reevaluation_or_decision_controls(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        action_renderer = script[
+            script.index("function renderOrderCommitmentActions"):
+            script.index("function updateOrderCommitmentMaterialSkipField")
+        ]
+
+        assert "reevaluationForm.hidden = !allowed.has(\"Reevaluate\")" in action_renderer
+        assert "actions.replaceChildren()" in action_renderer
+        assert ".filter((action) => allowed.has(action))" in action_renderer
+
+    def test_material_toggle_requires_reason_when_disabled(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        assert "function updateOrderCommitmentMaterialSkipField" in script
+        assert "reason.required = !enabled" in script
+        assert "if (!enabled && !reason)" in script
+        assert 'translate("materialSkipReasonRequired")' in script
+        error_helper = script[
+            script.index("function showOrderCommitmentError"):
+            script.index("function orderCommitmentAllowedActions")
+        ]
+        assert 'showNotification(message, "error")' in error_helper
+
+    def test_reevaluation_request_contains_no_material_window(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index(
+                "function orderCommitmentDecisionRequirements",
+                script.index("async function reevaluateOrderCommitment"),
+            )
+        ]
+
+        assert "OperationalStateSnapshotID: null" in request
+        assert "CheckMaterialAvailability: enabled" in request
+        assert "MaterialCheckSkipReason: enabled ? null : reason" in request
+        assert "MaterialCheckWindowMinutes" not in request
+        assert "MaterialLookaheadMinutes" not in request
+
+    def test_success_refreshes_revision_list_and_new_detail(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index(
+                "function orderCommitmentDecisionRequirements",
+                script.index("async function reevaluateOrderCommitment"),
+            )
+        ]
+
+        assert '"If-Match": orderCommitmentRevision' in request
+        assert "response.headers.get(" in request
+        assert '"X-Workbench-Revision"' in request
+        assert "await loadOrderCommitments()" in request
+        assert "await openOrderCommitmentDetail(newId)" in request
+        assert "StateStoreRevisionConflict" in request
+        assert "orderCommitmentReevaluationErrorMessage(status)" in request
+        assert 'translate("orderCommitmentRevisionConflict")' in script
+        branch_start = request.index(
+            'if (status === "StateStoreRevisionConflict") {'
+        )
+        load_index = request.index(
+            "await loadOrderCommitments()", branch_start
+        )
+        detail_index = request.index(
+            "await openOrderCommitmentDetail(evaluationId)", load_index
+        )
+        error_index = request.index(
+            "orderCommitmentReevaluationErrorMessage(status)", detail_index
+        )
+        return_index = request.index("return;", error_index)
+        assert branch_start < load_index < detail_index < error_index < return_index
+        assert request.count("fetch(") == 1
+
+    def test_transport_and_json_failures_show_localized_recoverable_feedback(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index("function orderCommitmentDecisionRequirements")
+        ]
+
+        assert "try {" in request
+        assert "const response = await fetch(" in request
+        assert "const payload = await response.json()" in request
+        assert "catch (_error)" in request
+        assert 'translate("orderCommitmentReevaluationFailed")' in request
+        assert "showOrderCommitmentError(" in request
+        assert request.count("fetch(") == 1
+
+
+class TestOrderCommitmentDrawerAccessibility:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_detail_drawer_is_modal_and_manages_focus_and_background(self):
+        client = TestClient(create_app())
+
+        html = client.get("/planner/workbench").text
+        script = client.get("/planner/assets/planner-workbench.js").text
+        drawer_helpers = script[
+            script.index("function openSideDrawer"):
+            script.index("function isNarrowScreen")
+        ]
+
+        assert (
+            '<aside id="order-commitment-detail" class="issues-drawer '
+            'run-detail" role="dialog" aria-modal="true"'
+        ) in html
+        assert 'aria-labelledby="order-commitment-detail-title"' in html
+        assert "sideDrawerOpeners" in script
+        assert 'document.querySelector(".app-shell").inert = true' in drawer_helpers
+        assert 'document.getElementById("close-order-commitment-detail").focus()' in script
+        assert 'document.querySelector(".app-shell").inert = anyModalOpen' in drawer_helpers
+        assert "opener?.isConnected" in drawer_helpers
+        assert "opener.focus()" in drawer_helpers
+
+    def test_detail_drawer_escape_closes_and_restores_invoking_control(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        handler = script[
+            script.index("function handleOrderCommitmentDrawerKeydown"):
+            script.index("function isNarrowScreen")
+        ]
+
+        assert 'event.key !== "Escape"' in handler
+        assert 'closeSideDrawer("order-commitment-detail")' in handler
+        assert (
+            'addEventListener("keydown", handleOrderCommitmentDrawerKeydown)'
+            in script
+        )
+
+
+class TestOrderCommitmentUiDecisionFlow:
+    # UI-COMMIT-001 / BE-SDBR-010
+    @staticmethod
+    def _assets() -> tuple[str, str, str]:
+        client = TestClient(create_app())
+        return (
+            client.get("/planner/assets/planner-workbench.js").text,
+            client.get("/planner/workbench").text,
+            client.get("/planner/assets/planner-workbench.css").text,
+        )
+
+    @staticmethod
+    def _decision_script(script: str) -> str:
+        start = script.index("function orderCommitmentDecisionRequirements")
+        end = script.index("function renderOrderCommitmentDetail", start)
+        return script[start:end]
+
+    def test_dialog_shows_ccr_ack_for_reference_and_exceeded_candidates(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "ActionAcknowledgementRequirements?.[action]" in decision
+        assert "requirements.RequiresCcrAcknowledgement" in decision
+        assert 'ccrField.hidden = !requirements.RequiresCcrAcknowledgement' in decision
+        assert 'ccrAck.required = requirements.RequiresCcrAcknowledgement' in decision
+        assert 'detail.Recommendation?.ThresholdState' in decision
+        assert 'row?.ProtectionThresholdSource' in decision
+
+    def test_dialog_shows_material_ack_for_both_conditional_actions(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "requirements.RequiresMaterialAcknowledgement" in decision
+        assert 'materialField.hidden = !requirements.RequiresMaterialAcknowledgement' in decision
+        assert 'materialAck.required = requirements.RequiresMaterialAcknowledgement' in decision
+        assert 'detail.MaterialEvidence?.Status' in decision
+        for action in (
+            "ConditionallyAcceptRequestedDate",
+            "ConditionallyAcceptRecommendedDate",
+        ):
+            assert f'"{action}"' in script
+
+    def test_reject_hides_and_does_not_require_both_risk_acknowledgements(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "function orderCommitmentDecisionRequirements" in decision
+        assert "if (!requirements) return;" in decision
+        assert "ccrAck.checked = false" in decision
+        assert "materialAck.checked = false" in decision
+        assert "orderCommitmentAllowedActions().has(action)" in decision
+        assert 'selectedOrderCommitment?.Status !== "AwaitingPlannerDecision"' in decision
+
+    def test_dialog_requires_reason_and_visible_acknowledgements(self):
+        script, html, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert 'id="order-commitment-decision-reason" rows="3" required' in html
+        assert 'id="order-commitment-decision-error"' in html
+        assert 'role="alert"' in html
+        assert "function updateOrderCommitmentDecisionValidity" in decision
+        assert "!reason || (ccrRequired && !ccrAck)" in decision
+        assert "|| (materialRequired && !materialAck)" in decision
+        assert 'translate("requiredDecisionEvidenceMissing")' in decision
+        assert 'submit.disabled = !valid' in decision
+
+    def test_decision_sends_if_match_fingerprint_and_all_canonical_fields(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert decision.count(' + "/decision"') == 1
+        assert 'method: "POST"' in decision
+        assert '"Content-Type": "application/json"' in decision
+        assert '"If-Match": orderCommitmentRevision' in decision
+        for field in (
+            "DecisionID", "Decision", "DecidedBy", "Reason",
+            "ExpectedEvaluationFingerprint", "CcrRiskAcknowledged",
+            "MaterialRiskAcknowledged",
+        ):
+            assert f"{field}:" in decision
+        assert 'detail.TechnicalDetails.EvaluationFingerprint' in decision
+        assert '["DEC", detail.EvaluationID, detail.RecordVersion, action].join("-")' in decision
+
+    def test_conflict_refreshes_without_automatic_decision_retry(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+        submit = decision[
+            decision.index("async function submitOrderCommitmentDecision"):
+        ]
+
+        for status in (
+            "StateStoreRevisionConflict",
+            "OrderCommitmentEvaluationStale",
+            "OrderCommitmentEvaluationFingerprintMismatch",
+            "OrderCommitmentDecisionReplayConflict",
+        ):
+            assert f'"{status}"' in submit
+        assert "await loadOrderCommitments()" in submit
+        assert "await openOrderCommitmentDetail(detail.EvaluationID)" in submit
+        assert "selectedOrderCommitmentAction = null" in submit
+        assert "submitButton.disabled = true" in submit
+        assert submit.count("fetch(") == 1
+        assert "submitOrderCommitmentDecision(" not in submit.split("{", 1)[1]
+
+    def test_success_renders_accepted_pending_formal_schedule_boundaries(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert 'const status = payload?.Data?.Status' in decision
+        assert 'orderCommitmentLabel(status)' in decision
+        assert 'translate("orderCommitmentDecisionRecorded")' in decision
+        assert 'detail.Boundary?.ExternalOrderAcceptance' in decision
+        assert 'detail.Boundary?.PlanningRunCreation' in decision
+        assert 'detail.Boundary?.ProductionMutation' in decision
+        assert 'AcceptedPendingFormalSchedule: "已接受，待正式排程"' in script
+        assert 'AcceptedPendingFormalSchedule: "Accepted, pending formal schedule"' in script
+
+    def test_dialog_has_bilingual_business_errors_replay_and_failure_handling(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        translations = {
+            "requiredDecisionEvidenceMissing": (
+                "请填写决定原因并完成当前操作要求的风险确认。",
+                "Provide a decision reason and complete the risk acknowledgements required for this action.",
+            ),
+            "orderCommitmentEvidenceChanged": (
+                "决定依据已变化，已刷新当前评估；请重新选择操作。",
+                "Decision evidence changed. The current evaluation was refreshed; choose the action again.",
+            ),
+            "orderCommitmentReplayConflict": (
+                "该决定与已记录的结果不一致，已刷新当前评估；不会自动重试。",
+                "This decision conflicts with the recorded result. The evaluation was refreshed and was not retried.",
+            ),
+            "orderCommitmentDecisionFailed": (
+                "无法记录当前订单承诺决定。请复核后重试。",
+                "This order commitment decision could not be recorded. Review it and try again.",
+            ),
+        }
+        for key, (zh, en) in translations.items():
+            assert f'{key}: "{zh}"' in script
+            assert f'{key}: "{en}"' in script
+        assert "OrderCommitmentDecisionReplayEvidenceMismatch" in decision
+        assert "catch (_error)" in decision
+
+    def test_dialog_uses_native_keyboard_focus_and_responsive_terminal_gates(self):
+        script, html, style = self._assets()
+        decision = self._decision_script(script)
+        action_renderer = script[
+            script.index("function renderOrderCommitmentActions"):
+            script.index("function updateOrderCommitmentMaterialSkipField")
+        ]
+
+        assert '<dialog id="order-commitment-decision-dialog"' in html
+        assert 'aria-labelledby="order-commitment-decision-title"' in html
+        assert '<label id="order-commitment-ccr-ack-field"' in html
+        assert '<label id="order-commitment-material-ack-field"' in html
+        assert ".showModal()" in decision
+        assert "firstRequiredControl.focus()" in decision
+        assert 'addEventListener("cancel", closeOrderCommitmentDecision)' in script
+        assert 'addEventListener("submit", submitOrderCommitmentDecision)' in script
+        assert 'addEventListener("input", updateOrderCommitmentDecisionValidity)' in script
+        assert 'actions.replaceChildren()' in action_renderer
+        assert '.filter((action) => allowed.has(action))' in action_renderer
+        assert '.compact-dialog { width: min(620px, calc(100vw - 24px)); }' in style
+        assert 'max-height: calc(100vh - 32px)' in style
 
 
 def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
@@ -5752,7 +6334,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260709-mto-safe-date-priority"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260711-mto-order-commitment"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 

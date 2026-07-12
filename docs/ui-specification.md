@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 5.29 |
-| 日期 | 2026-07-09 |
+| 文档版本 | 5.36 |
+| 日期 | 2026-07-12 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
 | 后端基线 | `docs/backend-readiness-2026-06-19.md` |
@@ -133,13 +133,19 @@ UI 必须帮助计划员快速回答五个问题：
 | 编号 | 中文 | 英文 | 用途 |
 | --- | --- | --- | --- |
 | NAV-01 | 计划总览 | Planning Overview | 今日异常、队列、约束和待办 |
-| NAV-02 | 数据就绪 | Data Readiness | 主数据版本与运行快照健康度 |
-| NAV-03 | 排程任务 | Planning Runs | 创建、入队、执行、恢复和审计 |
-| NAV-04 | 排程结果 | Schedule Results | 甘特图、负荷、订单与诊断 |
-| NAV-05 | 释放管理 | Release Management | 绳长、物料、WIP和缓冲门控 |
-| NAV-06 | 异常中心 | Exceptions | 失败、死信、重排和稳定性 |
-| NAV-07 | 日历配置 | Calendar Configuration | 基础日历、资源分配、临时覆盖和最终可用窗口预览 |
-| NAV-08 | 管理后台 | Administration | 主数据、集成、求解器和权限 |
+| NAV-02 | 运营指标 | Operational Metrics | DDOM 运行指标 |
+| NAV-03 | 数据就绪 | Data Readiness | 主数据版本与运行快照健康度 |
+| NAV-04 | 物料计划 | Materials Planning | DDMRP 运行 read model |
+| NAV-05 | 订单承诺 | Order Commitments | MTO 自动评估与计划员决定 |
+| NAV-06 | 排程任务 | Planning Runs | 创建、入队、执行、恢复和审计 |
+| NAV-07 | 排程结果 | Schedule Results | 甘特图、负荷、订单与诊断 |
+| NAV-08 | 释放管理 | Release Management | 绳长、物料、WIP 和缓冲门控 |
+| NAV-09 | 缓冲执行 | Buffer Execution | 缓冲状态与执行反馈 |
+| NAV-10 | 派工建议 | Dispatch Suggestions | MES 建议和证据 |
+| NAV-11 | 异常中心 | Exceptions | 失败、死信、重排和稳定性 |
+| NAV-12 | 日历配置 | Calendar Configuration | 日历与有效能力窗口 |
+| NAV-13 | 管理后台 | Administration | 主数据、集成、求解器和权限 |
+| NAV-D1 | 公开演示闭环 | Public Demo | 演示数据与验收路径 |
 
 ### 6.2 应用外壳
 
@@ -269,6 +275,72 @@ UI 必须帮助计划员快速回答五个问题：
 - 第一版只读展示补货建议，不提供批量批准、ERP 订单生成或外部投递。
 - 不提供 Buffer Profile、DLT、调整因子、解耦点设计或 DDMRP 参数配置入口。
 - 所有补货与不补货判断以 `docs/ddom-ddmrp-runtime-principles.md` 为准，尤其是绿区和高于绿区不补货。
+
+### UI-COMMIT-001 MTO 订单承诺工作台
+
+**状态：已验证待用户确认**
+
+页面位置：独立导航页 `订单承诺 / Order Commitments`。
+
+列表 read model 的字段必须精确为：
+
+```python
+ORDER_COMMITMENT_ROW_FIELDS = (
+    "EvaluationID", "OrderID", "DemandLineID", "ProductID", "Quantity", "Uom",
+    "BusinessPriority", "RequestedDueAt", "EarliestSafePromiseAt",
+    "SelectedPromiseAt", "CcrResourceIDs", "CcrWindowCount",
+    "LoadBeforeMinutes", "LoadAfterMinutes", "LoadAfterPercent",
+    "ProtectionThresholdPercent", "ProtectionThresholdSource",
+    "ProtectionThresholdApproved", "MaterialStatus",
+    "MaterialEvidenceFreshnessStatus", "Recommendation", "AllowedActions",
+    "RequiresCcrAcknowledgement", "RequiresMaterialAcknowledgement", "Status",
+    "ReservationBatchID", "ReservationStatus", "ExceptionStatus", "EvaluatedAt",
+    "ExternalOrderAcceptance", "PlanningRunCreation", "ProductionMutation",
+)
+```
+
+- `ReservationStatus` 只允许 `NotReserved`、关联的 Phase 0 batch 状态或 `ReservationEvidenceMissing`。
+- `ExceptionStatus` 只允许 `None`、`AssessmentBlocked`、`MaterialEvidenceBlocked`、`ReservationEvidenceMissing` 或 `PlanningErrorPending`。
+- `AllowedActions` 必须由生命周期派生；终态列表和详情均为空，不得保留可执行操作。
+
+详情中的 `Recommendation` 对象字段必须精确为：
+
+```python
+RECOMMENDATION_VIEW_FIELDS = (
+    "Decision",
+    "AllowedActions",
+    "ThresholdState",
+    "RequiresPlannerDecision",
+    "RequiresCcrAcknowledgement",
+    "RequiresMaterialAcknowledgement",
+    "ActionAcknowledgementRequirements",
+)
+```
+
+`ActionAcknowledgementRequirements` 只能以投影后的 `AllowedActions` 为键，每个值必须精确包含 `RequiresCcrAcknowledgement` 和 `RequiresMaterialAcknowledgement`；终态详情的操作列表和确认要求对象均为空。
+
+审计投影字段必须精确为：
+
+```python
+AUDIT_FIELDS = (
+    "EventID", "EventType", "OccurredAt", "ActorID",
+    "DecisionID", "ReservationBatchID", "Details",
+)
+SAFE_AUDIT_DETAIL_FIELDS = frozenset({
+    "FromStatus", "ToStatus", "Recommendation", "DecisionCode",
+    "SupersededByEvaluationID", "AcceptedPromiseAt",
+    "CcrRiskAcknowledged", "MaterialRiskAcknowledged",
+    "MaterialCheckEnabled", "MaterialEvidenceFreshnessStatus",
+})
+```
+
+交互与边界：
+
+- 不投影 event trace/causation/correlation ID、source payload、`Basis`、原始订单、主数据/快照行或未知 `Details`；安全 trace/fingerprint 只允许出现在默认收起的 `TechnicalDetails`。
+- 正常计划员流程不得显示原始 JSON；接收和重新评估 payload 不得提供物料窗口字段，物料窗口只消费 baseline run 冻结的 release policy。
+- 所有建议、物料、生命周期、预留、异常和操作标签必须提供中英文；语言切换不得改变对象 ID。
+- 重新评估使用服务端选择的当前运行快照；决定发生 409 stale conflict 时显示本地化提示并刷新详情，不自动重试决定。
+- option-2 接受终态文字为 `已接受，待正式排程 / Accepted, pending formal schedule`；只允许显式计划员决定创建共享 Phase 0 对象，不自动创建 Planning Run，不确认外部订单，不修改 DDAE、主数据、ERP/WMS、MES、供应商或生产权威状态。
 
 ### UI-DDOM-001 DDOM 运营指标与偏差反馈
 
@@ -804,6 +876,10 @@ UI 必须帮助计划员快速回答五个问题：
 | 队列指标 | `GET /planner/workbench/planning-runs/metrics` |
 | 审计 | `GET /planner/workbench/planning-runs/audit-events` |
 | 场景比较 | `POST /planner/workbench/scenarios/compare` |
+| 订单承诺接收 | `POST /planner/workbench/order-commitments/intake` |
+| 订单承诺列表/详情 | `GET /planner/workbench/order-commitments/workbench`、`GET /planner/workbench/order-commitments/{evaluation_id}` |
+| 订单承诺重新评估 | `POST /planner/workbench/order-commitments/{evaluation_id}/reevaluate` |
+| 订单承诺计划员决定 | `POST /planner/workbench/order-commitments/{evaluation_id}/decision` |
 | 释放评估 | `POST /planner/workbench/release` |
 | 重排请求 | `/planner/workbench/replan-requests...` |
 | 释放授权 | `/planner/workbench/release-authorizations...` |
@@ -892,6 +968,7 @@ UI 不得直接构造或修改 SQLite 数据。
 | 10 | 活动求解器切换 | UI-RUN-002、UI-ADMIN-002 | 是 |
 | 11 | 计划发布治理 | UI-PLANPUB-001 | 是 |
 | 12 | 测试案例验收总览 | UI-OVERVIEW-001 | 是 |
+| 13 | MTO 订单承诺评估 | UI-COMMIT-001 | 是 |
 
 任何验收单元未确认前，原则上不进入下一单元的正式开发；若用户明确要求继续，未确认单元状态保持 `已验证待用户确认`，不得写成 `用户已确认`。
 
@@ -1106,10 +1183,30 @@ UI 不得直接构造或修改 SQLite 数据。
 - 补充验证：2026-06-22 案例卡新增 `ScheduleResultOpenable` 与不可打开原因展示，未完成案例显示“排程未完成”；新增单案例复位和全部案例复位入口；覆盖三组业务闭环案例和六组 `TST-CP-*` 案例，验证 Completed 案例均可打开排程结果、不可行案例返回明确不可打开原因；定向验证 `pytest tests/test_business_closure.py tests/test_api.py -q -k "openable_schedule_results or acceptance_reset or reset_all or case_acceptance_overview or admin_001_002 or cp_sat_business_cases or schedule_result_workspace or ui_calendar" --basetemp .tmp/pytest-case-reset -p no:cacheprovider`，9 passed
 - 用户确认：已确认（2026-06-20）
 
+### 17.13 第十三验收单元记录
+
+- 规格：`UI-COMMIT-001`
+- 后台依赖：`BE-SDBR-006` 至 `BE-SDBR-010`、`BE-RUN-011`
+- 状态：已验证待用户确认
+- 范围：独立 MTO 订单承诺工作台，提供服务端当前证据驱动的 CCR 优先自动评估、重新评估、建议和计划员最终决定。
+- 读模型：列表、详情、操作确认要求和安全审计严格使用 `UI-COMMIT-001` 定义的白名单字段；显示 `ReservationStatus`、`ExceptionStatus` 和生命周期派生的 `AllowedActions`，不显示原始 JSON。
+- 决定边界：接收和重新评估只产生建议；option-2 接受结束于 `AcceptedPendingFormalSchedule`，不自动创建 Planning Run，不发送外部订单确认，不修改 DDAE、主数据、ERP/WMS、MES、供应商或生产权威状态。
+- 自动化验证：2026-07-12 执行 PowerShell seed 脚本语法解析、`python -m compileall -q sdbr`、最终 Task28 focused pytest（25 passed）和 post-edit fresh unique-basetemp 全量 pytest（1072 passed，1 个既有 Starlette deprecation warning，128.68 秒）；`git diff --check` 无空白错误。
+- 实服种子验证：使用 SQLite-backed `uvicorn` 地址 `http://127.0.0.1:8876` 执行 `scripts/seed_mto_order_commitment_browser.ps1`，得到 baseline `TST-MTO-RUN-BASELINE`、snapshot `TST-MTO-OPS-CURRENT`、普通/跳过物料/已接受/已拒绝/过期决定五类评估、有效预留批次、`OrderCommitmentEvaluationStale` 和 final revision 9；脚本只调用公开 API。
+- 浏览器验证：使用本机 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` 由 standalone Playwright 控制。桌面 `1280x720` 和移动 `390x844` 截图像素已从 PNG IHDR 复核；移动 DOM 同时返回 `innerWidth=390`、`innerHeight=844`、`clientWidth=390`、`document.scrollWidth=390`。导航抽屉、四项摘要、11 列滚动容器、详情、重新评估控件和决定对话框均在视口内，文档无横向溢出。
+- 状态与交互验证：普通、跳过物料、已接受待正式排程、已拒绝、已替代和 stale 409 均已覆盖；终态及已替代详情无操作；物料跳过空原因由 required gate 阻止且不发请求；CCR/物料确认按动作显示并门控提交；stale 决定只发出一次 POST、显示本地化错误且不自动重试。
+- 双语与键盘验证：中文/英文列表、详情、建议、物料、生命周期、预留、异常、动作和边界标签均切换，业务 ID 保持不变；Tab 可聚焦订单承诺路由并以 Enter 打开，详情按钮可通过键盘打开，路由与详情按钮显示 3px focus outline，原生 checkbox 获得浏览器 focus indicator。
+- 浏览器证据：`.tmp/mto-order-commitment-task28-desktop-1280x720.png`、`.tmp/mto-order-commitment-task28-desktop-en-detail-1280x720.png`、`.tmp/mto-order-commitment-task28-mobile-main-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-nav-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-detail-controls-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-decision-controls-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-material-pending-dialog-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-stale-error-390x844.png`。
+- 控制台结果：应用 JavaScript `pageerror` 为 0；唯一普通资源噪声为浏览器请求 `/favicon.ico` 返回 404。应用 CSS/JS、工作台 API 和详情 API 均成功；stale 决定的 409 为预期业务证据。
+- 详细记录：`docs/mto-order-commitment-task28-evidence-2026-07-12.md`。
+- 用户确认：未确认。
+
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.36 | 2026-07-12 | 完成 `UI-COMMIT-001` Task28 验证：API-only 可重放种子、SQLite 实服 smoke、24 项 focused 和 1072 项全量回归、本机 Edge/Playwright 桌面与真实 390x844 移动证据、双语、键盘、状态门控及 stale 无重试；状态为已验证待用户确认 |
+| 5.35 | 2026-07-11 | 启动 `UI-COMMIT-001` 独立 MTO 订单承诺工作台：精确列表/详情字段、预留与异常状态、AllowedActions 门控、安全审计、当前快照重新评估和 option-2 决定；不发送物料窗口、不创建 Planning Run、不修改外部权威 |
 | 5.34 | 2026-07-09 | 完成 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if 第一版：排程结果页新增冲击评估面板，仿真结果页新增 Simio 使用条件 hover/focus 提示；状态为已验证待用户确认 |
 | 5.33 | 2026-07-09 | 启动 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if UI 规格：排程结果页规划只读/轻编辑 what-if 面板，并在仿真结果页规划 Simio 使用条件 hover/focus 提示；状态待实现、未用户确认 |
 | 5.32 | 2026-07-09 | 修正 P1 市场控制 UI 业务口径：计划 KPI 改为“按计划准时/按计划延迟”，MTO 安全承诺过期时显示“已过期”，Late/Red 明细改为中文并由真实排程时间驱动 |

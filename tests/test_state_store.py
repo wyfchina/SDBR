@@ -209,6 +209,92 @@ def test_sqlite_state_store_clear_empties_shared_planning_reservation_collection
     assert store.processed_planning_event_keys == set()
 
 
+class TestOrderCommitmentStatePersistence:
+    # Persistence evidence: BE-SDBR-010.
+    def test_order_commitment_collections_round_trip_through_sqlite(self, tmp_path):
+        database_path = tmp_path / "workbench.db"
+        store = SQLiteWorkbenchStateStore(database_path)
+        store.order_commitment_evaluations["MTO-EVAL-1"] = {
+            "EvaluationID": "MTO-EVAL-1",
+            "Recommendation": "AcceptRequestedDate",
+            "DecisionEvidence": {"MaterialCheck": "Available"},
+        }
+        store.order_commitment_events.append(
+            {
+                "EventID": "MTO-EVENT-1",
+                "EvaluationID": "MTO-EVAL-1",
+                "EventType": "Evaluated",
+            }
+        )
+
+        store.save()
+        restored = SQLiteWorkbenchStateStore(database_path)
+
+        assert restored.order_commitment_evaluations == (
+            store.order_commitment_evaluations
+        )
+        assert restored.order_commitment_events == store.order_commitment_events
+
+    def test_order_commitment_collections_appear_in_health_and_clear(self, tmp_path):
+        store = SQLiteWorkbenchStateStore(tmp_path / "workbench.db")
+        store.order_commitment_evaluations["MTO-EVAL-1"] = {
+            "EvaluationID": "MTO-EVAL-1"
+        }
+        store.order_commitment_events.append({"EventID": "MTO-EVENT-1"})
+
+        assert store.health()["StateCounts"]["OrderCommitmentEvaluations"] == 1
+        assert store.health()["StateCounts"]["OrderCommitmentEvents"] == 1
+
+        store._clear()
+
+        assert store.order_commitment_evaluations == {}
+        assert store.order_commitment_events == []
+
+    def test_order_commitment_collections_restore_content_and_aliases_after_atomic_rollback(
+        self,
+        tmp_path,
+    ):
+        store = SQLiteWorkbenchStateStore(tmp_path / "workbench.db")
+        store.order_commitment_evaluations["MTO-EVAL-1"] = {
+            "EvaluationID": "MTO-EVAL-1",
+            "Recommendation": "AcceptRequestedDate",
+        }
+        store.order_commitment_events.append(
+            {"EventID": "MTO-EVENT-1", "EvaluationID": "MTO-EVAL-1"}
+        )
+        store.save()
+        evaluation_alias = id(store.order_commitment_evaluations)
+        event_alias = id(store.order_commitment_events)
+        expected_evaluations = {
+            "MTO-EVAL-1": {
+                "EvaluationID": "MTO-EVAL-1",
+                "Recommendation": "AcceptRequestedDate",
+            }
+        }
+        expected_events = [
+            {"EventID": "MTO-EVENT-1", "EvaluationID": "MTO-EVAL-1"}
+        ]
+
+        def mutate():
+            store.order_commitment_evaluations["MTO-EVAL-2"] = {
+                "EvaluationID": "MTO-EVAL-2"
+            }
+            store.order_commitment_events.append({"EventID": "MTO-EVENT-2"})
+            raise RuntimeError("Rollback MTO evidence mutation.")
+
+        try:
+            store.atomic_update(mutate)
+        except RuntimeError as error:
+            assert str(error) == "Rollback MTO evidence mutation."
+        else:
+            raise AssertionError("Atomic update did not roll back MTO evidence.")
+
+        assert id(store.order_commitment_evaluations) == evaluation_alias
+        assert id(store.order_commitment_events) == event_alias
+        assert store.order_commitment_evaluations == expected_evaluations
+        assert store.order_commitment_events == expected_events
+
+
 def test_sqlite_state_store_is_committed_after_successful_api_write(tmp_path):
     database_path = tmp_path / "workbench.db"
     client = TestClient(

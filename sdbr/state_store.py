@@ -112,6 +112,10 @@ class WorkbenchStateStore:
     material_planning_allocations: dict[str, dict[str, object]] = field(
         default_factory=dict
     )
+    order_commitment_evaluations: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    order_commitment_events: list[dict[str, object]] = field(default_factory=list)
     planning_reservation_events: list[dict[str, object]] = field(default_factory=list)
     processed_planning_event_keys: set[str] = field(default_factory=set)
     audit_events: list[dict[str, object]] = field(default_factory=list)
@@ -384,6 +388,8 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "planning_reservation_batches": self.planning_reservation_batches,
             "ccr_capacity_reservations": self.ccr_capacity_reservations,
             "material_planning_allocations": self.material_planning_allocations,
+            "order_commitment_evaluations": self.order_commitment_evaluations,
+            "order_commitment_events": self.order_commitment_events,
             "planning_reservation_events": self.planning_reservation_events,
             "processed_planning_event_keys": sorted(
                 self.processed_planning_event_keys
@@ -619,6 +625,12 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.material_planning_allocations.update(
             payloads.get("material_planning_allocations", {})
         )
+        self.order_commitment_evaluations.update(
+            deepcopy(payloads.get("order_commitment_evaluations", {}))
+        )
+        self.order_commitment_events.extend(
+            deepcopy(payloads.get("order_commitment_events", []))
+        )
         self.planning_reservation_events.extend(
             payloads.get("planning_reservation_events", [])
         )
@@ -671,6 +683,8 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.planning_reservation_batches.clear()
         self.ccr_capacity_reservations.clear()
         self.material_planning_allocations.clear()
+        self.order_commitment_evaluations.clear()
+        self.order_commitment_events.clear()
         self.planning_reservation_events.clear()
         self.processed_planning_event_keys.clear()
         self.audit_events.clear()
@@ -780,6 +794,8 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "PlanningReservationBatches": len(store.planning_reservation_batches),
         "CcrCapacityReservations": len(store.ccr_capacity_reservations),
         "MaterialPlanningAllocations": len(store.material_planning_allocations),
+        "OrderCommitmentEvaluations": len(store.order_commitment_evaluations),
+        "OrderCommitmentEvents": len(store.order_commitment_events),
         "PlanningReservationEvents": len(store.planning_reservation_events),
         "ProcessedPlanningEventKeys": len(store.processed_planning_event_keys),
         "AuditEvents": len(store.audit_events),

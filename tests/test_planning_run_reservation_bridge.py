@@ -8,6 +8,8 @@ import json
 import pytest
 
 from sdbr.planning_commitments import BUSINESS_CONTENT_FIELDS, create_demand_commitment
+from sdbr.order_commitment_evaluation import prepare_mto_acceptance
+from sdbr.planning_reservations import apply_reservation_write_set
 from sdbr.planning_run_reservation_bridge import (
     ReservationBatchReferenceError,
     ReservationGraphDriftError,
@@ -1337,3 +1339,270 @@ def test_explicit_legacy_frozen_graph_fails_closed_with_migration_requirement():
     assert error.value.status == "PlanningReservationGraphMigrationRequired"
     assert batches["PRB-1"]["Status"] == "ActivePlanReservation"
     assert capacities["CCR-1"]["Status"] == "ActivePlanReservation"
+
+
+class TestMtoAcceptancePlanningRunBridge:
+    """BE-SDBR-006 through BE-SDBR-010 and BE-RUN-011 acceptance evidence."""
+
+    expected_context = {
+        "OrderCommitmentEvaluationID": "OCE-MTO-BRIDGE",
+        "BaselinePlanningRunID": "RUN-BASELINE",
+        "OperatingModelConfigurationID": None,
+        "OperatingModelFingerprint": None,
+        "SchedulingConfigurationID": None,
+        "DDMRPConfigurationID": None,
+        "ReleasePolicyVersionID": "RELEASE-BRIDGE",
+        "RoutingID": "PRIMARY",
+        "BusinessPriority": 10,
+        "AcceptedPromiseAt": "2026-07-20T18:00:00+00:00",
+        "MaterialCommitmentStatus": "PlannedAllocationPrepared",
+        "PendingMaterialRequirements": [],
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    }
+
+    @staticmethod
+    def _write_set():
+        evaluation = {
+            "EvaluationID": "OCE-MTO-BRIDGE",
+            "EvaluationFingerprint": "sha256:mto-bridge",
+            "Status": "AwaitingPlannerDecision",
+            "Order": {
+                "SourceSystem": "MockERP",
+                "SourceObjectType": "CustomerOrder",
+                "OrderID": "SO-BRIDGE",
+                "OrderVersion": "1",
+                "DemandLineID": "10",
+                "PlanningOrderID": "SO-BRIDGE:10",
+                "ProductID": "FG-1",
+                "LocationID": "MAIN",
+                "Quantity": 1.0,
+                "Uom": "EA",
+                "RequestedDueAt": "2026-07-20T18:00:00+00:00",
+                "BusinessPriority": 10,
+                "RoutingID": "PRIMARY",
+                "TraceID": "TRACE-SO-BRIDGE-10",
+            },
+            "Basis": {
+                "BaselinePlanningRunID": "RUN-BASELINE",
+                "OperatingModelConfigurationID": None,
+                "OperatingModelFingerprint": None,
+                "SchedulingConfigurationID": None,
+                "DDMRPConfigurationID": None,
+                "ReleasePolicyVersionID": "RELEASE-BRIDGE",
+            },
+            "ShadowSchedule": {
+                "Status": "OnTime",
+                "RequestedDateAssessment": {
+                    "Feasible": True,
+                    "PromiseAt": "2026-07-20T18:00:00+00:00",
+                    "ReservationRequests": [
+                        {
+                            "ReservationLineID": (
+                                "SO-BRIDGE:10:CCR-CUT:"
+                                "2026-07-20T08:00:00+00:00"
+                            ),
+                            "OrderID": "SO-BRIDGE:10",
+                            "OperationID": "SO-BRIDGE:10:CCR-CUT",
+                            "ResourceID": "CCR-1",
+                            "WindowStartAt": "2026-07-20T08:00:00+00:00",
+                            "WindowEndAt": "2026-07-20T16:00:00+00:00",
+                            "ReservedMinutes": 60,
+                            "LatestAllowedCompletionAt": (
+                                "2026-07-20T16:00:00+00:00"
+                            ),
+                        }
+                    ],
+                },
+            },
+            "MaterialAssessment": {
+                "Status": "Feasible",
+                "AllocationRequests": [
+                    {
+                        "RequirementLineID": "SO-BRIDGE:10:RM-1",
+                        "ItemID": "RM-1",
+                        "LocationID": "MAIN",
+                        "Uom": "EA",
+                        "AllocatedQty": 5.0,
+                        "SupplySourceType": "OnHand",
+                        "MaterialSnapshotID": "OPS-BRIDGE",
+                    }
+                ],
+                "PendingRequirements": [],
+            },
+            "Recommendation": {
+                "AllowedActions": [
+                    "AcceptRequestedDate",
+                    "Reevaluate",
+                    "Reject",
+                ],
+                "RequiresCcrAcknowledgement": False,
+                "RequiresMaterialAcknowledgement": False,
+            },
+        }
+        return prepare_mto_acceptance(
+            evaluation=evaluation,
+            existing_commitments={},
+            decision_id="DEC-MTO-BRIDGE",
+            decision="AcceptRequestedDate",
+            decided_by="planner-bridge",
+            decided_at=datetime(2026, 7, 11, 8, tzinfo=timezone.utc),
+            reason="Bridge compatibility acceptance.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+
+    @staticmethod
+    def _schedule() -> dict[str, object]:
+        return {
+            "GanttRows": [
+                {
+                    "ResourceID": "CCR-1",
+                    "Bars": [
+                        {
+                            "OrderID": "SO-BRIDGE:10",
+                            "OperationID": "SO-BRIDGE:10:CCR-CUT",
+                            "Start": "2026-07-20T08:00:00+00:00",
+                            "End": "2026-07-20T09:00:00+00:00",
+                            "DurationMinutes": 60,
+                        }
+                    ],
+                }
+            ]
+        }
+
+    def _accepted_graph(self):
+        write_set = self._write_set()
+        commitments: dict[str, dict[str, object]] = {}
+        batches: dict[str, dict[str, object]] = {}
+        capacities: dict[str, dict[str, object]] = {}
+        materials: dict[str, dict[str, object]] = {}
+        events: list[dict[str, object]] = []
+        processed_keys: set[str] = set()
+        planning_runs: dict[str, dict[str, object]] = {}
+        apply_reservation_write_set(
+            write_set=write_set,
+            commitments=commitments,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=materials,
+            events=events,
+            processed_event_keys=processed_keys,
+        )
+        assert planning_runs == {}
+        planning_run = {
+            "RunID": "RUN-MTO-BRIDGE",
+            "PlanningReservationBatchIDs": [
+                write_set.batch["ReservationBatchID"]
+            ],
+        }
+        frozen = freeze_planning_reservations(
+            batch_ids=planning_run["PlanningReservationBatchIDs"],
+            demand_commitments=commitments,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=materials,
+        )
+        return write_set, commitments, batches, capacities, materials, planning_run, frozen
+
+    def test_explicit_planning_run_selection_freezes_and_converts_mto_acceptance(
+        self,
+    ):
+        (
+            write_set,
+            commitments,
+            batches,
+            capacities,
+            materials,
+            planning_run,
+            frozen,
+        ) = self._accepted_graph()
+
+        frozen_demand = frozen["DemandCommitments"][0]
+        assert {
+            key: frozen_demand.get(key) for key in self.expected_context
+        } == self.expected_context
+
+        completed = transition_planning_reservations_for_run(
+            run_id=planning_run["RunID"],
+            run_status="Completed",
+            occurred_at=_occurred_at(),
+            batch_ids=planning_run["PlanningReservationBatchIDs"],
+            frozen_reservations=frozen,
+            schedule=self._schedule(),
+            demand_commitments=commitments,
+            batches=batches,
+            capacity_reservations=capacities,
+            material_allocations=materials,
+        )
+
+        batch_id = write_set.batch["ReservationBatchID"]
+        capacity_id = write_set.batch["CapacityReservationIDs"][0]
+        material_id = write_set.batch["MaterialAllocationIDs"][0]
+        assert completed["Batches"][batch_id]["Status"] == (
+            "ConvertedToScheduledOccupancy"
+        )
+        assert completed["CapacityReservations"][capacity_id]["Status"] == (
+            "ConvertedToScheduledOccupancy"
+        )
+        assert completed["MaterialAllocations"][material_id]["Status"] == (
+            "ActivePlanReservation"
+        )
+        assert completed["Batches"][batch_id]["DemandCommitmentID"] == (
+            write_set.demand_commitment["DemandCommitmentID"]
+        )
+        assert completed["CapacityReservations"][capacity_id]["ReservationBatchID"] == (
+            batch_id
+        )
+        assert completed["MaterialAllocations"][material_id]["ReservationBatchID"] == (
+            batch_id
+        )
+        assert {
+            key: commitments[write_set.demand_commitment["DemandCommitmentID"]].get(key)
+            for key in self.expected_context
+        } == self.expected_context
+        assert "DemandCommitments" not in completed
+
+    def test_explicit_planning_run_failure_preserves_mto_reservation_as_held(self):
+        (
+            write_set,
+            commitments,
+            batches,
+            capacities,
+            materials,
+            planning_run,
+            frozen,
+        ) = self._accepted_graph()
+        failed_commitments = deepcopy(commitments)
+        failed_batches = deepcopy(batches)
+        failed_capacities = deepcopy(capacities)
+        failed_materials = deepcopy(materials)
+
+        failed = transition_planning_reservations_for_run(
+            run_id=planning_run["RunID"],
+            run_status="Failed",
+            occurred_at=_occurred_at(),
+            batch_ids=planning_run["PlanningReservationBatchIDs"],
+            frozen_reservations=frozen,
+            demand_commitments=failed_commitments,
+            batches=failed_batches,
+            capacity_reservations=failed_capacities,
+            material_allocations=failed_materials,
+        )
+
+        batch_id = write_set.batch["ReservationBatchID"]
+        capacity_id = write_set.batch["CapacityReservationIDs"][0]
+        material_id = write_set.batch["MaterialAllocationIDs"][0]
+        assert failed["Batches"][batch_id]["Status"] == "HeldForPlanningError"
+        assert failed["CapacityReservations"][capacity_id]["Status"] == (
+            "HeldForPlanningError"
+        )
+        assert failed["MaterialAllocations"][material_id]["Status"] == (
+            "HeldForPlanningError"
+        )
+        assert {
+            key: failed_commitments[write_set.demand_commitment["DemandCommitmentID"]].get(key)
+            for key in self.expected_context
+        } == self.expected_context
+        assert "DemandCommitments" not in failed

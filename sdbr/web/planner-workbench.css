@@ -577,6 +577,15 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
 .app-shell.nav-collapsed .nav-item { grid-template-columns: 1fr; justify-items: center; }
 
 .table-scroll { max-width: 100%; overflow-x: auto; }
+.order-commitment-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: #fff; overflow: hidden; }
+.order-commitment-summary div { min-width: 0; padding: 12px 14px; border-right: 1px solid var(--color-border); }
+.order-commitment-summary div:last-child { border-right: 0; }
+.order-commitment-summary span { display: block; color: var(--color-muted); font-size: 10px; }
+.order-commitment-summary strong { display: block; margin-top: 4px; font-size: 20px; }
+.order-commitment-workbench { min-width: 0; }
+.order-commitment-workbench .table-scroll { max-width: 100%; overflow-x: auto; }
+.technical-detail { margin-top: 12px; }
+.technical-detail summary { cursor: pointer; color: var(--color-primary); font-size: 12px; font-weight: 700; }
 
 .schedule-results-view { display: grid; gap: 14px; min-width: 0; }
 .schedule-results-view[hidden], #schedule-result-content[hidden] { display: none; }
@@ -1165,6 +1174,8 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
   .run-metrics div { border-bottom: 1px solid var(--color-border); }
   .material-planning-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .material-planning-summary div { border-bottom: 1px solid var(--color-border); }
+  .order-commitment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .order-commitment-summary div { border-bottom: 1px solid var(--color-border); }
   .material-workbench-toolbar { align-items: stretch; flex-direction: column; }
   .material-workbench-filters { align-items: stretch; flex-direction: column; }
   .material-workbench-filters input, .material-workbench-filters select { width: 100%; }
@@ -1191,6 +1202,7 @@ h1 { margin: 0; font-size: 26px; line-height: 1.25; letter-spacing: 0; }
   .what-if-grid, .what-if-result { grid-template-columns: 1fr; }
   .simio-recommendation-tooltip { position: static; width: auto; margin-top: 8px; box-shadow: none; }
   .schedule-toolbar, .compact-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .order-commitment-workbench .compact-toolbar { grid-template-columns: minmax(0, 1fr); }
   .load-row { grid-template-columns: 130px minmax(200px, 1fr) 70px; }
   .flow-control-summary { grid-template-columns: 1fr; }
   .comparison-controls, .comparison-grid { grid-template-columns: 1fr; }

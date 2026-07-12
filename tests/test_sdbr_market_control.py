@@ -8,6 +8,7 @@ from sdbr.sdbr_market_control import (
     build_mta_replenishment_load,
     build_mto_safe_date_summary,
     build_unified_buffer_priority,
+    classify_ccr_load,
 )
 
 
@@ -290,6 +291,37 @@ def test_ccr_planned_load_marks_near_limit_and_overload():
     assert result["Buckets"][0]["Status"] == "Overloaded"
     assert result["Summary"]["Status"] == "Overloaded"
     assert result["Summary"]["MaxLoadPercent"] == 112.5
+
+
+class TestSharedCcrLoadClassifier:
+    def test_classifier_preserves_existing_threshold_boundaries(self):
+        # Acceptance evidence: BE-SDBR-001, BE-SDBR-010.
+        target = 80.0
+
+        assert classify_ccr_load(
+            load_percent=80.0,
+            protective_capacity_target_percent=target,
+        ) == "Protected"
+        assert classify_ccr_load(
+            load_percent=80.01,
+            protective_capacity_target_percent=target,
+        ) == "Watch"
+        assert classify_ccr_load(
+            load_percent=90.0,
+            protective_capacity_target_percent=target,
+        ) == "Watch"
+        assert classify_ccr_load(
+            load_percent=95.0,
+            protective_capacity_target_percent=target,
+        ) == "NearLimit"
+        assert classify_ccr_load(
+            load_percent=100.0,
+            protective_capacity_target_percent=target,
+        ) == "NearLimit"
+        assert classify_ccr_load(
+            load_percent=100.01,
+            protective_capacity_target_percent=target,
+        ) == "Overloaded"
 
 
 def test_mto_safe_date_uses_first_protected_ccr_bucket_plus_half_buffer():

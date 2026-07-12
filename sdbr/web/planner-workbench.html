@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SDBR Planner Workbench</title>
-  <link rel="stylesheet" href="/planner/assets/planner-workbench.css">
+  <link rel="stylesheet" href="/planner/assets/planner-workbench.css?v=20260711-mto-order-commitment">
 </head>
 <body>
   <div class="app-shell">
@@ -30,30 +30,33 @@
         <a class="nav-item" href="#material-planning" data-route="material-planning" data-nav-help>
           <span class="nav-index" aria-hidden="true">04</span><span data-i18n="navMaterials">物料计划</span>
         </a>
+        <a class="nav-item" href="#order-commitments" data-route="order-commitments" data-nav-help>
+          <span class="nav-index" aria-hidden="true">05</span><span data-i18n="navOrderCommitments">订单承诺</span>
+        </a>
         <a class="nav-item" href="#planning-runs" data-route="planning-runs" data-nav-help>
-          <span class="nav-index" aria-hidden="true">05</span><span data-i18n="navRuns">排程任务</span>
+          <span class="nav-index" aria-hidden="true">06</span><span data-i18n="navRuns">排程任务</span>
         </a>
         <a class="nav-item" href="#schedule-results" data-route="schedule-results" data-nav-help>
-          <span class="nav-index" aria-hidden="true">06</span><span data-i18n="navResults">排程结果</span>
+          <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navResults">排程结果</span>
         </a>
         <a class="nav-item" href="#release-management" data-route="release-management" data-nav-help>
-          <span class="nav-index" aria-hidden="true">07</span><span data-i18n="navRelease">释放管理</span>
+          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navRelease">释放管理</span>
         </a>
         <a class="nav-item" href="#buffer-board" data-route="buffer-board" data-nav-help>
-          <span class="nav-index" aria-hidden="true">08</span><span data-i18n="navBuffer">缓冲执行</span>
+          <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navBuffer">缓冲执行</span>
         </a>
         <a class="nav-item" href="#dispatch-suggestions" data-route="dispatch-suggestions" data-nav-help>
-          <span class="nav-index" aria-hidden="true">09</span><span data-i18n="navDispatch">派工建议</span>
+          <span class="nav-index" aria-hidden="true">10</span><span data-i18n="navDispatch">派工建议</span>
         </a>
         <a class="nav-item" href="#exceptions" data-route="exceptions" data-nav-help>
-          <span class="nav-index" aria-hidden="true">10</span><span data-i18n="navExceptions">异常中心</span>
+          <span class="nav-index" aria-hidden="true">11</span><span data-i18n="navExceptions">异常中心</span>
           <span class="nav-badge" aria-label="0" data-i18n-aria-label="noUnreadExceptions">0</span>
         </a>
         <a class="nav-item" href="#calendar" data-route="calendar" data-nav-help>
-          <span class="nav-index" aria-hidden="true">11</span><span data-i18n="navCalendar">日历配置</span>
+          <span class="nav-index" aria-hidden="true">12</span><span data-i18n="navCalendar">日历配置</span>
         </a>
         <a class="nav-item" href="#administration" data-route="administration" data-nav-help>
-          <span class="nav-index" aria-hidden="true">12</span><span data-i18n="navAdmin">管理后台</span>
+          <span class="nav-index" aria-hidden="true">13</span><span data-i18n="navAdmin">管理后台</span>
         </a>
         <a class="nav-item" href="#public-demo" data-route="public-demo" data-nav-help>
           <span class="nav-index" aria-hidden="true">D1</span><span data-i18n="navPublicDemo">公开演示闭环</span>
@@ -418,6 +421,42 @@
               </div>
             </div>
           </section>
+        </div>
+
+        <div id="order-commitments-view" class="order-commitments-view" hidden>
+          <section class="order-commitment-summary" aria-label="订单承诺摘要" data-i18n-aria-label="orderCommitmentSummary">
+            <div><span data-i18n="awaitingDecision">待决定</span><strong data-order-commitment-summary="AwaitingDecisionCount">0</strong></div>
+            <div><span data-i18n="confirmationRequired">需确认</span><strong data-order-commitment-summary="ConfirmationRequiredCount">0</strong></div>
+            <div><span data-i18n="materialPending">物料待确认</span><strong data-order-commitment-summary="MaterialPendingCount">0</strong></div>
+            <div><span data-i18n="acceptedPendingSchedule">已接受，待正式排程</span><strong data-order-commitment-summary="AcceptedPendingScheduleCount">0</strong></div>
+          </section>
+          <div id="order-commitment-error" class="persistent-error" role="alert" hidden></div>
+          <section id="order-commitment-content" class="order-commitment-workbench" hidden>
+            <div class="compact-toolbar">
+              <label><span data-i18n="searchOrderOrProduct">搜索订单或产品</span><input id="order-commitment-search" type="search"></label>
+              <label><span data-i18n="status">状态</span><select id="order-commitment-status-filter"><option value="" data-i18n="allStatuses">全部状态</option></select></label>
+              <button id="refresh-order-commitments" class="button secondary" type="button" data-i18n="refresh">刷新</button>
+            </div>
+            <div class="table-scroll">
+              <table id="order-commitment-table" class="data-table">
+                <thead><tr>
+                  <th data-i18n="order">订单</th>
+                  <th data-i18n="product">产品</th>
+                  <th data-i18n="requestedDueAt">请求交期</th>
+                  <th data-i18n="earliestSafePromise">建议安全日期</th>
+                  <th data-i18n="ccrLoadBeforeAfter">CCR 负荷前后</th>
+                  <th data-i18n="protectionThresholdSource">保护线来源</th>
+                  <th data-i18n="materialStatus">物料状态</th>
+                  <th data-i18n="recommendation">建议</th>
+                  <th data-i18n="reservationStatus">预留状态</th>
+                  <th data-i18n="exceptionStatus">异常状态</th>
+                  <th data-i18n="actions">操作</th>
+                </tr></thead>
+                <tbody id="order-commitment-table-body"></tbody>
+              </table>
+            </div>
+          </section>
+          <div id="order-commitment-empty" class="table-empty" hidden></div>
         </div>
 
         <div id="planning-runs-view" class="planning-runs-view" hidden>
@@ -1074,6 +1113,27 @@
     <div id="readiness-issues" class="readiness-issues"></div>
   </aside>
 
+  <aside id="order-commitment-detail" class="issues-drawer run-detail" role="dialog" aria-modal="true" aria-labelledby="order-commitment-detail-title" aria-hidden="true" hidden>
+    <div class="drawer-heading">
+      <div><span class="panel-kicker" data-i18n="orderCommitmentEvaluation">订单承诺评估</span><h2 id="order-commitment-detail-title">-</h2></div>
+      <button id="close-order-commitment-detail" class="icon-button" type="button" aria-label="关闭" data-i18n-aria-label="close">&#10005;</button>
+    </div>
+    <div id="order-commitment-detail-content" class="run-detail-content"></div>
+    <form id="order-commitment-reevaluation-form" class="order-commitment-reevaluation" hidden>
+      <label class="capability-toggle">
+        <input id="order-commitment-material-check" type="checkbox" checked>
+        <span data-i18n="checkMaterialAvailability">检查物料计划可用性</span>
+      </label>
+      <label id="order-commitment-material-skip-field" hidden>
+        <span data-i18n="materialSkipReason">跳过原因</span>
+        <textarea id="order-commitment-material-skip-reason" rows="3"></textarea>
+      </label>
+      <p data-i18n="orderCommitmentMaterialGateReminder">释放阶段仍执行物料硬门控</p>
+      <button id="reevaluate-order-commitment" class="button secondary" type="submit" data-i18n="reevaluate">重新评估</button>
+    </form>
+    <div id="order-commitment-actions" class="wizard-actions"></div>
+  </aside>
+
   <dialog id="planning-run-wizard" class="run-wizard" aria-labelledby="wizard-title">
     <form id="planning-run-form" method="dialog">
       <div class="drawer-heading">
@@ -1155,6 +1215,30 @@
     </form>
   </dialog>
 
+  <dialog id="order-commitment-decision-dialog" class="run-wizard compact-dialog" aria-labelledby="order-commitment-decision-title">
+    <form id="order-commitment-decision-form" method="dialog">
+      <div class="drawer-heading">
+        <div><span class="panel-kicker" data-i18n="plannerDecision">计划员决定</span><h2 id="order-commitment-decision-title">-</h2></div>
+      </div>
+      <div id="order-commitment-decision-summary" class="order-commitment-decision-grid"></div>
+      <label id="order-commitment-ccr-ack-field" hidden>
+        <input id="order-commitment-ccr-ack" type="checkbox">
+        <span data-i18n="acknowledgeCcrRisk">我已复核 CCR 保护负荷风险</span>
+      </label>
+      <label id="order-commitment-material-ack-field" hidden>
+        <input id="order-commitment-material-ack" type="checkbox">
+        <span data-i18n="acknowledgeMaterialPending">我确认物料仍待处理，且释放阶段继续硬门控</span>
+      </label>
+      <label><span data-i18n="decisionReason">决定原因</span><textarea id="order-commitment-decision-reason" rows="3" required></textarea></label>
+      <div id="order-commitment-decision-error" class="persistent-error" role="alert" hidden></div>
+      <p class="inline-note" data-i18n="orderCommitmentExternalBoundary">不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES</p>
+      <div class="wizard-actions">
+        <button id="cancel-order-commitment-decision" class="button secondary" type="button" data-i18n="cancel">取消</button>
+        <button id="submit-order-commitment-decision" class="button primary" type="submit" data-i18n="confirm">确认</button>
+      </div>
+    </form>
+  </dialog>
+
   <aside id="planning-run-detail" class="issues-drawer run-detail" aria-labelledby="run-detail-title" aria-hidden="true" hidden>
     <div class="drawer-heading">
       <div><span class="panel-kicker">Planning Run</span><h2 id="run-detail-title">-</h2></div>
@@ -1182,6 +1266,6 @@
       <div class="wizard-actions"><button id="cancel-buffer-transaction" class="button secondary" type="button" data-i18n="cancel">取消</button><button class="button primary" type="submit" data-i18n="recordTransaction">记录事务</button></div>
     </form>
   </dialog>
-  <script src="/planner/assets/planner-workbench.js?v=20260709-mto-safe-date-priority" defer></script>
+  <script src="/planner/assets/planner-workbench.js?v=20260711-mto-order-commitment" defer></script>
 </body>
 </html>

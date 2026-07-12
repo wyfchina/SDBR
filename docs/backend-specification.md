@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.67 |
-| 日期 | 2026-07-09 |
+| 文档版本 | 2.82 |
+| 日期 | 2026-07-12 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
 | UI 规格 | `docs/ui-specification.md` |
@@ -149,6 +149,7 @@ DDOM 与 DDS&OP 分工：
 | `BE-SDBR-007` | Atomic planning reservation batch | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`; `T` `tests/test_planning_reservations.py` | 计划员确认产生的候选、CCR 容量预留和物料计划分配全部成功或全部失败；幂等重放必须比较持久化 payload fingerprint/result，并验证 result 指向的 demand、batch、capacity、material 身份及不可变业务内容仍完整，仅允许已记录的 lifecycle/version/权威接管字段变化；缺失或不可验证 ledger 返回结构化迁移/冲突；同一 `DemandCommitmentID` 终身只允许原确认的精确幂等重放，调整必须使用 Phase 0 之外的新需求版本/替代流程；Phase 0 不提供独立确认 UI |
 | `BE-SDBR-008` | Shared CCR capacity reservation ledger | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`, `sdbr/planning_reservation_view.py`; `T` `tests/test_planning_reservations.py`, `tests/test_planning_reservation_view.py`, `tests/test_sdbr_market_control.py` | MTO/MTA 使用同一负荷台账；每条容量预留必须有位于 reservation window 内的 timezone-aware `LatestAllowedCompletionAt`；仅当冻结容量行与 Completed 排程中的订单、工序、资源、合法窗口、严格 collection/object 类型、时间戳差值、声明分钟完全对应且排程结束不晚于该 deadline 时才转正式工序占用，任一 malformed evidence 返回结构化 409，否则保持有效/异常保护且不得低计 Planned Load |
 | `BE-SDBR-009` | Shared material planning allocation ledger | `[PARTIAL]` | `C` `sdbr/planning_reservations.py`, `sdbr/planning_reservation_view.py`; `T` `tests/test_planning_reservations.py`, `tests/test_planning_reservation_view.py`, `tests/test_planning_run_reservation_bridge.py` | 计划分配防止其他需求重复使用供应，但不得把同一需求再次扣减净流；冻结后仅接受带正式外部分配引用和权威快照的单调权威接管，Planning Run 不得回退或覆盖 `Externalized`/`AuthorityTransferred` 状态与来源；ERP/WMS 权威实现仍不属于 Phase 0 |
+| `BE-SDBR-010` | Automatic MTO order commitment evaluation and planner decision | `[PARTIAL]` | `C` `sdbr/ccr_shadow_scheduler.py`, `sdbr/order_commitment_evaluation.py`, `sdbr/order_commitment_view.py`, `sdbr/api.py`, `sdbr/state_store.py`; `A` `/planner/workbench/order-commitments/intake`, `/{evaluation_id}/reevaluate`, `/{evaluation_id}/decision`, `/workbench`, `/{evaluation_id}`; `T` `tests/test_ccr_shadow_scheduler.py`, `tests/test_order_commitment_evaluation.py`, `tests/test_order_commitment_view.py`, `tests/test_order_commitment_api.py`, `tests/test_planning_run_reservation_bridge.py`, `tests/test_state_store.py` | Intake performs recommendation-only CCR shadow assessment using formal bucket semantics and exact active reservations. Current operational evidence is server-selected with a fixed 60-minute maximum age; stale/future evidence cannot be feasible. Identity freezes schedule/config/release/snapshot/relevant-ledger evidence. Only a planner decision may create shared Phase 0 rows, ending at `AcceptedPendingFormalSchedule`; no Planning Run or external-authority mutation is automatic. Approved CCR threshold intake, external formal-order authority, explicit later Planning Run, and ERP/MES authority remain outside this implementation. |
 
 ## 5. Planning Run 生命周期与任务执行
 
@@ -1007,10 +1008,26 @@ Simio 集成工作约束：
 - 边界：MTO/MTA 业务工作流尚未接入；不实现 MTO 影子排程、DDMRP 新算法、BOM 展开、ERP 正式订单创建或 UI 页面。
 - 状态：`BE-SDBR-006`、`BE-SDBR-007`、`BE-SDBR-008`、`BE-SDBR-009` 和 `BE-RUN-011` 均保持 `[PARTIAL]`，阶段 0 仅完成上述实现与可重复验证证据。
 
+### BE-SDBR-010 MTO 订单承诺评估后端验证记录
+
+- 日期：2026-07-12
+- 状态：`[PARTIAL]`。
+- 已验证范围：`sdbr/ccr_shadow_scheduler.py` 使用正式容量桶语义和精确 active reservation；`sdbr/order_commitment_evaluation.py` 完成运行快照选择/60 分钟新鲜度、物料可用性、建议矩阵、冻结评估依据和计划员决定 write set；`sdbr/order_commitment_view.py` 提供安全 read projection；`sdbr/api.py` 提供 intake、reevaluate、decision、workbench 和 detail endpoint；`sdbr/state_store.py` 持久化评估与事件集合。
+- 建议与容量边界：系统只产生建议，计划员保留最终决定权；`CapacityBucket.capacity_minutes` 保持正式求解器总分钟语义，不乘 `capacity_units`；交期落在窗口内时只使用截止时间前子窗口，并满足 `WindowStartAt < LatestAllowedCompletionAt <= WindowEndAt`。
+- 物料与新鲜度：检查默认开启；最大年龄固定 60 分钟；默认选择不晚于服务端评估时间的最新快照，显式引用按 ID 解析；`Stale`、`Future` 或缺失证据返回 `EvidenceInsufficient` 且无分配请求。
+- 确认与身份：矩阵包含请求日期/建议日期与物料跳过组合；参考保护线及批准保护线超限均要求 CCR 确认，跳过物料均要求物料确认；评估依据冻结 baseline schedule、Operating Model、Scheduling、DDMRP、release policy、route/calendar、当前快照及精确相关容量/物料投影，决定指纹不含服务端观察时间。
+- Phase 0 与权威边界：接收仅创建共享 Phase 0 demand/batch/capacity/material 行，结束状态为 `AcceptedPendingFormalSchedule`；`tests/test_planning_run_reservation_bridge.py` 验证后续显式 `PlanningReservationBatchIDs` 选择才能冻结/转正或保持 held。不得自动创建 Planning Run，不修改 DDAE、主数据版本、外部订单、ERP/WMS、MES、供应商或生产权威台账。
+- 验证证据（2026-07-12 可重复性更正）：`python -m compileall -q sdbr`，退出码 0、无输出；`pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_order_commitment_api.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py --collect-only -q`，413 tests collected、1 warning（1.31s）；同一文件集使用 `pytest tests/test_ccr_shadow_scheduler.py tests/test_order_commitment_evaluation.py tests/test_order_commitment_view.py tests/test_order_commitment_api.py tests/test_planning_run_reservation_bridge.py tests/test_state_store.py tests/test_sdbr_market_control.py -q --basetemp .tmp/pytest-mto-task23-focused-20260712-140809-0560 -p no:cacheprovider`，413 passed、1 warning（30.62s）；`pytest tests/test_scheduling_solver.py tests/test_schedule_output.py tests/test_release_candidates.py tests/test_release_authorization.py tests/test_material_state.py tests/test_sdbr_market_control.py tests/test_sdbr_what_if.py tests/test_planning_reservations.py tests/test_planning_reservation_view.py tests/test_planning_run_reservation_bridge.py tests/test_api.py -q --basetemp .tmp/pytest-mto-task23-preserved-20260712-140809-0560 -p no:cacheprovider`，475 passed、1 warning（53.79s）；`pytest -q --basetemp .tmp/pytest-mto-task23-full-20260712-140809-0560 -p no:cacheprovider`，1047 passed、1 warning（108.76s）。三个 basetemp 路径均为本次新建，未复用锁定的 `.tmp/pytest-mto-full`。唯一 warning 为既有 `StarletteDeprecationWarning`，无失败被隐藏。
+- 范围检查：`rg -n "BE-SDBR-010|BE-RUN-011|UI-COMMIT-001" tests sdbr docs/backend-specification.md docs/ui-specification.md` 和 `rg -n "ExternalOrderAcceptance|PlanningRunCreation|ProductionMutation|ReferenceFallback|ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES" sdbr tests` 均找到要求的引用和边界；`rg -n "MaterialCheckWindowMinutes" sdbr/web/planner-workbench.js` 仅命中既有 release-policy detail display，没有 MTO request 使用；验证前 `git diff --check` 和 `git status --short` 均无输出。
+- 保持 `[PARTIAL]`：approved CCR threshold intake、external formal-order authority、显式后续 Planning Run 及 ERP/MES authority 仍在本实现范围之外。
+
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.82 | 2026-07-12 | 更正 `BE-SDBR-010` Task23 后端验证可重复性记录：使用三个本次新建的 pytest basetemp 路径重新运行 focused、preserved-path 和 full suite，实际结果为 413/475/1047 passed，均为 1 个既有 `StarletteDeprecationWarning`；不复用锁定的 `.tmp/pytest-mto-full`。`BE-SDBR-010` 保持 `[PARTIAL]`，其余未实现范围和非声明不变 |
+| 2.81 | 2026-07-12 | `BE-SDBR-010` 推进至 `[PARTIAL]`：记录 MTO CCR 影子容量、60 分钟运行快照新鲜度、物料评估、建议/决定矩阵、安全 read model、原子 Phase 0 预留和显式 Planning Run bridge 的可重复后端验证；approved CCR threshold intake、external formal-order authority、显式后续 Planning Run 和 ERP/MES authority 保持后续范围 |
+| 2.80 | 2026-07-11 | 启动 `BE-SDBR-010` MTO 订单承诺：固化正式求解器一致的 CCR 影子容量、60 分钟运行快照新鲜度、完整建议/决定矩阵、配置与相关状态身份、option-2 共享预留和无外部权威修改边界 |
 | 2.79 | 2026-07-11 | 收紧共享计划预留阶段 0 第六轮最终复核验收：普通请求改用 store-owned cancellation-safe async admission，等待锁不占用默认 AnyIO worker token；取消请求等待同步 route 完成并在 release 前完整回滚；solver lock-free、heartbeat 和 store-managed atomic update 语义保持不变，能力状态保持 `[PARTIAL]` |
 | 2.78 | 2026-07-11 | 完成共享计划预留阶段 0 第五轮最终复核修复：execution ownership 全部改用注入的 server-owned UTC clock，client timestamps 降为 audit metadata，store-managed controlled rejection 携带 store boundary 内 authoritative revision；`BE-RUN-004` 保持 `[VERIFIED]`，Phase 0 五项能力保持 `[PARTIAL]` |
 | 2.77 | 2026-07-11 | 收紧共享计划预留阶段 0 第四轮最终复核验收：bounded direct/worker execution claim、active-lease finalization、expired claim recovery、direct finalization error compensation、同锁 body/revision pairing、精确 save outcome revision、canonical demand normalizer 及同版本 lifecycle provenance CAS；上述 timeout/grace 仅为 SDBR 内部执行安全，能力状态保持 `[PARTIAL]` |

@@ -8,7 +8,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 from threading import Lock, RLock
 from time import monotonic
-from typing import Callable, Literal, Mapping
+from typing import Annotated, Callable, Literal, Mapping
 from zoneinfo import ZoneInfo
 
 import anyio
@@ -16,7 +16,15 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+)
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -41,6 +49,10 @@ from sdbr.calendar_overrides import (
     calendar_override_driver_status,
 )
 from sdbr.calendar_preview import build_calendar_preview
+from sdbr.ccr_shadow_scheduler import (
+    SHADOW_ALGORITHM,
+    evaluate_ccr_shadow_schedule,
+)
 from sdbr.data_readiness import build_data_readiness
 from sdbr.dispatch_priority import (
     build_mes_dispatch_priority_queue,
@@ -96,11 +108,47 @@ from sdbr.operational_state import (
     create_operational_state_snapshot,
     evaluate_operational_state_freshness,
 )
+from sdbr.order_commitment_evaluation import (
+    ACCEPTANCE_DECISIONS,
+    OrderCommitmentConflict,
+    OrderCommitmentSnapshotNotFound,
+    REFERENCE_CCR_PROTECTION_POLICY,
+    _parse_aware,
+    accepted_evaluation_record,
+    build_order_commitment_basis,
+    candidate_demand_commitment_id,
+    canonical_decision_fingerprint,
+    canonical_fingerprint,
+    canonical_json,
+    canonical_order_commitment_decision_facts,
+    create_order_commitment_evaluation,
+    evaluate_mto_material_availability,
+    exact_order_commitment_intake_replay,
+    normalize_material_check_skip_reason,
+    normalize_mto_order,
+    prepare_mto_acceptance,
+    register_order_commitment_evaluation,
+    rejected_evaluation_record,
+    select_order_commitment_operational_snapshot,
+    supersede_open_order_commitment_evaluations,
+)
+from sdbr.order_commitment_view import (
+    SAFE_AUDIT_DETAIL_FIELDS,
+    build_order_commitment_detail,
+    build_order_commitment_workbench,
+)
 from sdbr.plan_publication import (
     build_plan_publication_view,
     mark_superseded,
     publication_state,
+    schedule_fingerprint as planning_schedule_fingerprint,
     transition_publication_state,
+)
+from sdbr.planning_reservations import (
+    ReservationConflict,
+    ReservationLegacyMigrationRequired,
+    apply_reservation_write_set,
+    assert_reservation_write_set_replay_matches,
 )
 from sdbr.public_demo_golden_loop import (
     get_public_demo_golden_loop_status,
@@ -170,7 +218,7 @@ from sdbr.release_candidates import (
     WipLimit,
     release_candidate_rows_from_schedule,
 )
-from sdbr.release_policy import release_policy_evidence
+from sdbr.release_policy import release_policy_evidence, release_policy_settings
 from sdbr.release_authorization import (
     ReleaseAuthorization,
     build_dispatch_package,
@@ -203,6 +251,7 @@ from sdbr.scheduling_solver import (
     SetupTransition,
     SimioValidationAdapter,
     build_scheduling_problem,
+    build_capacity_buckets_from_resources,
     create_solver_engine,
 )
 from sdbr.simio_validation import (
@@ -232,6 +281,7 @@ from sdbr.state_store import (
 from sdbr.test_data import (
     reset_test_case_state,
     seed_baseline_test_data,
+    seed_mto_order_commitment_fixture,
     test_case_catalog_payload,
 )
 from sdbr.test_case_acceptance import (
@@ -300,6 +350,112 @@ class RoutingPayload(BaseModel):
     Operations: list[OperationPayload]
     RoutingID: str = "PRIMARY"
     IsPrimary: bool = True
+
+
+MtoNonBlankString = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
+MtoOptionalNonBlankString = MtoNonBlankString | None
+
+
+class MtoMaterialRequirementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    RequirementLineID: MtoNonBlankString
+    ItemID: MtoNonBlankString
+    LocationID: MtoNonBlankString
+    RequiredQty: float = Field(gt=0)
+    Uom: MtoNonBlankString = "EA"
+
+
+def _require_iso_datetime_string(value: object) -> object:
+    if not isinstance(value, str):
+        raise ValueError("must be an ISO 8601 timezone-aware string")
+    return value
+
+
+MtoAwareIsoDatetime = Annotated[
+    AwareDatetime,
+    BeforeValidator(_require_iso_datetime_string),
+]
+
+
+class MtoOrderCommitmentIntakePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    SourceSystem: MtoNonBlankString = "MockERP"
+    SourceObjectType: MtoNonBlankString = "CustomerOrder"
+    OrderID: MtoNonBlankString
+    OrderVersion: MtoNonBlankString
+    DemandLineID: MtoNonBlankString = "1"
+    ProductID: MtoNonBlankString
+    LocationID: MtoNonBlankString
+    Quantity: float = Field(gt=0)
+    Uom: MtoNonBlankString = "EA"
+    RequestedDueAt: MtoAwareIsoDatetime
+    BusinessPriority: int = Field(default=100, ge=1, le=999)
+    ReceivedAt: MtoAwareIsoDatetime
+    TraceID: MtoNonBlankString
+    BaselinePlanningRunID: MtoNonBlankString
+    RoutingID: MtoNonBlankString = "PRIMARY"
+    OperationalStateSnapshotID: MtoOptionalNonBlankString = None
+    MaterialRequirements: list[MtoMaterialRequirementPayload] = Field(
+        default_factory=list
+    )
+
+
+class MtoOrderCommitmentReevaluationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    RequestedBy: MtoNonBlankString
+    BaselinePlanningRunID: MtoOptionalNonBlankString = None
+    OperationalStateSnapshotID: MtoOptionalNonBlankString = None
+    CheckMaterialAvailability: StrictBool = True
+    MaterialCheckSkipReason: str | None = None
+
+
+class MtoOrderCommitmentDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    DecisionID: MtoNonBlankString
+    Decision: Literal[
+        "AcceptRequestedDate",
+        "ConditionallyAcceptRequestedDate",
+        "AcceptRecommendedDate",
+        "ConditionallyAcceptRecommendedDate",
+        "Reject",
+    ]
+    DecidedBy: MtoNonBlankString
+    Reason: MtoNonBlankString
+    ExpectedEvaluationFingerprint: MtoNonBlankString
+    CcrRiskAcknowledged: StrictBool = False
+    MaterialRiskAcknowledged: StrictBool = False
+
+
+def _mto_order_from_payload(
+    payload: MtoOrderCommitmentIntakePayload,
+) -> dict[str, object]:
+    return {
+        "SourceSystem": payload.SourceSystem,
+        "SourceObjectType": payload.SourceObjectType,
+        "OrderID": payload.OrderID,
+        "OrderVersion": payload.OrderVersion,
+        "DemandLineID": payload.DemandLineID,
+        "ProductID": payload.ProductID,
+        "LocationID": payload.LocationID,
+        "Quantity": payload.Quantity,
+        "Uom": payload.Uom,
+        "RequestedDueAt": payload.RequestedDueAt,
+        "BusinessPriority": payload.BusinessPriority,
+        "ReceivedAt": payload.ReceivedAt,
+        "TraceID": payload.TraceID,
+        "BaselinePlanningRunID": payload.BaselinePlanningRunID,
+        "RoutingID": payload.RoutingID,
+        "MaterialRequirements": [
+            row.model_dump() for row in payload.MaterialRequirements
+        ],
+    }
 
 
 class OrderPayload(BaseModel):
@@ -1139,6 +1295,8 @@ def create_app(
     planning_reservation_events = active_store.planning_reservation_events
     processed_planning_event_keys = active_store.processed_planning_event_keys
     audit_events = active_store.audit_events
+    order_commitment_evaluations = active_store.order_commitment_evaluations
+    order_commitment_events = active_store.order_commitment_events
     if not simio_template_registry:
         simio_template_registry.update(default_simio_template_registry())
         active_store.active_simio_template_id = next(iter(simio_template_registry))
@@ -1180,6 +1338,7 @@ def create_app(
             (
                 "/planner/workbench/planning-runs",
                 "/planner/workbench/planning-reservations",
+                "/planner/workbench/order-commitments",
             )
         ):
             auth_error = _planning_run_authorization_error(request)
@@ -1229,9 +1388,12 @@ def create_app(
             persistence_snapshot = active_store.snapshot_state()
             try:
                 response = await call_next_after_downstream_completion()
-                if response.status_code < 400 or getattr(
-                    request.state, "persist_workbench_write", False
-                ):
+                if (
+                    response.status_code < 400
+                    and not getattr(
+                        request.state, "skip_workbench_persistence", False
+                    )
+                ) or getattr(request.state, "persist_workbench_write", False):
                     try:
                         active_store.save()
                     except StateStoreRevisionConflict as error:
@@ -1277,6 +1439,481 @@ def create_app(
             snapshot.wip_limits,
             snapshot,
         )
+
+    def _order_commitment_error(
+        *,
+        endpoint: str,
+        status_code: int,
+        status: str,
+        message: str,
+        details: Mapping[str, object] | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "Endpoint": endpoint,
+                "StatusCode": status_code,
+                "Data": {
+                    "Status": status,
+                    "Message": message,
+                    **deepcopy(dict(details or {})),
+                },
+            },
+        )
+
+    def _not_assessable_shadow(
+        *,
+        order: Mapping[str, object],
+        evaluated_at: datetime,
+        code: str,
+        message: str,
+    ) -> dict[str, object]:
+        return {
+            "Algorithm": deepcopy(SHADOW_ALGORITHM),
+            "Status": "NotAssessable",
+            "CapacityAssessmentCutoffAt": (
+                evaluated_at.astimezone(timezone.utc).isoformat()
+            ),
+            "RequestedDueAt": order["RequestedDueAt"],
+            "LatestCcrCompletionAt": None,
+            "RequestedDateAssessment": {"Feasible": False},
+            "EarliestSafeAssessment": None,
+            "SelectedAssessment": None,
+            "RelevantCapacityWindowKeys": [],
+            "Issues": [{"Code": code, "Message": message}],
+            "Summary": {
+                "CcrOperationCount": 0,
+                "SelectedWindowCount": 0,
+                "MaximumLoadAfterPercent": None,
+            },
+        }
+
+    def _prefilter_mto_capacity_rows(
+        *,
+        rows: list[dict[str, object]],
+        allowed_keys: set[tuple[str, str, str]],
+    ) -> list[dict[str, object]]:
+        return [
+            deepcopy(row)
+            for row in rows
+            if (
+                str(row.get("ResourceID") or ""),
+                str(row.get("WindowStartAt") or ""),
+                str(row.get("WindowEndAt") or ""),
+            ) in allowed_keys
+        ]
+
+    def _prefilter_mto_material_rows(
+        *,
+        rows: list[dict[str, object]],
+        allowed_keys: set[tuple[str, str]],
+    ) -> list[dict[str, object]]:
+        return [
+            deepcopy(row)
+            for row in rows
+            if (
+                str(row.get("ItemID") or ""),
+                str(row.get("LocationID") or ""),
+            ) in allowed_keys
+        ]
+
+    def _build_order_commitment_evaluation_from_state(
+        *,
+        endpoint: str,
+        order: Mapping[str, object],
+        evaluated_at: datetime,
+        check_material_availability: bool,
+        material_check_skip_reason: str | None,
+        requested_operational_state_snapshot_id: str | None,
+    ) -> dict[str, object] | JSONResponse:
+        evaluated_at = _parse_aware(evaluated_at)
+        run = planning_runs.get(str(order["BaselinePlanningRunID"]))
+        if run is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="PlanningRunNotFound",
+                message="Baseline Planning Run was not found.",
+            )
+        if run.get("Status") != "Completed":
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunNotCompleted",
+                message="Baseline Planning Run must be completed.",
+            )
+        if publication_state(run) not in {"Approved", "Published"}:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunNotApprovedOrPublished",
+                message="Baseline plan must be approved or published.",
+            )
+        schedule = run.get("Schedule")
+        if not isinstance(schedule, dict):
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="PlanningRunScheduleMissing",
+                message="Baseline schedule evidence is missing.",
+            )
+        master = master_data_versions.get(str(run.get("MasterDataVersionID")))
+        if not isinstance(master, dict):
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="MasterDataVersionNotFound",
+                message="Baseline master-data version was not found.",
+            )
+
+        orchestration_issue: tuple[str, str] | None = None
+        resources: list[Resource] = []
+        routings: list[Routing] = []
+        routing: Routing | None = None
+        setup_transitions: list[SetupTransition] = []
+        capacity_buckets = []
+        timezone_name = master.get("CalendarTimezone")
+        if not isinstance(timezone_name, str) or not timezone_name.strip():
+            orchestration_issue = (
+                "CALENDAR_TIMEZONE_REQUIRED",
+                "A calendar timezone is required for MTO shadow capacity.",
+            )
+        try:
+            resource_rows = master.get("Resources")
+            routing_rows = master.get("Routings")
+            if not isinstance(resource_rows, list) or not isinstance(
+                routing_rows, list
+            ):
+                raise ValueError("Master resource/routing rows must be lists.")
+            resources = _resources_from_payload([
+                ResourcePayload(**row) for row in resource_rows
+            ])
+            resources = apply_base_calendar_assignments(
+                resources=resources,
+                calendars=run.get("FrozenBaseCalendars") or [],
+                assignments=(
+                    run.get("FrozenResourceCalendarAssignments") or []
+                ),
+            ).resources
+            resources = apply_calendar_overrides(
+                resources=resources,
+                overrides=run.get("FrozenCalendarOverrides") or [],
+            ).resources
+            routings = _routings_from_payload([
+                RoutingPayload(**row) for row in routing_rows
+            ])
+            setup_rows = run.get("SetupTransitions") or []
+            if not isinstance(setup_rows, list):
+                raise ValueError("SetupTransitions must be a list.")
+            setup_transitions = _setup_transitions_from_payload([
+                SetupTransitionPayload(**row) for row in setup_rows
+            ])
+        except (KeyError, TypeError, ValueError) as error:
+            orchestration_issue = (
+                "MASTER_ROUTE_CALENDAR_EVIDENCE_INVALID",
+                str(error),
+            )
+
+        if orchestration_issue is None:
+            routing_matches = [
+                row
+                for row in routings
+                if row.product_id == order["ProductID"]
+                and row.routing_id == order["RoutingID"]
+                and row.is_primary is True
+            ]
+            if len(routing_matches) != 1:
+                orchestration_issue = (
+                    "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
+                    "Exactly one matching primary route is required.",
+                )
+            else:
+                routing = routing_matches[0]
+
+        resources_by_id = {row.resource_id: row for row in resources}
+        if orchestration_issue is None and routing is not None:
+            missing_resource_ids = sorted({
+                operation.resource_id
+                for operation in routing.operations
+                if operation.resource_id not in resources_by_id
+            })
+            if missing_resource_ids:
+                orchestration_issue = (
+                    "ROUTE_RESOURCE_NOT_FOUND",
+                    "Route references missing resources: "
+                    + ", ".join(missing_resource_ids),
+                )
+
+        ccr_resource_ids: set[str] = set()
+        if orchestration_issue is None and routing is not None:
+            ccr_resource_ids = {
+                operation.resource_id
+                for operation in routing.operations
+                if resources_by_id[operation.resource_id].is_constraint
+            }
+            if not ccr_resource_ids:
+                orchestration_issue = (
+                    "CCR_OPERATION_NOT_FOUND",
+                    "The primary route has no CCR operation.",
+                )
+
+        if orchestration_issue is None:
+            try:
+                capacity_buckets = build_capacity_buckets_from_resources(
+                    resources,
+                    tzinfo=ZoneInfo(str(timezone_name)),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                orchestration_issue = (
+                    "CALENDAR_CAPACITY_EVIDENCE_INVALID",
+                    str(error),
+                )
+
+        frozen_release_policy = _release_policy_for_evaluation(
+            planning_run=run,
+            requested_policy_id=None,
+            dbr_release_policies=dbr_release_policies,
+        )
+        material_window = release_policy_settings(
+            frozen_release_policy
+        ).material_lookahead_minutes
+        material_input_keys = {
+            (str(row["ItemID"]), str(row["LocationID"]))
+            for row in order["MaterialRequirements"]
+        }
+        capacity_input_keys = {
+            (
+                bucket.resource_id,
+                bucket.bucket_start.astimezone(timezone.utc).isoformat(),
+                bucket.bucket_end.astimezone(timezone.utc).isoformat(),
+            )
+            for bucket in capacity_buckets
+            if bucket.resource_id in ccr_resource_ids
+        }
+        relevant_capacity_rows = _prefilter_mto_capacity_rows(
+            rows=list(ccr_capacity_reservations.values()),
+            allowed_keys=capacity_input_keys,
+        )
+        relevant_material_rows = _prefilter_mto_material_rows(
+            rows=list(material_planning_allocations.values()),
+            allowed_keys=material_input_keys,
+        )
+        raw_gantt_rows = schedule.get("GanttRows", [])
+        if not isinstance(raw_gantt_rows, list):
+            orchestration_issue = (
+                "SCHEDULE_GANTT_EVIDENCE_INVALID",
+                "Schedule GanttRows must be a list.",
+            )
+            raw_gantt_rows = []
+        relevant_gantt_rows = [
+            deepcopy(row)
+            for row in raw_gantt_rows
+            if isinstance(row, Mapping)
+            and str(row.get("ResourceID") or "") in ccr_resource_ids
+        ]
+
+        try:
+            selection = select_order_commitment_operational_snapshot(
+                snapshots=operational_state_snapshots,
+                evaluated_at=evaluated_at,
+                requested_snapshot_id=(
+                    requested_operational_state_snapshot_id
+                ),
+            )
+        except OrderCommitmentSnapshotNotFound as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status=error.status,
+                message=str(error),
+                details={"OperationalStateSnapshotID": error.snapshot_id},
+            )
+
+        shadow = (
+            _not_assessable_shadow(
+                order=order,
+                evaluated_at=evaluated_at,
+                code=orchestration_issue[0],
+                message=orchestration_issue[1],
+            )
+            if orchestration_issue is not None
+            else evaluate_ccr_shadow_schedule(
+                order_id=str(order["PlanningOrderID"]),
+                quantity=float(order["Quantity"]),
+                routing=routing,
+                resources=resources,
+                capacity_buckets=capacity_buckets,
+                setup_transitions=setup_transitions,
+                gantt_rows=relevant_gantt_rows,
+                active_capacity_reservations=relevant_capacity_rows,
+                requested_due_at=_parse_aware(order["RequestedDueAt"]),
+                evaluated_at=evaluated_at,
+                downstream_protection_minutes=int(
+                    run.get("TimeBufferMinutes", 0)
+                ),
+                protection_threshold_percent=80.0,
+            )
+        )
+        try:
+            material_check_skip_reason = normalize_material_check_skip_reason(
+                material_check_skip_reason
+            )
+            material = evaluate_mto_material_availability(
+                order=order,
+                snapshot_selection=selection,
+                active_material_allocations=relevant_material_rows,
+                current_demand_commitment_id=(
+                    candidate_demand_commitment_id(order)
+                ),
+                evaluated_at=evaluated_at,
+                material_check_window_minutes=material_window,
+                check_material_availability=check_material_availability,
+                skip_reason=material_check_skip_reason,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
+
+        route_projection = (
+            None
+            if routing is None
+            else {
+                "ProductID": routing.product_id,
+                "RoutingID": routing.routing_id,
+                "IsPrimary": routing.is_primary,
+                "Operations": [
+                    {
+                        "OperationID": row.operation_id,
+                        "ResourceID": row.resource_id,
+                        "DurationMinutes": row.duration_minutes,
+                        "Sequence": row.sequence,
+                        "AlternateResourceIDs": sorted(
+                            row.alternate_resource_ids or []
+                        ),
+                        "SetupFamily": row.setup_family,
+                    }
+                    for row in sorted(
+                        routing.operations, key=lambda item: item.sequence
+                    )
+                ],
+            }
+        )
+        calendar_projection = {
+            "CalendarTimezone": timezone_name,
+            "CapacityBuckets": [
+                {
+                    "ResourceID": row.resource_id,
+                    "WindowStartAt": row.bucket_start.astimezone(
+                        timezone.utc
+                    ).isoformat(),
+                    "WindowEndAt": row.bucket_end.astimezone(
+                        timezone.utc
+                    ).isoformat(),
+                    "CapacityMinutes": row.capacity_minutes,
+                }
+                for row in sorted(
+                    capacity_buckets,
+                    key=lambda item: (
+                        item.resource_id,
+                        item.bucket_start,
+                        item.bucket_end,
+                    ),
+                )
+            ],
+            "FrozenBaseCalendars": deepcopy(
+                run.get("FrozenBaseCalendars") or []
+            ),
+            "FrozenResourceCalendarAssignments": deepcopy(
+                run.get("FrozenResourceCalendarAssignments") or []
+            ),
+            "FrozenCalendarOverrides": deepcopy(
+                run.get("FrozenCalendarOverrides") or []
+            ),
+        }
+        selected_snapshot = selection["OperationalStateSnapshot"]
+        inventory_rows = (
+            list(selected_snapshot.inventory_buffers)
+            if isinstance(selected_snapshot, OperationalStateSnapshot)
+            else []
+        )
+        availability_rows = (
+            list(selected_snapshot.material_availability)
+            if isinstance(selected_snapshot, OperationalStateSnapshot)
+            else []
+        )
+        material_cutoff_value = material["MaterialEligibilityCutoffAt"]
+        try:
+            basis = build_order_commitment_basis(
+                baseline_planning_run_id=str(run["RunID"]),
+                baseline_operational_state_snapshot_id=(
+                    str(run["OperationalStateSnapshotID"])
+                    if run.get("OperationalStateSnapshotID") is not None
+                    else None
+                ),
+                baseline_schedule_fingerprint=(
+                    planning_schedule_fingerprint(run)
+                    or canonical_fingerprint(schedule)
+                ),
+                master_data_version_id=str(master["VersionID"]),
+                operating_model_configuration_id=run.get(
+                    "OperatingModelConfigurationID"
+                ),
+                operating_model_fingerprint=run.get(
+                    "OperatingModelFingerprint"
+                ),
+                scheduling_configuration_id=run.get(
+                    "SchedulingConfigurationID"
+                ),
+                ddmrp_configuration_id=run.get("DDMRPConfigurationID"),
+                release_policy_version_id=run.get("ReleasePolicyVersionID"),
+                frozen_release_policy_fingerprint=canonical_fingerprint(
+                    release_policy_evidence(frozen_release_policy)
+                ),
+                routing_fingerprint=canonical_fingerprint(route_projection),
+                calendar_fingerprint=canonical_fingerprint(
+                    calendar_projection
+                ),
+                time_buffer_minutes=int(run.get("TimeBufferMinutes", 0)),
+                material_check_window_minutes=material_window,
+                capacity_assessment_cutoff_at=_parse_aware(
+                    shadow["CapacityAssessmentCutoffAt"]
+                ),
+                material_eligibility_cutoff_at=(
+                    _parse_aware(material_cutoff_value)
+                    if material_cutoff_value is not None
+                    else None
+                ),
+                check_material_availability=check_material_availability,
+                material_skip_reason=material_check_skip_reason,
+                snapshot_selection=selection,
+                relevant_capacity_window_keys=[
+                    tuple(row) for row in shadow["RelevantCapacityWindowKeys"]
+                ],
+                capacity_ledger_rows=relevant_capacity_rows,
+                relevant_material_keys=sorted(material_input_keys),
+                inventory_buffer_rows=inventory_rows,
+                material_availability_rows=availability_rows,
+                material_ledger_rows=relevant_material_rows,
+            )
+            return create_order_commitment_evaluation(
+                order=order,
+                shadow_schedule=shadow,
+                material_assessment=material,
+                basis=basis,
+                protection_policy=REFERENCE_CCR_PROTECTION_POLICY,
+                evaluated_at=evaluated_at,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
 
     @app.get("/planner/workbench/demo")
     def planner_workbench_demo(solver_backend_id: str = "baseline-finite") -> dict[str, object]:
@@ -1891,6 +2528,816 @@ def create_app(
             },
         }
 
+    def _order_commitment_row(
+        evaluation: Mapping[str, object],
+    ) -> dict[str, object]:
+        workbench = build_order_commitment_workbench(
+            evaluations=[deepcopy(dict(evaluation))],
+            demand_commitments=planning_demand_commitments,
+            reservation_batches=planning_reservation_batches,
+        )
+        return deepcopy(workbench["Rows"][0])
+
+    def _order_commitment_boundary() -> dict[str, object]:
+        return {
+            "RecommendationOnly": True,
+            "ExternalOrderAcceptance": "NotPerformed",
+            "PlanningRunCreation": "NotPerformed",
+            "ProductionMutation": "NotPerformed",
+            "ReleaseMaterialGateStillRequired": True,
+        }
+
+    def _order_commitment_event_record(
+        *,
+        evaluation: Mapping[str, object],
+        event_type: str,
+        actor_id: str,
+        occurred_at: datetime,
+        decision_id: str | None = None,
+        reservation_batch_id: str | None = None,
+        causation_id: str,
+        details: Mapping[str, object],
+    ) -> dict[str, object]:
+        safe_details = {
+            key: deepcopy(value)
+            for key, value in details.items()
+            if key in SAFE_AUDIT_DETAIL_FIELDS
+        }
+        identity = {
+            "EvaluationID": evaluation["EvaluationID"],
+            "EventType": event_type,
+            "DecisionID": decision_id,
+            "ReservationBatchID": reservation_batch_id,
+            "CausationID": causation_id,
+        }
+        order = evaluation["Order"]
+        return {
+            "EventID": "OCEV-" + sha256(
+                canonical_json(identity).encode("utf-8")
+            ).hexdigest()[:20],
+            "EventType": event_type,
+            "EvaluationID": evaluation["EvaluationID"],
+            "OccurredAt": occurred_at.isoformat(),
+            "ActorID": actor_id,
+            "TraceID": order["TraceID"],
+            "CausationID": causation_id,
+            "CorrelationID": order["LogicalOrderKey"],
+            "DecisionID": decision_id,
+            "ReservationBatchID": reservation_batch_id,
+            "Details": safe_details,
+        }
+
+    def _append_order_commitment_event(
+        *,
+        evaluation: Mapping[str, object],
+        event_type: str,
+        actor_id: str,
+        occurred_at: datetime,
+        decision_id: str | None = None,
+        reservation_batch_id: str | None = None,
+        causation_id: str,
+        details: Mapping[str, object],
+    ) -> dict[str, object]:
+        event = _order_commitment_event_record(
+            evaluation=evaluation,
+            event_type=event_type,
+            actor_id=actor_id,
+            occurred_at=occurred_at,
+            decision_id=decision_id,
+            reservation_batch_id=reservation_batch_id,
+            causation_id=causation_id,
+            details=details,
+        )
+        existing = next(
+            (
+                row
+                for row in order_commitment_events
+                if row.get("EventID") == event["EventID"]
+            ),
+            None,
+        )
+        if existing is None:
+            order_commitment_events.append(event)
+        elif canonical_fingerprint(existing) != canonical_fingerprint(event):
+            raise OrderCommitmentConflict(
+                "Order commitment event identity/content conflict."
+            )
+        return event
+
+    def _assert_order_commitment_acceptance_event_replay_matches(
+        expected_event: Mapping[str, object],
+    ) -> None:
+        related_events = [
+            event
+            for event in order_commitment_events
+            if isinstance(event, Mapping)
+            and (
+                event.get("EventID") == expected_event["EventID"]
+                or event.get("DecisionID") == expected_event["DecisionID"]
+                or event.get("ReservationBatchID")
+                == expected_event["ReservationBatchID"]
+                or event.get("CausationID") == expected_event["CausationID"]
+            )
+        ]
+        if len(related_events) != 1 or related_events[0] != expected_event:
+            raise OrderCommitmentConflict(
+                "Persisted acceptance event does not match canonical evidence."
+            )
+
+    @app.post("/planner/workbench/order-commitments/intake")
+    def planner_workbench_order_commitment_intake(
+        payload: MtoOrderCommitmentIntakePayload,
+        request: Request,
+    ):
+        endpoint = "/planner/workbench/order-commitments/intake"
+        try:
+            order = normalize_mto_order(_mto_order_from_payload(payload))
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
+        try:
+            replay = exact_order_commitment_intake_replay(
+                evaluations=order_commitment_evaluations,
+                order=order,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=str(error),
+                message=str(error),
+            )
+        if replay is not None:
+            request.state.skip_workbench_persistence = True
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "RegistrationStatus": "Duplicate",
+                    "Evaluation": _order_commitment_row(replay),
+                    "Boundary": _order_commitment_boundary(),
+                },
+            }
+
+        evaluated_at = server_utc_now()
+        actor_id = _effective_actor_id(request, order["SourceSystem"])
+        candidate = _build_order_commitment_evaluation_from_state(
+            endpoint=endpoint,
+            order=order,
+            evaluated_at=evaluated_at,
+            check_material_availability=True,
+            material_check_skip_reason=None,
+            requested_operational_state_snapshot_id=(
+                payload.OperationalStateSnapshotID
+            ),
+        )
+        if isinstance(candidate, JSONResponse):
+            return candidate
+        registration, persisted = register_order_commitment_evaluation(
+            order_commitment_evaluations, candidate
+        )
+        if registration == "Created":
+            superseded = supersede_open_order_commitment_evaluations(
+                evaluations=order_commitment_evaluations,
+                candidate=persisted,
+                superseded_at=evaluated_at,
+            )
+            for superseded_id, superseded_row in superseded.items():
+                order_commitment_evaluations[superseded_id] = deepcopy(
+                    superseded_row
+                )
+                _append_order_commitment_event(
+                    evaluation=superseded_row,
+                    event_type="OrderCommitmentEvaluationSuperseded",
+                    actor_id=actor_id,
+                    occurred_at=evaluated_at,
+                    causation_id=persisted["EvaluationID"],
+                    details={
+                        "FromStatus": "AwaitingPlannerDecision",
+                        "ToStatus": "Superseded",
+                        "SupersededByEvaluationID": persisted["EvaluationID"],
+                    },
+                )
+            order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+                persisted
+            )
+            _append_order_commitment_event(
+                evaluation=persisted,
+                event_type="OrderCommitmentEvaluated",
+                actor_id=actor_id,
+                occurred_at=evaluated_at,
+                causation_id=persisted["Order"]["OrderKey"],
+                details={
+                    "ToStatus": "AwaitingPlannerDecision",
+                    "Recommendation": persisted["Recommendation"]["Decision"],
+                    "MaterialCheckEnabled": True,
+                    "MaterialEvidenceFreshnessStatus": persisted[
+                        "MaterialAssessment"
+                    ]["OperationalStateFreshnessStatus"],
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "RegistrationStatus": registration,
+                "Evaluation": _order_commitment_row(persisted),
+                "Boundary": _order_commitment_boundary(),
+            },
+        }
+
+    @app.post(
+        "/planner/workbench/order-commitments/{evaluation_id}/reevaluate"
+    )
+    def planner_workbench_order_commitment_reevaluate(
+        evaluation_id: str,
+        payload: MtoOrderCommitmentReevaluationPayload,
+        request: Request,
+    ):
+        endpoint = (
+            "/planner/workbench/order-commitments/"
+            f"{evaluation_id}/reevaluate"
+        )
+        source = order_commitment_evaluations.get(evaluation_id)
+        if source is None:
+            return _order_commitment_error(
+                endpoint=endpoint, status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        if source["Status"] != "AwaitingPlannerDecision":
+            return _order_commitment_error(
+                endpoint=endpoint, status_code=409,
+                status="OrderCommitmentEvaluationNotReevaluatable",
+                message="Only an open evaluation may be re-evaluated.",
+            )
+        observed_at = server_utc_now()
+        actor_id = _effective_actor_id(request, payload.RequestedBy)
+        order = deepcopy(source["Order"])
+        if payload.BaselinePlanningRunID is not None:
+            order["BaselinePlanningRunID"] = (
+                payload.BaselinePlanningRunID.strip()
+            )
+        order = normalize_mto_order(order)
+        candidate = _build_order_commitment_evaluation_from_state(
+            endpoint=endpoint,
+            order=order,
+            evaluated_at=observed_at,
+            check_material_availability=payload.CheckMaterialAvailability,
+            material_check_skip_reason=payload.MaterialCheckSkipReason,
+            requested_operational_state_snapshot_id=(
+                payload.OperationalStateSnapshotID
+            ),
+        )
+        if isinstance(candidate, JSONResponse):
+            return candidate
+        registration, persisted = register_order_commitment_evaluation(
+            order_commitment_evaluations, candidate
+        )
+        if registration == "Duplicate":
+            request.state.skip_workbench_persistence = True
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "RegistrationStatus": "Duplicate",
+                    "Evaluation": _order_commitment_row(persisted),
+                    "Boundary": _order_commitment_boundary(),
+                },
+            }
+        updates = supersede_open_order_commitment_evaluations(
+            evaluations=order_commitment_evaluations,
+            candidate=persisted,
+            superseded_at=observed_at,
+        )
+        for updated_id, updated_row in updates.items():
+            order_commitment_evaluations[updated_id] = deepcopy(updated_row)
+            _append_order_commitment_event(
+                evaluation=updated_row,
+                event_type="OrderCommitmentEvaluationSuperseded",
+                actor_id=actor_id,
+                occurred_at=observed_at,
+                causation_id=persisted["EvaluationID"],
+                details={
+                    "FromStatus": "AwaitingPlannerDecision",
+                    "ToStatus": "Superseded",
+                    "SupersededByEvaluationID": persisted["EvaluationID"],
+                },
+            )
+        order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+            persisted
+        )
+        _append_order_commitment_event(
+            evaluation=persisted,
+            event_type="OrderCommitmentReevaluated",
+            actor_id=actor_id,
+            occurred_at=observed_at,
+            causation_id=source["EvaluationID"],
+            details={
+                "ToStatus": "AwaitingPlannerDecision",
+                "Recommendation": persisted["Recommendation"]["Decision"],
+                "MaterialCheckEnabled": persisted["MaterialAssessment"][
+                    "CheckEnabled"
+                ],
+                "MaterialEvidenceFreshnessStatus": persisted[
+                    "MaterialAssessment"
+                ]["OperationalStateFreshnessStatus"],
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "RegistrationStatus": registration,
+                "Evaluation": _order_commitment_row(persisted),
+                "Boundary": _order_commitment_boundary(),
+            },
+        }
+
+    @app.post("/planner/workbench/order-commitments/{evaluation_id}/decision")
+    def planner_workbench_order_commitment_decide(
+        evaluation_id: str,
+        payload: MtoOrderCommitmentDecisionPayload,
+        request: Request,
+    ):
+        endpoint = (
+            "/planner/workbench/order-commitments/"
+            f"{evaluation_id}/decision"
+        )
+        if request.headers.get("if-match") is None:
+            return JSONResponse(
+                status_code=428,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 428,
+                    "Data": {"Status": "OrderCommitmentPreconditionRequired"},
+                },
+            )
+        evaluation = order_commitment_evaluations.get(evaluation_id)
+        if evaluation is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        if payload.ExpectedEvaluationFingerprint != evaluation[
+            "EvaluationFingerprint"
+        ]:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentEvaluationFingerprintMismatch",
+                message="Expected evaluation fingerprint does not match.",
+            )
+        decision_at = server_utc_now()
+        actor_id = _effective_actor_id(request, payload.DecidedBy)
+        incoming_fingerprint = canonical_decision_fingerprint(
+            evaluation=evaluation,
+            decision_id=payload.DecisionID,
+            decision=payload.Decision,
+            actor_id=actor_id,
+            reason=payload.Reason,
+            ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+            material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+        )
+        if evaluation["Status"] == "Superseded":
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentEvaluationNotDecisionEligible",
+                message="Superseded evaluation cannot receive a decision.",
+            )
+        if evaluation["Status"] != "AwaitingPlannerDecision":
+            persisted_decision = evaluation.get("Decision")
+            if not isinstance(persisted_decision, dict):
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentDecisionEvidenceMissing",
+                    message="Persisted decision evidence is missing.",
+                )
+            replay_write_set = None
+            if evaluation["Status"] == "AcceptedPendingFormalSchedule":
+                try:
+                    text_fields = (
+                        "DecisionID",
+                        "DecisionFingerprint",
+                        "Decision",
+                        "DecidedBy",
+                        "DecidedAt",
+                        "Reason",
+                        "AcceptedPromiseAt",
+                        "DemandCommitmentID",
+                        "ReservationBatchID",
+                        "ExternalOrderAcceptance",
+                        "PlanningRunCreation",
+                        "ProductionMutation",
+                    )
+                    for field in text_fields:
+                        value = persisted_decision.get(field)
+                        if not isinstance(value, str) or not value.strip():
+                            raise OrderCommitmentConflict(
+                                f"Persisted accepted decision {field} is invalid."
+                            )
+                    for field in (
+                        "CcrRiskAcknowledged",
+                        "MaterialRiskAcknowledged",
+                    ):
+                        if type(persisted_decision.get(field)) is not bool:
+                            raise OrderCommitmentConflict(
+                                f"Persisted accepted decision {field} is invalid."
+                            )
+                    decided_at = _parse_aware(persisted_decision["DecidedAt"])
+                    _parse_aware(persisted_decision["AcceptedPromiseAt"])
+                    original = deepcopy(evaluation)
+                    original["Status"] = "AwaitingPlannerDecision"
+                    original["RecordVersion"] = (
+                        int(evaluation["RecordVersion"]) - 1
+                    )
+                    original.pop("Decision", None)
+                    replay_write_set = prepare_mto_acceptance(
+                        evaluation=original,
+                        existing_commitments={},
+                        decision_id=persisted_decision["DecisionID"],
+                        decision=persisted_decision["Decision"],
+                        decided_by=persisted_decision["DecidedBy"],
+                        decided_at=decided_at,
+                        reason=persisted_decision["Reason"],
+                        ccr_risk_acknowledged=persisted_decision[
+                            "CcrRiskAcknowledged"
+                        ],
+                        material_risk_acknowledged=persisted_decision[
+                            "MaterialRiskAcknowledged"
+                        ],
+                    )
+                    assert_reservation_write_set_replay_matches(
+                        write_set=replay_write_set,
+                        commitments=deepcopy(planning_demand_commitments),
+                        batches=deepcopy(planning_reservation_batches),
+                        capacity_reservations=deepcopy(ccr_capacity_reservations),
+                        material_allocations=deepcopy(material_planning_allocations),
+                        events=deepcopy(planning_reservation_events),
+                        processed_event_keys=deepcopy(processed_planning_event_keys),
+                    )
+                    expected_accepted = accepted_evaluation_record(
+                        evaluation=original,
+                        write_set=replay_write_set,
+                        decision_id=persisted_decision["DecisionID"],
+                        decision=persisted_decision["Decision"],
+                        decided_by=persisted_decision["DecidedBy"],
+                        decided_at=decided_at,
+                        reason=persisted_decision["Reason"],
+                        ccr_risk_acknowledged=persisted_decision[
+                            "CcrRiskAcknowledged"
+                        ],
+                        material_risk_acknowledged=persisted_decision[
+                            "MaterialRiskAcknowledged"
+                        ],
+                    )
+                    if expected_accepted != evaluation:
+                        raise OrderCommitmentConflict(
+                            "Persisted accepted decision immutable content drifted."
+                        )
+                    expected_event = _order_commitment_event_record(
+                        evaluation=expected_accepted,
+                        event_type="OrderCommitmentAccepted",
+                        actor_id=persisted_decision["DecidedBy"],
+                        occurred_at=decided_at,
+                        decision_id=persisted_decision["DecisionID"],
+                        reservation_batch_id=replay_write_set.batch[
+                            "ReservationBatchID"
+                        ],
+                        causation_id=persisted_decision["DecisionID"],
+                        details={
+                            "FromStatus": "AwaitingPlannerDecision",
+                            "ToStatus": "AcceptedPendingFormalSchedule",
+                            "DecisionCode": persisted_decision["Decision"],
+                            "AcceptedPromiseAt": expected_accepted["Decision"][
+                                "AcceptedPromiseAt"
+                            ],
+                            "CcrRiskAcknowledged": persisted_decision[
+                                "CcrRiskAcknowledged"
+                            ],
+                            "MaterialRiskAcknowledged": persisted_decision[
+                                "MaterialRiskAcknowledged"
+                            ],
+                        },
+                    )
+                    _assert_order_commitment_acceptance_event_replay_matches(
+                        expected_event
+                    )
+                except (KeyError, TypeError, ValueError):
+                    return _order_commitment_error(
+                        endpoint=endpoint,
+                        status_code=409,
+                        status="OrderCommitmentDecisionReplayEvidenceMismatch",
+                        message=(
+                            "Persisted acceptance does not match its canonical "
+                            "decision, Phase 0, or event evidence."
+                        ),
+                    )
+                if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
+                    return _order_commitment_error(
+                        endpoint=endpoint,
+                        status_code=409,
+                        status="OrderCommitmentDecisionReplayConflict",
+                        message=(
+                            "Decision replay content differs from persisted content."
+                        ),
+                    )
+            elif evaluation["Status"] != "Rejected":
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentEvaluationNotDecisionEligible",
+                    message="Evaluation cannot receive a decision.",
+                )
+            elif persisted_decision.get("DecisionFingerprint") != incoming_fingerprint:
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentDecisionReplayConflict",
+                    message="Decision replay content differs from persisted content.",
+                )
+            request.state.skip_workbench_persistence = True
+            demand_commitment_id = persisted_decision.get("DemandCommitmentID")
+            reservation_batch_id = persisted_decision.get("ReservationBatchID")
+            if replay_write_set is not None:
+                demand_commitment_id = replay_write_set.demand_commitment[
+                    "DemandCommitmentID"
+                ]
+                reservation_batch_id = replay_write_set.batch[
+                    "ReservationBatchID"
+                ]
+            replay_data = {
+                "Evaluation": _order_commitment_row(evaluation),
+                "Status": evaluation["Status"],
+                "DemandCommitmentID": demand_commitment_id,
+                "ReservationBatchID": reservation_batch_id,
+                "ExternalOrderAcceptance": "NotPerformed",
+                "PlanningRunCreation": "NotPerformed",
+                "ProductionMutation": "NotPerformed",
+            }
+            if replay_write_set is not None:
+                replay_data.update({
+                    "CapacityReservationIDs": list(
+                        replay_write_set.batch["CapacityReservationIDs"]
+                    ),
+                    "MaterialAllocationIDs": list(
+                        replay_write_set.batch["MaterialAllocationIDs"]
+                    ),
+                })
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": replay_data,
+            }
+        if payload.Decision != "Reject":
+            material = evaluation["MaterialAssessment"]
+            requested_snapshot_id = (
+                material.get("RequestedOperationalStateSnapshotID")
+                if material["SnapshotSelectionMode"] == "Explicit"
+                else None
+            )
+            current = _build_order_commitment_evaluation_from_state(
+                endpoint=endpoint,
+                order=evaluation["Order"],
+                evaluated_at=decision_at,
+                check_material_availability=material["CheckEnabled"],
+                material_check_skip_reason=material.get("SkipReason"),
+                requested_operational_state_snapshot_id=requested_snapshot_id,
+            )
+            if isinstance(current, JSONResponse):
+                return current
+            current_facts = canonical_order_commitment_decision_facts(current)
+            stale = any((
+                current["DecisionStalenessBasisFingerprint"]
+                != evaluation["DecisionStalenessBasisFingerprint"],
+                current_facts != evaluation["DecisionFacts"],
+                canonical_fingerprint(current_facts)
+                != evaluation["DecisionFactsFingerprint"],
+                current["OrderContentFingerprint"]
+                != evaluation["OrderContentFingerprint"],
+                current["ProtectionPolicy"] != evaluation["ProtectionPolicy"],
+                current["ShadowSchedule"]["Algorithm"]
+                != evaluation["ShadowSchedule"]["Algorithm"],
+                current["MaterialAssessment"]["CheckEnabled"]
+                != material["CheckEnabled"],
+                current["MaterialAssessment"].get("SkipReason")
+                != material.get("SkipReason"),
+            ))
+            if stale:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "Status": "OrderCommitmentEvaluationStale",
+                            "EvaluationID": evaluation_id,
+                            "Message": (
+                                "Relevant capacity, material, schedule, calendar, "
+                                "configuration, release, or snapshot evidence changed."
+                            ),
+                        },
+                    },
+                )
+            try:
+                write_set = prepare_mto_acceptance(
+                    evaluation=evaluation,
+                    existing_commitments=planning_demand_commitments,
+                    decision_id=payload.DecisionID,
+                    decision=payload.Decision,
+                    decided_by=actor_id,
+                    decided_at=decision_at,
+                    reason=payload.Reason,
+                    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+                )
+                apply_reservation_write_set(
+                    write_set=write_set,
+                    commitments=planning_demand_commitments,
+                    batches=planning_reservation_batches,
+                    capacity_reservations=ccr_capacity_reservations,
+                    material_allocations=material_planning_allocations,
+                    events=planning_reservation_events,
+                    processed_event_keys=processed_planning_event_keys,
+                )
+                updated = accepted_evaluation_record(
+                    evaluation=evaluation,
+                    write_set=write_set,
+                    decision_id=payload.DecisionID,
+                    decision=payload.Decision,
+                    decided_by=actor_id,
+                    decided_at=decision_at,
+                    reason=payload.Reason,
+                    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+                )
+            except (OrderCommitmentConflict, ReservationConflict) as error:
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status=error.status,
+                    message=str(error),
+                )
+            order_commitment_evaluations[evaluation_id] = updated
+            _append_order_commitment_event(
+                evaluation=updated,
+                event_type="OrderCommitmentAccepted",
+                actor_id=actor_id,
+                occurred_at=decision_at,
+                decision_id=payload.DecisionID.strip(),
+                reservation_batch_id=write_set.batch["ReservationBatchID"],
+                causation_id=payload.DecisionID.strip(),
+                details={
+                    "FromStatus": "AwaitingPlannerDecision",
+                    "ToStatus": "AcceptedPendingFormalSchedule",
+                    "DecisionCode": payload.Decision,
+                    "AcceptedPromiseAt": updated["Decision"]["AcceptedPromiseAt"],
+                    "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+                    "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+                },
+            )
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "Evaluation": _order_commitment_row(updated),
+                    "DemandCommitmentID": write_set.demand_commitment[
+                        "DemandCommitmentID"
+                    ],
+                    "ReservationBatchID": write_set.batch["ReservationBatchID"],
+                    "CapacityReservationIDs": list(
+                        write_set.batch["CapacityReservationIDs"]
+                    ),
+                    "MaterialAllocationIDs": list(
+                        write_set.batch["MaterialAllocationIDs"]
+                    ),
+                    "Status": "AcceptedPendingFormalSchedule",
+                    "ExternalOrderAcceptance": "NotPerformed",
+                    "PlanningRunCreation": "NotPerformed",
+                    "ProductionMutation": "NotPerformed",
+                },
+            }
+        try:
+            updated = rejected_evaluation_record(
+                evaluation=evaluation,
+                decision_id=payload.DecisionID,
+                decision="Reject",
+                decided_by=actor_id,
+                decided_at=decision_at,
+                reason=payload.Reason,
+                ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentDecisionNotAllowed",
+                message=str(error),
+            )
+        order_commitment_evaluations[evaluation_id] = updated
+        _append_order_commitment_event(
+            evaluation=updated,
+            event_type="OrderCommitmentRejected",
+            actor_id=actor_id,
+            occurred_at=decision_at,
+            decision_id=payload.DecisionID.strip(),
+            causation_id=payload.DecisionID.strip(),
+            details={
+                "FromStatus": "AwaitingPlannerDecision",
+                "ToStatus": "Rejected",
+                "DecisionCode": "Reject",
+                "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+                "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "Evaluation": _order_commitment_row(updated),
+                "Status": updated["Status"],
+                "DemandCommitmentID": None,
+                "ReservationBatchID": None,
+                "ExternalOrderAcceptance": "NotPerformed",
+                "PlanningRunCreation": "NotPerformed",
+                "ProductionMutation": "NotPerformed",
+            },
+        }
+
+    @app.get("/planner/workbench/order-commitments/workbench")
+    def planner_workbench_order_commitment_workbench() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/order-commitments/workbench",
+            "StatusCode": 200,
+            "Data": build_order_commitment_workbench(
+                evaluations=deepcopy(list(order_commitment_evaluations.values())),
+                demand_commitments=deepcopy(planning_demand_commitments),
+                reservation_batches=deepcopy(planning_reservation_batches),
+            ),
+        }
+
+    @app.get("/planner/workbench/order-commitments/{evaluation_id}")
+    def planner_workbench_order_commitment_detail(
+        evaluation_id: str,
+    ):
+        endpoint = f"/planner/workbench/order-commitments/{evaluation_id}"
+        evaluation = order_commitment_evaluations.get(evaluation_id)
+        if evaluation is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        decision = evaluation.get("Decision")
+        decision = decision if isinstance(decision, Mapping) else {}
+        demand_id = decision.get("DemandCommitmentID")
+        batch_id = decision.get("ReservationBatchID")
+        demand = planning_demand_commitments.get(str(demand_id))
+        batch = planning_reservation_batches.get(str(batch_id))
+        if demand is None:
+            demand = next(
+                (
+                    row
+                    for row in planning_demand_commitments.values()
+                    if row.get("OrderCommitmentEvaluationID") == evaluation_id
+                ),
+                None,
+            )
+        if batch is None:
+            batch = next(
+                (
+                    row
+                    for row in planning_reservation_batches.values()
+                    if row.get("OrderCommitmentEvaluationID") == evaluation_id
+                ),
+                None,
+            )
+        events = [
+            deepcopy(event)
+            for event in order_commitment_events
+            if event.get("EvaluationID") == evaluation_id
+        ]
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_order_commitment_detail(
+                evaluation=deepcopy(evaluation),
+                events=events,
+                demand_commitment=deepcopy(demand) if demand is not None else None,
+                reservation_batch=deepcopy(batch) if batch is not None else None,
+            ),
+        }
+
     @app.get("/planner/workbench/test-data/acceptance")
     def planner_workbench_test_data_acceptance(
         evaluated_at: datetime = DEFAULT_CASE_EVALUATED_AT,
@@ -1924,6 +3371,29 @@ def create_app(
                 "Scope": "AllCases",
                 "Summary": summary.to_dict(),
             },
+        }
+
+    @app.post("/planner/workbench/test-data/order-commitment/reset")
+    def planner_workbench_order_commitment_test_data_reset():
+        endpoint = "/planner/workbench/test-data/order-commitment/reset"
+        if active_environment.is_production:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {"Status": "TestDataResetNotAllowed"},
+                },
+            )
+        seed_baseline_test_data(active_store)
+        fixture = seed_mto_order_commitment_fixture(
+            active_store,
+            captured_at=server_utc_now(),
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Status": "Reset", **fixture},
         }
 
     @app.post("/planner/workbench/test-data/acceptance/{case_id}/reset")
@@ -4768,6 +6238,18 @@ def create_app(
                     demand_source_type = commitment.get("DemandSourceType")
                     if demand_source_type in DEMAND_SOURCE_TYPES:
                         row["DemandSourceType"] = demand_source_type
+                    if commitment.get("OrderCommitmentEvaluationID") is not None:
+                        row.update({
+                            "OrderCommitmentEvaluationID": commitment.get(
+                                "OrderCommitmentEvaluationID"
+                            ),
+                            "AcceptedPromiseAt": commitment.get(
+                                "AcceptedPromiseAt"
+                            ),
+                            "MaterialCommitmentStatus": commitment.get(
+                                "MaterialCommitmentStatus"
+                            ),
+                        })
                 rows.append(row)
             rows.sort(
                 key=lambda item: (

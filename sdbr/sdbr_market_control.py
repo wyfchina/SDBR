@@ -124,8 +124,8 @@ def build_ccr_planned_load(
         load_percent = _finite_load_percent(total, capacity)
         bucket["TotalPlannedLoadMinutes"] = total
         bucket["LoadPercent"] = load_percent
-        bucket["Status"] = _load_status(
-            load_percent,
+        bucket["Status"] = classify_ccr_load(
+            load_percent=load_percent,
             protective_capacity_target_percent=protective_capacity_target_percent,
         )
         rows.append(bucket)
@@ -445,9 +445,9 @@ def _is_controlled_resource(resource: dict[str, object]) -> bool:
     ) or role in {"CCR", "CONSTRAINT", "CONTROLPOINT", "BUFFERPROTECTED"}
 
 
-def _load_status(
-    load_percent: float,
+def classify_ccr_load(
     *,
+    load_percent: float,
     protective_capacity_target_percent: float,
 ) -> str:
     if load_percent > 100:

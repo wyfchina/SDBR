@@ -6002,6 +6002,174 @@ class TestOrderCommitmentUiReevaluation:
         ) in request
 
 
+class TestOrderCommitmentUiDecisionFlow:
+    # UI-COMMIT-001 / BE-SDBR-010
+    @staticmethod
+    def _assets() -> tuple[str, str, str]:
+        client = TestClient(create_app())
+        return (
+            client.get("/planner/assets/planner-workbench.js").text,
+            client.get("/planner/workbench").text,
+            client.get("/planner/assets/planner-workbench.css").text,
+        )
+
+    @staticmethod
+    def _decision_script(script: str) -> str:
+        start = script.index("function orderCommitmentDecisionRequirements")
+        end = script.index("function renderOrderCommitmentDetail", start)
+        return script[start:end]
+
+    def test_dialog_shows_ccr_ack_for_reference_and_exceeded_candidates(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "ActionAcknowledgementRequirements?.[action]" in decision
+        assert "requirements.RequiresCcrAcknowledgement" in decision
+        assert 'ccrField.hidden = !requirements.RequiresCcrAcknowledgement' in decision
+        assert 'ccrAck.required = requirements.RequiresCcrAcknowledgement' in decision
+        assert 'detail.Recommendation?.ThresholdState' in decision
+        assert 'row?.ProtectionThresholdSource' in decision
+
+    def test_dialog_shows_material_ack_for_both_conditional_actions(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "requirements.RequiresMaterialAcknowledgement" in decision
+        assert 'materialField.hidden = !requirements.RequiresMaterialAcknowledgement' in decision
+        assert 'materialAck.required = requirements.RequiresMaterialAcknowledgement' in decision
+        assert 'detail.MaterialEvidence?.Status' in decision
+        for action in (
+            "ConditionallyAcceptRequestedDate",
+            "ConditionallyAcceptRecommendedDate",
+        ):
+            assert f'"{action}"' in script
+
+    def test_reject_hides_and_does_not_require_both_risk_acknowledgements(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert "function orderCommitmentDecisionRequirements" in decision
+        assert "if (!requirements) return;" in decision
+        assert "ccrAck.checked = false" in decision
+        assert "materialAck.checked = false" in decision
+        assert "orderCommitmentAllowedActions().has(action)" in decision
+        assert 'selectedOrderCommitment?.Status !== "AwaitingPlannerDecision"' in decision
+
+    def test_dialog_requires_reason_and_visible_acknowledgements(self):
+        script, html, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert 'id="order-commitment-decision-reason" rows="3" required' in html
+        assert 'id="order-commitment-decision-error"' in html
+        assert 'role="alert"' in html
+        assert "function updateOrderCommitmentDecisionValidity" in decision
+        assert "!reason || (ccrRequired && !ccrAck)" in decision
+        assert "|| (materialRequired && !materialAck)" in decision
+        assert 'translate("requiredDecisionEvidenceMissing")' in decision
+        assert 'submit.disabled = !valid' in decision
+
+    def test_decision_sends_if_match_fingerprint_and_all_canonical_fields(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert decision.count(' + "/decision"') == 1
+        assert 'method: "POST"' in decision
+        assert '"Content-Type": "application/json"' in decision
+        assert '"If-Match": orderCommitmentRevision' in decision
+        for field in (
+            "DecisionID", "Decision", "DecidedBy", "Reason",
+            "ExpectedEvaluationFingerprint", "CcrRiskAcknowledged",
+            "MaterialRiskAcknowledged",
+        ):
+            assert f"{field}:" in decision
+        assert 'detail.TechnicalDetails.EvaluationFingerprint' in decision
+        assert '["DEC", detail.EvaluationID, detail.RecordVersion, action].join("-")' in decision
+
+    def test_conflict_refreshes_without_automatic_decision_retry(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+        submit = decision[
+            decision.index("async function submitOrderCommitmentDecision"):
+        ]
+
+        for status in (
+            "StateStoreRevisionConflict",
+            "OrderCommitmentEvaluationStale",
+            "OrderCommitmentEvaluationFingerprintMismatch",
+            "OrderCommitmentDecisionReplayConflict",
+        ):
+            assert f'"{status}"' in submit
+        assert "await loadOrderCommitments()" in submit
+        assert "await openOrderCommitmentDetail(detail.EvaluationID)" in submit
+        assert "selectedOrderCommitmentAction = null" in submit
+        assert "submitButton.disabled = true" in submit
+        assert submit.count("fetch(") == 1
+        assert "submitOrderCommitmentDecision(" not in submit.split("{", 1)[1]
+
+    def test_success_renders_accepted_pending_formal_schedule_boundaries(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        assert 'const status = payload?.Data?.Status' in decision
+        assert 'orderCommitmentLabel(status)' in decision
+        assert 'translate("orderCommitmentDecisionRecorded")' in decision
+        assert 'detail.Boundary?.ExternalOrderAcceptance' in decision
+        assert 'detail.Boundary?.PlanningRunCreation' in decision
+        assert 'detail.Boundary?.ProductionMutation' in decision
+        assert 'AcceptedPendingFormalSchedule: "已接受，待正式排程"' in script
+        assert 'AcceptedPendingFormalSchedule: "Accepted, pending formal schedule"' in script
+
+    def test_dialog_has_bilingual_business_errors_replay_and_failure_handling(self):
+        script, _, _ = self._assets()
+        decision = self._decision_script(script)
+
+        translations = {
+            "requiredDecisionEvidenceMissing": (
+                "请填写决定原因并完成当前操作要求的风险确认。",
+                "Provide a decision reason and complete the risk acknowledgements required for this action.",
+            ),
+            "orderCommitmentEvidenceChanged": (
+                "决定依据已变化，已刷新当前评估；请重新选择操作。",
+                "Decision evidence changed. The current evaluation was refreshed; choose the action again.",
+            ),
+            "orderCommitmentReplayConflict": (
+                "该决定与已记录的结果不一致，已刷新当前评估；不会自动重试。",
+                "This decision conflicts with the recorded result. The evaluation was refreshed and was not retried.",
+            ),
+            "orderCommitmentDecisionFailed": (
+                "无法记录当前订单承诺决定。请复核后重试。",
+                "This order commitment decision could not be recorded. Review it and try again.",
+            ),
+        }
+        for key, (zh, en) in translations.items():
+            assert f'{key}: "{zh}"' in script
+            assert f'{key}: "{en}"' in script
+        assert "OrderCommitmentDecisionReplayEvidenceMismatch" in decision
+        assert "catch (_error)" in decision
+
+    def test_dialog_uses_native_keyboard_focus_and_responsive_terminal_gates(self):
+        script, html, style = self._assets()
+        decision = self._decision_script(script)
+        action_renderer = script[
+            script.index("function renderOrderCommitmentActions"):
+            script.index("function updateOrderCommitmentMaterialSkipField")
+        ]
+
+        assert '<dialog id="order-commitment-decision-dialog"' in html
+        assert 'aria-labelledby="order-commitment-decision-title"' in html
+        assert '<label id="order-commitment-ccr-ack-field"' in html
+        assert '<label id="order-commitment-material-ack-field"' in html
+        assert ".showModal()" in decision
+        assert "firstRequiredControl.focus()" in decision
+        assert 'addEventListener("cancel", closeOrderCommitmentDecision)' in script
+        assert 'addEventListener("submit", submitOrderCommitmentDecision)' in script
+        assert 'addEventListener("input", updateOrderCommitmentDecisionValidity)' in script
+        assert 'actions.replaceChildren()' in action_renderer
+        assert '.filter((action) => allowed.has(action))' in action_renderer
+        assert '.compact-dialog { width: min(620px, calc(100vw - 24px)); }' in style
+        assert 'max-height: calc(100vh - 32px)' in style
+
+
 def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     # UI-CALENDAR-001 / BE-DATA-010
     client = TestClient(create_app())

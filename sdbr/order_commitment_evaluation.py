@@ -460,7 +460,14 @@ def evaluate_mto_material_availability(
         (str(row["ItemID"]), str(row["LocationID"]))
         for row in requirements
     }
-    relevant_allocations = deepcopy(active_material_allocations)
+    relevant_allocations = [
+        deepcopy(row)
+        for row in active_material_allocations
+        if (
+            str(row.get("ItemID") or ""),
+            str(row.get("LocationID") or ""),
+        ) in relevant_keys
+    ]
     buffers = {
         (row.item_id, row.location_id): row
         for row in snapshot.inventory_buffers

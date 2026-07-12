@@ -121,6 +121,20 @@ class TestOrderCommitmentApiContracts:
                 **{**payload, "CheckMaterialAvailability": False}
             )
 
+    def test_intake_contract_requires_aware_iso_timestamps_not_numeric_epochs(self):
+        payload = _intake_payload()
+
+        intake = api.MtoOrderCommitmentIntakePayload(**payload)
+
+        assert intake.RequestedDueAt.tzinfo is not None
+        assert intake.ReceivedAt.tzinfo is not None
+        for timestamp_field in ("RequestedDueAt", "ReceivedAt"):
+            for numeric_epoch in (0, 1.0):
+                with pytest.raises(ValidationError, match=timestamp_field):
+                    api.MtoOrderCommitmentIntakePayload(
+                        **{**payload, timestamp_field: numeric_epoch}
+                    )
+
     def test_reevaluation_contract_has_no_material_window_or_threshold_override(self):
         payload = {
             "RequestedBy": "planner-1",
@@ -138,6 +152,40 @@ class TestOrderCommitmentApiContracts:
                 api.MtoOrderCommitmentReevaluationPayload(
                     **{**payload, prohibited_field: 60}
                 )
+
+    def test_boolean_contract_requires_json_booleans_without_coercion(self):
+        decision_payload = {
+            "DecisionID": "DEC-TST-MTO-BOOLEAN",
+            "Decision": "Reject",
+            "DecidedBy": "planner-1",
+            "Reason": "Planner decision under the MTO commitment policy.",
+            "ExpectedEvaluationFingerprint": "f" * 64,
+        }
+        cases = (
+            (
+                api.MtoOrderCommitmentReevaluationPayload,
+                {"RequestedBy": "planner-1"},
+                "CheckMaterialAvailability",
+            ),
+            (
+                api.MtoOrderCommitmentDecisionPayload,
+                decision_payload,
+                "CcrRiskAcknowledged",
+            ),
+            (
+                api.MtoOrderCommitmentDecisionPayload,
+                decision_payload,
+                "MaterialRiskAcknowledged",
+            ),
+        )
+
+        for model, payload, boolean_field in cases:
+            accepted = model(**{**payload, boolean_field: False})
+            assert getattr(accepted, boolean_field) is False
+
+            for coercive_value in ("false", 0):
+                with pytest.raises(ValidationError, match=boolean_field):
+                    model(**{**payload, boolean_field: coercive_value})
 
     def test_decision_contract_accepts_all_four_acceptance_actions_and_reject(self):
         payload = {

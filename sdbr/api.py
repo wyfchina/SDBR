@@ -8,7 +8,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 from threading import Lock, RLock
 from time import monotonic
-from typing import Callable, Literal, Mapping
+from typing import Annotated, Callable, Literal, Mapping
 from zoneinfo import ZoneInfo
 
 import anyio
@@ -16,7 +16,14 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+)
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -352,6 +359,18 @@ class MtoMaterialRequirementPayload(BaseModel):
     Uom: str = "EA"
 
 
+def _require_iso_datetime_string(value: object) -> object:
+    if not isinstance(value, str):
+        raise ValueError("must be an ISO 8601 timezone-aware string")
+    return value
+
+
+MtoAwareIsoDatetime = Annotated[
+    AwareDatetime,
+    BeforeValidator(_require_iso_datetime_string),
+]
+
+
 class MtoOrderCommitmentIntakePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -364,9 +383,9 @@ class MtoOrderCommitmentIntakePayload(BaseModel):
     LocationID: str
     Quantity: float = Field(gt=0)
     Uom: str = "EA"
-    RequestedDueAt: AwareDatetime
+    RequestedDueAt: MtoAwareIsoDatetime
     BusinessPriority: int = Field(default=100, ge=1, le=999)
-    ReceivedAt: AwareDatetime
+    ReceivedAt: MtoAwareIsoDatetime
     TraceID: str
     BaselinePlanningRunID: str
     RoutingID: str = "PRIMARY"
@@ -382,7 +401,7 @@ class MtoOrderCommitmentReevaluationPayload(BaseModel):
     RequestedBy: str
     BaselinePlanningRunID: str | None = None
     OperationalStateSnapshotID: str | None = None
-    CheckMaterialAvailability: bool = True
+    CheckMaterialAvailability: StrictBool = True
     MaterialCheckSkipReason: str | None = None
 
 
@@ -400,8 +419,8 @@ class MtoOrderCommitmentDecisionPayload(BaseModel):
     DecidedBy: str
     Reason: str
     ExpectedEvaluationFingerprint: str
-    CcrRiskAcknowledged: bool = False
-    MaterialRiskAcknowledged: bool = False
+    CcrRiskAcknowledged: StrictBool = False
+    MaterialRiskAcknowledged: StrictBool = False
 
 
 def _mto_order_from_payload(

@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 2.82 |
+| 文档版本 | 2.84 |
 | 日期 | 2026-07-12 |
 | 文档状态 | 待用户审阅后成为后台开发基线 |
 | 适用范围 | 完整产品蓝图，包括计划后台、求解器、集成、执行反馈、分析与运维能力 |
@@ -133,6 +133,9 @@ DDOM 与 DDS&OP 分工：
 | `BE-DDMRP-004` | 区分计划缓冲状态与在手执行状态 | `[VERIFIED]` | `C` `PlanningStatus`、`ExecutionStatus`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 计划状态基于净流位置，执行状态基于在手库存，二者不得混用 |
 | `BE-DDMRP-005` | 生成补货建议 | `[VERIFIED]` | `D` `docs/ddom-ddmrp-runtime-principles.md`; `C` `SuggestedReplenishmentQty`; `A` `/planner/workbench/ddmrp/net-flow/evaluate`; `T` `tests/test_ddmrp.py`, `tests/test_api.py` | 当净流处于红区或黄区时触发补货建议，建议量补到绿区顶部，并按 MOQ/订单倍量修正；净流高于黄区时不补货 |
 | `BE-DDMRP-006` | DDMRP 运行 read model | `[VERIFIED]` | `A` `/planner/workbench/ddmrp/status`; `UI` `UI-DDMRP-001`、`UI-DDMRP-002`; `T` `tests/test_api.py` | 数据就绪页只读显示健康摘要；物料计划工作台只读显示解耦点、缓冲颜色、缓冲百分比、净流位置、在手/在途/合格需求、补货建议和详情；不提供参数编辑 |
+| `BE-DDMRP-007` | 不可变 DDMRP 运行评估与版本化只读补货建议 | `[VERIFIED]` | `C` `sdbr/ddmrp.py`, `sdbr/ddmrp_replenishment.py`, `sdbr/ddmrp_replenishment_view.py`, `sdbr/state_store.py`; `A` `/planner/workbench/ddmrp/workbench`, test-only `tests.ddmrp_browser_acceptance_app:create_runtime_app`; `T` final-fix focused 412 passed and full 862 passed (each 1 existing `StarletteDeprecationWarning`), including frozen-provenance GET rejection, no-save duplicate replay, and immutable Red/Yellow lifecycle history; `R` refreshed `.tmp/ddmrp-ui-acceptance/browser-report.md` and seven named screenshots | 直接消费已校验运行包 `AvailableQty`；冻结完整权威签名；Red/Yellow 形成稳定逻辑补货链上的不可变版本；缺失目标日期、Advice/BOM/物料/产能或生产权威时返回结构化阻塞；不产生操作写入。 |
+| `BE-DDMRP-008` | 契约授权的 Buy/Make 建议与计划员确认治理 | `[NOT-STARTED]` | `D` approved design and staged implementation plan | 仅在 `CONTRACT-GATE-DDMRP-ACTIVATION-001` 关闭项全部验收后启动；建议类型由服务端已验收契约证据决定，计划员逐条确认，身份/时间由服务端记录，当前不得新增调用方自报 advice envelope；Transfer 属于原设计的后续目标，但本验收项不包含且不得声明。 |
+| `BE-DDMRP-009` | Make 可行性、计划制造候选和共享 CCR/物料预留 | `[NOT-STARTED]` | `D` approved DDMRP and shared-reservation designs | 仅在已验收 Plan BOM、目标日期、物料/CCR 日历可行性和生产权威证据存在后启动；确认 Make 必须原子创建候选、CCR 预留和下级物料分配，并进入完整 Planning Run 生命周期。 |
 
 ## 4.2 S-DBR P1 市场控制运行能力
 
@@ -1025,6 +1028,8 @@ Simio 集成工作约束：
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 2.84 | 2026-07-11 | `BE-DDMRP-007` 完成不可变运行评估与版本化只读补货建议的可重复验证；2026-07-12 最终复核修复进一步验证 GET 对九项冻结来源链接漂移统一失败关闭、精确重放不保存且不增加修订、Red/Yellow 当前建议在后续监控评估后仍保留。Python 编译和本地 Node 语法检查退出 0，定向测试 412 passed、全量测试 862 passed，seeded/empty/error/403/409 浏览器矩阵通过；证据见 `.tmp/ddmrp-ui-acceptance/browser-report.md` 及七张命名截图。`BE-DDMRP-008`、`BE-DDMRP-009` 保持 `[NOT-STARTED]`，`CONTRACT-GATE-DDMRP-ACTIVATION-001` 仍关闭。 |
+| 2.83 | 2026-07-11 | 定义 DDMRP 运行补货分阶段边界：先实现权威输入驱动的不可变评估与只读工作台；Buy/Make 确认及 Make 候选/CCR/物料预留保持 Contract Agent 契约门控，不接受调用方自报 ERP/MRP 证据，不声明运行补货闭环完成 |
 | 2.82 | 2026-07-12 | 更正 `BE-SDBR-010` Task23 后端验证可重复性记录：使用三个本次新建的 pytest basetemp 路径重新运行 focused、preserved-path 和 full suite，实际结果为 413/475/1047 passed，均为 1 个既有 `StarletteDeprecationWarning`；不复用锁定的 `.tmp/pytest-mto-full`。`BE-SDBR-010` 保持 `[PARTIAL]`，其余未实现范围和非声明不变 |
 | 2.81 | 2026-07-12 | `BE-SDBR-010` 推进至 `[PARTIAL]`：记录 MTO CCR 影子容量、60 分钟运行快照新鲜度、物料评估、建议/决定矩阵、安全 read model、原子 Phase 0 预留和显式 Planning Run bridge 的可重复后端验证；approved CCR threshold intake、external formal-order authority、显式后续 Planning Run 和 ERP/MES authority 保持后续范围 |
 | 2.80 | 2026-07-11 | 启动 `BE-SDBR-010` MTO 订单承诺：固化正式求解器一致的 CCR 影子容量、60 分钟运行快照新鲜度、完整建议/决定矩阵、配置与相关状态身份、option-2 共享预留和无外部权威修改边界 |

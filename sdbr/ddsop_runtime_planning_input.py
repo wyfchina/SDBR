@@ -77,6 +77,14 @@ class RuntimePlanningInputProcessingResult:
     errors: list[dict[str, Any]]
 
 
+class DdmrpRuntimeAuthorityError(ValueError):
+    status = "DdmrpRuntimeAuthorityError"
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def runtime_planning_input_schema(
     contract_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -272,6 +280,15 @@ def evaluate_ddmrp_runtime_signals_from_package(
         "DDMRPConfiguration"
     ]
     runtime = payload["RuntimeEvidenceSnapshot"]
+    if any(
+        item.get("SpikeQualificationStatus") == "RequiresSDBRQualification"
+        and item.get("SpikeQualificationMode") == "CalculatedBySDBR"
+        for item in runtime.get("DemandSignals", [])
+    ):
+        raise DdmrpRuntimeAuthorityError(
+            "SPIKE_QUALIFICATION_INPUT_INSUFFICIENT",
+            "Accepted spike threshold authority is required for SDBR qualification.",
+        )
     buffer_by_id = {
         str(item["BufferProfileID"]): item
         for item in ddmrp_config.get("StockBufferProfiles", [])
@@ -291,6 +308,7 @@ def evaluate_ddmrp_runtime_signals_from_package(
         top_red = float(profile["TopOfRed"])
         top_yellow = float(profile["TopOfYellow"])
         top_green = float(profile["TopOfGreen"])
+        authority_available_qty = float(inventory["AvailableQty"])
         decoupling_points.append(
             DecouplingPoint(
                 item_id=key[0],
@@ -306,7 +324,7 @@ def evaluate_ddmrp_runtime_signals_from_package(
             InventoryBufferPolicy(
                 item_id=key[0],
                 location_id=key[1],
-                on_hand_qty=float(inventory["OnHandQty"]),
+                on_hand_qty=authority_available_qty,
                 red_zone_qty=top_red,
                 yellow_zone_qty=top_yellow - top_red,
                 green_zone_qty=top_green - top_yellow,
@@ -322,6 +340,8 @@ def evaluate_ddmrp_runtime_signals_from_package(
             is_qualified_spike=(
                 item.get("SpikeQualificationStatus") == "QualifiedByDDSOP"
             ),
+            demand_id=str(item["DemandID"]),
+            uom=str(item["UnitOfMeasure"]),
         )
         for item in runtime.get("DemandSignals", [])
     ]
@@ -332,6 +352,8 @@ def evaluate_ddmrp_runtime_signals_from_package(
             supply_qty=float(item["Quantity"]),
             expected_at=datetime.fromisoformat(str(item["ExpectedAt"])),
             status=str(item["SupplyStatus"]),
+            supply_id=str(item["SupplyID"]),
+            uom=str(item["UnitOfMeasure"]),
         )
         for item in runtime.get("OpenSupplySignals", [])
     ]
@@ -342,6 +364,17 @@ def evaluate_ddmrp_runtime_signals_from_package(
         open_supply=open_supply,
         evaluated_at=evaluated_at,
     )
+    for line in result["Lines"]:
+        inventory = inventory_by_key[(str(line["ItemID"]), str(line["LocationID"]))]
+        line.update(
+            {
+                "PhysicalOnHandQty": float(inventory["OnHandQty"]),
+                "AuthorityAllocatedQty": float(inventory["AllocatedQty"]),
+                "AuthorityAvailableQty": float(inventory["AvailableQty"]),
+                "QualityState": str(inventory["QualityState"]),
+                "Uom": str(inventory["UnitOfMeasure"]),
+            }
+        )
     result["RuntimePlanningInputPackageID"] = package_record[
         "RuntimePlanningInputPackageID"
     ]

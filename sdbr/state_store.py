@@ -98,6 +98,27 @@ class WorkbenchStateStore:
     ddmrp_decoupling_points: list[dict[str, object]] = field(default_factory=list)
     ddmrp_demand_signals: list[dict[str, object]] = field(default_factory=list)
     ddmrp_open_supply: list[dict[str, object]] = field(default_factory=list)
+    ddmrp_evaluation_runs: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ddmrp_evaluation_rows: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ddmrp_replenishment_chains: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ddmrp_replenishment_recommendations: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ddmrp_replenishment_events: list[dict[str, object]] = field(
+        default_factory=list
+    )
+    ddmrp_active_replenishment_graphs: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
+    ddmrp_evaluation_request_results: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
     master_data_versions: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_runs: dict[str, dict[str, object]] = field(default_factory=dict)
     planning_demand_commitments: dict[str, dict[str, object]] = field(
@@ -382,6 +403,19 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
             "ddmrp_decoupling_points": self.ddmrp_decoupling_points,
             "ddmrp_demand_signals": self.ddmrp_demand_signals,
             "ddmrp_open_supply": self.ddmrp_open_supply,
+            "ddmrp_evaluation_runs": self.ddmrp_evaluation_runs,
+            "ddmrp_evaluation_rows": self.ddmrp_evaluation_rows,
+            "ddmrp_replenishment_chains": self.ddmrp_replenishment_chains,
+            "ddmrp_replenishment_recommendations": (
+                self.ddmrp_replenishment_recommendations
+            ),
+            "ddmrp_replenishment_events": self.ddmrp_replenishment_events,
+            "ddmrp_active_replenishment_graphs": (
+                self.ddmrp_active_replenishment_graphs
+            ),
+            "ddmrp_evaluation_request_results": (
+                self.ddmrp_evaluation_request_results
+            ),
             "master_data_versions": self.master_data_versions,
             "planning_runs": self.planning_runs,
             "planning_demand_commitments": self.planning_demand_commitments,
@@ -611,6 +645,35 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         )
         self.ddmrp_demand_signals.extend(payloads.get("ddmrp_demand_signals", []))
         self.ddmrp_open_supply.extend(payloads.get("ddmrp_open_supply", []))
+        self.ddmrp_evaluation_runs.update(
+            payloads.get("ddmrp_evaluation_runs", {})
+        )
+        self.ddmrp_evaluation_rows.update(
+            payloads.get("ddmrp_evaluation_rows", {})
+        )
+        self.ddmrp_replenishment_chains.update(
+            payloads.get("ddmrp_replenishment_chains", {})
+        )
+        self.ddmrp_replenishment_recommendations.update(
+            payloads.get("ddmrp_replenishment_recommendations", {})
+        )
+        self.ddmrp_replenishment_events.extend(
+            payloads.get("ddmrp_replenishment_events", [])
+        )
+        self.ddmrp_active_replenishment_graphs.update(
+            payloads.get("ddmrp_active_replenishment_graphs", {})
+        )
+        request_results = payloads.get("ddmrp_evaluation_request_results", {})
+        for request_id, result in request_results.items():
+            if (
+                not isinstance(result, dict)
+                or result.get("EvaluationRequestID") != request_id
+            ):
+                raise ValueError(
+                    "Persisted DDMRP evaluation request result "
+                    "EvaluationRequestID does not match its mapping key."
+                )
+        self.ddmrp_evaluation_request_results.update(request_results)
         self.master_data_versions.update(payloads.get("master_data_versions", {}))
         self.planning_runs.update(payloads.get("planning_runs", {}))
         self.planning_demand_commitments.update(
@@ -677,6 +740,13 @@ class SQLiteWorkbenchStateStore(WorkbenchStateStore):
         self.ddmrp_decoupling_points.clear()
         self.ddmrp_demand_signals.clear()
         self.ddmrp_open_supply.clear()
+        self.ddmrp_evaluation_runs.clear()
+        self.ddmrp_evaluation_rows.clear()
+        self.ddmrp_replenishment_chains.clear()
+        self.ddmrp_replenishment_recommendations.clear()
+        self.ddmrp_replenishment_events.clear()
+        self.ddmrp_active_replenishment_graphs.clear()
+        self.ddmrp_evaluation_request_results.clear()
         self.master_data_versions.clear()
         self.planning_runs.clear()
         self.planning_demand_commitments.clear()
@@ -788,6 +858,19 @@ def _state_counts(store: WorkbenchStateStore) -> dict[str, int]:
         "DdmrpDecouplingPoints": len(store.ddmrp_decoupling_points),
         "DdmrpDemandSignals": len(store.ddmrp_demand_signals),
         "DdmrpOpenSupply": len(store.ddmrp_open_supply),
+        "DdmrpEvaluationRuns": len(store.ddmrp_evaluation_runs),
+        "DdmrpEvaluationRows": len(store.ddmrp_evaluation_rows),
+        "DdmrpReplenishmentChains": len(store.ddmrp_replenishment_chains),
+        "DdmrpReplenishmentRecommendations": len(
+            store.ddmrp_replenishment_recommendations
+        ),
+        "DdmrpReplenishmentEvents": len(store.ddmrp_replenishment_events),
+        "DdmrpActiveReplenishmentGraphs": len(
+            store.ddmrp_active_replenishment_graphs
+        ),
+        "DdmrpEvaluationRequestResults": len(
+            store.ddmrp_evaluation_request_results
+        ),
         "MasterDataVersions": len(store.master_data_versions),
         "PlanningRuns": len(store.planning_runs),
         "PlanningDemandCommitments": len(store.planning_demand_commitments),

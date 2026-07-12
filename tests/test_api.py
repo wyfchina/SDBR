@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from sdbr.api import create_app
+from sdbr.ddsop_contracts import canonical_operating_model_fingerprint
 from sdbr.operational_state import create_operational_state_snapshot
 from sdbr.planning_commitments import create_demand_commitment
 from sdbr.release_authorization import create_release_authorization
@@ -152,6 +153,132 @@ class _MutableUtcClock:
     def advance(self, **delta: float) -> None:
         with self._lock:
             self._current += timedelta(**delta)
+
+
+def _ddmrp_api_store(
+    *,
+    snapshot_at: str = "2026-06-30T01:00:00Z",
+    package_id: str = "RPI-API-001",
+    public_demo: bool = False,
+    store: WorkbenchStateStore | None = None,
+) -> WorkbenchStateStore:
+    target = store or WorkbenchStateStore()
+    confidence = "PublicDemoOnly" if public_demo else "ProductionAccepted"
+    package_status = "Reviewed" if public_demo else "AcceptedForBoundedPlanning"
+    authority_status = "PublicDemoOnly" if public_demo else "Accepted"
+    configuration_payload = {
+        "OperatingModelConfigurationID": "OMC-API-001",
+        "ConfigurationVersion": "1.0.0",
+        "Status": "Approved",
+        "DDMRPConfiguration": {
+            "DDMRPConfigurationID": "DDMRP-API-001",
+            "DecouplingPoints": [
+                {
+                    "ItemID": "ITEM-API-1",
+                    "LocationID": "LOC-API-1",
+                    "BufferProfileID": "BP-API-1",
+                    "DLTMinutes": 1440,
+                    "OrderMultipleQty": 1,
+                    "MinimumOrderQty": 1,
+                }
+            ],
+            "StockBufferProfiles": [
+                {
+                    "BufferProfileID": "BP-API-1",
+                    "TopOfRed": 20,
+                    "TopOfYellow": 60,
+                    "TopOfGreen": 100,
+                    "UnitOfMeasure": "EA",
+                }
+            ],
+        },
+    }
+    configuration_payload["Fingerprint"] = canonical_operating_model_fingerprint(
+        configuration_payload
+    )
+    target.operating_model_configurations["OMC-API-001"] = {
+        "ProcessingStatus": "Accepted",
+        "Payload": configuration_payload,
+    }
+    target.ddsop_runtime_planning_input_packages[package_id] = {
+        "RuntimePlanningInputPackageID": package_id,
+        "PackageVersion": "1.0.0",
+        "PackageStatus": package_status,
+        "ProcessingStatus": "Accepted",
+        "OperatingModelConfigurationID": "OMC-API-001",
+        "OperatingModelFingerprint": configuration_payload["Fingerprint"],
+        "DDMRPConfigurationID": "DDMRP-API-001",
+        "Payload": {
+            "PackageIdentity": {
+                "RuntimePlanningInputPackageID": package_id,
+                "PackageVersion": "1.0.0",
+                "PackageStatus": package_status,
+                "ScenarioLabel": (
+                    "ControlledContractGoldenLoopDemo"
+                    if public_demo
+                    else "ProductionCandidate"
+                ),
+                "MappingConfidence": confidence,
+            },
+            "FrozenDdsopConfiguration": {
+                "OperatingModelConfigurationID": "OMC-API-001",
+                "OperatingModelFingerprint": configuration_payload["Fingerprint"],
+                "DDMRPConfigurationID": "DDMRP-API-001",
+            },
+            "ParameterAuthorityEvidence": {
+                "ApprovalEvidenceID": "APPROVAL-API-1",
+                "ParameterEvidenceRefs": [
+                    {
+                        "FieldGroup": field_group,
+                        "EvidenceID": f"EVIDENCE-{field_group}",
+                        "ProductionAuthorityStatus": authority_status,
+                        "Applicability": "Applicable",
+                    }
+                    for field_group in (
+                        "ADU",
+                        "DLT",
+                        "BufferZones",
+                        "BufferProfile",
+                    )
+                ],
+            },
+            "RuntimeEvidenceSnapshot": {
+                "OperationalStateSnapshotID": "OPS-API-001",
+                "SnapshotAt": snapshot_at,
+                "InventoryPositions": [
+                    {
+                        "ItemID": "ITEM-API-1",
+                        "LocationID": "LOC-API-1",
+                        "OnHandQty": 10,
+                        "AllocatedQty": 0,
+                        "AvailableQty": 10,
+                        "QualityState": "Released",
+                        "UnitOfMeasure": "EA",
+                    }
+                ],
+                "DemandSignals": [],
+                "OpenSupplySignals": [],
+            },
+        },
+    }
+    return target
+
+
+def _post_ddmrp_evaluation(
+    client: TestClient,
+    *,
+    request_id: str = "DDMRP-REQUEST-API-001",
+    package_id: str = "RPI-API-001",
+    headers: dict[str, str] | None = None,
+):
+    return client.post(
+        "/planner/workbench/ddmrp/evaluations",
+        json={
+            "EvaluationRequestID": request_id,
+            "RuntimePlanningInputPackageID": package_id,
+        },
+        headers=headers,
+    )
 
 
 class _PausingRejectedStore(WorkbenchStateStore):
@@ -5777,7 +5904,7 @@ def test_ui_commit_specification_is_verified_pending_confirmation_after_task_28(
         "## 18.", 1
     )[0]
 
-    assert "| 文档版本 | 5.36 |" in specification
+    assert "| 文档版本 | 5.38 |" in specification
     assert "**状态：已验证待用户确认**" in capability
     assert "- 状态：已验证待用户确认" in acceptance_record
     assert "用户已确认" not in capability
@@ -6399,10 +6526,14 @@ def test_planner_workbench_page_exposes_data_readiness_workspace_without_raw_jso
 
 
 def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
+    # UI-DDMRP-002 / planner workbench page contract
     client = TestClient(create_app())
 
     html = client.get("/planner/workbench").text
     script = client.get("/planner/assets/planner-workbench.js").text
+    material_detail_html = html.split('<section id="material-planning-detail"', 1)[1].split(
+        '<details id="material-planning-technical-details"', 1
+    )[0]
 
     assert 'href="#material-planning"' in html
     assert 'data-route="material-planning"' in html
@@ -6416,7 +6547,14 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert 'data-i18n="openSupply"' in html
     assert 'data-i18n="qualifiedDemand"' in html
     assert 'id="material-planning-detail"' in html
-    assert 'data-i18n="trendPlaceholderMessage"' in html
+    assert 'id="material-detail-trend-placeholder"' in material_detail_html
+    assert 'data-i18n="trendPlaceholder"' in material_detail_html
+    assert 'data-i18n="trendPlaceholderMessage"' in material_detail_html
+    assert (
+        material_detail_html.index('id="material-detail-components-heading"')
+        < material_detail_html.index('id="material-detail-trend-placeholder"')
+        < material_detail_html.index('id="material-detail-gates-heading"')
+    )
 
     assert 'navMaterials: "物料计划"' in script
     assert 'navMaterials: "Materials Planning"' in script
@@ -6426,12 +6564,12 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert "loadMaterialPlanning" in script
     assert "renderMaterialPlanningTable" in script
     assert "filteredMaterialPlanningRows" in script
-    assert "const bufferPercent = topOfGreen > 0 ? (netFlow / topOfGreen) * 100 : null" in script
+    assert "RecommendationID || line.RowKey" in script
     assert "ddmrpZoneRank" in script
     assert "SuggestedReplenishmentQty" in script
     assert "materialPlanningSortKey" in script
     assert "materialPlanningData" in script
-    assert "/planner/workbench/ddmrp/status" in script
+    assert "/planner/workbench/ddmrp/workbench" in script
     assert 'action_Replenish: "建议补货"' in script
     assert 'action_Monitor: "保持观察"' in script
     assert "批准全部订单" not in html
@@ -6439,6 +6577,43 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert "生成 ERP" not in html
     assert "Buffer Profile 治理" not in html
     assert "调整因子审批" not in html
+
+
+def test_ui_ddmrp_003_renders_versioned_gated_workbench_without_operational_actions() -> None:
+    # UI-DDMRP-003 / BE-DDMRP-007
+    client = TestClient(create_app())
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'id="material-planning-evaluation"' in html
+    assert 'data-material-summary="BlockedRecommendationCount"' in html
+    assert 'data-i18n="standardTargetStatus"' in html
+    assert 'id="material-planning-active-graphs"' in html
+    assert 'id="material-planning-history"' in html
+    assert 'id="material-planning-technical-details"' in html
+    assert "/planner/workbench/ddmrp/workbench" in script
+    assert "payload.Data" in script
+    assert 'response.headers.get("X-Workbench-Revision")' in script
+    assert "showNotification(" in script
+    assert "/planner/workbench/ddmrp/recommendations/" not in script
+    assert 'id="confirm-material-recommendation"' not in html
+    assert 'id="ddmrp-buffer-profile-editor"' not in html
+    assert 'id="ddmrp-adjustment-factor-editor"' not in html
+    assert 'id="material-planning-erp-order"' not in html
+    assert 'id="material-planning-raw-json"' not in html
+    assert "StandardTargetReceiptAt =" not in script
+    assert "notify(" not in script
+
+
+def test_ui_ddmrp_003_renders_authority_safe_on_hand_quantity() -> None:
+    # UI-DDMRP-003 / BE-DDMRP-007
+    client = TestClient(create_app())
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'data-i18n="qualifiedOnHand"' in html
+    assert "textCell(formatNumber(rowData.QualifiedOnHandQty))" in script
+    assert "textCell(formatNumber(rowData.OnHandQty))" not in script
 
 
 def test_planning_run_workbench_endpoint_returns_safe_rows_and_capabilities():
@@ -9361,6 +9536,515 @@ def test_planner_workbench_script_supports_persistent_i18n_routes_and_health():
     assert "/planner/workbench/state-store/health" in script
     assert "aria-expanded" in script
     assert "document.documentElement.lang" in script
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_references_stored_validated_package_only():
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+
+    response = _post_ddmrp_evaluation(client)
+
+    assert response.status_code == 200
+    assert response.json()["Data"] == {
+        "Status": "Created",
+        "EvaluationID": next(iter(store.ddmrp_evaluation_runs)),
+        "RecommendationIDs": sorted(store.ddmrp_replenishment_recommendations),
+        "OperationalActionAllowed": False,
+        "Workbench": response.json()["Data"]["Workbench"],
+    }
+    run = next(iter(store.ddmrp_evaluation_runs.values()))
+    assert run["RuntimePlanningInputPackageID"] == "RPI-API-001"
+    assert run["OperatingModelConfigurationID"] == "OMC-API-001"
+    assert not any(
+        key in response.json()["Data"]
+        for key in ("AdviceType", "CapacityRequests", "MaterialRequests")
+    )
+
+    missing = _post_ddmrp_evaluation(
+        client,
+        request_id="DDMRP-REQUEST-MISSING",
+        package_id="RPI-MISSING",
+    )
+    assert missing.status_code == 404
+    assert missing.json()["Data"]["Status"] == "DdmrpAuthorityNotFound"
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_rejects_raw_authority_fields_with_422():
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+
+    for field, value in (
+        ("AdviceType", "Buy"),
+        ("TargetReceiptAt", "2026-07-02T00:00:00+00:00"),
+        ("CapacityRequests", []),
+        ("MaterialRequests", []),
+        ("ActorID", "client-actor"),
+        ("EvaluatedAt", "2026-07-12T00:00:00+00:00"),
+    ):
+        response = client.post(
+            "/planner/workbench/ddmrp/evaluations",
+            json={
+                "EvaluationRequestID": f"DDMRP-EXTRA-{field}",
+                "RuntimePlanningInputPackageID": "RPI-API-001",
+                field: value,
+            },
+        )
+        assert response.status_code == 422
+
+    assert store.ddmrp_evaluation_runs == {}
+    assert store.ddmrp_evaluation_request_results == {}
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_uses_server_actor_and_server_time():
+    recorded_at = datetime(2026, 7, 12, 3, 4, 5, tzinfo=timezone.utc)
+    store = _ddmrp_api_store()
+    client = TestClient(
+        create_app(state_store=store, require_auth=True, utc_now=lambda: recorded_at)
+    )
+
+    response = _post_ddmrp_evaluation(
+        client,
+        headers={"X-Actor-ID": "planner-server", "X-Actor-Role": "Planner"},
+    )
+
+    assert response.status_code == 200
+    run = next(iter(store.ddmrp_evaluation_runs.values()))
+    result = store.ddmrp_evaluation_request_results["DDMRP-REQUEST-API-001"]
+    assert run["RecordedBy"] == "planner-server"
+    assert run["RecordedAt"] == "2026-07-12T03:04:05+00:00"
+    assert result["RecordedBy"] == "planner-server"
+    assert result["RecordedAt"] == "2026-07-12T03:04:05+00:00"
+    assert run["EvaluationAt"] == "2026-06-30T01:00:00+00:00"
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save(
+    tmp_path,
+):
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    class CountingSQLiteStore(SQLiteWorkbenchStateStore):
+        def __init__(self, database_path):
+            self.save_count = 0
+            super().__init__(database_path)
+
+        def save(self):
+            self.save_count += 1
+            return super().save()
+
+    database_path = tmp_path / "ddmrp-exact-replay.db"
+    store = _ddmrp_api_store(store=CountingSQLiteStore(database_path))
+    client = TestClient(create_app(state_store=store))
+
+    first = _post_ddmrp_evaluation(client)
+    first_data = first.json()["Data"]
+    first_revision = store.current_revision()
+    first_saved_at = store.health()["LastSavedAt"]
+    first_snapshot = store.snapshot_state()
+    first_counts = (
+        len(store.ddmrp_evaluation_runs),
+        len(store.ddmrp_evaluation_rows),
+        len(store.ddmrp_replenishment_chains),
+        len(store.ddmrp_replenishment_recommendations),
+        len(store.ddmrp_replenishment_events),
+        len(store.ddmrp_evaluation_request_results),
+    )
+    assert first.status_code == 200
+    assert store.save_count == 1
+    assert first_revision == 1
+    assert first.headers["X-Workbench-Revision"] == "1"
+    assert first_saved_at is not None
+
+    replay = _post_ddmrp_evaluation(client)
+
+    assert replay.status_code == 200
+    assert replay.json()["Data"]["Status"] == "Duplicate"
+    assert replay.json()["Data"]["EvaluationID"] == first_data["EvaluationID"]
+    assert replay.json()["Data"]["RecommendationIDs"] == first_data[
+        "RecommendationIDs"
+    ]
+    assert replay.headers["X-Workbench-Revision"] == "1"
+    assert store.save_count == 1
+    assert store.current_revision() == first_revision
+    assert store.health()["LastSavedAt"] == first_saved_at
+    assert store.snapshot_state() == first_snapshot
+    assert first_counts == (
+        len(store.ddmrp_evaluation_runs),
+        len(store.ddmrp_evaluation_rows),
+        len(store.ddmrp_replenishment_chains),
+        len(store.ddmrp_replenishment_recommendations),
+        len(store.ddmrp_replenishment_events),
+        len(store.ddmrp_evaluation_request_results),
+    )
+    restored = SQLiteWorkbenchStateStore(database_path)
+    assert restored.current_revision() == first_revision
+    assert restored.health()["LastSavedAt"] == first_saved_at
+    assert restored.snapshot_state() == first_snapshot
+
+
+@pytest.mark.parametrize(
+    ("run_field", "drifted_value"),
+    (
+        ("EvaluationAt", "2026-06-30T02:00:00+00:00"),
+        ("RuntimePlanningInputPackageID", "RPI-DRIFTED"),
+        ("RuntimePlanningInputPackageVersion", "9.9.9"),
+        ("RuntimeSnapshotID", "OPS-DRIFTED"),
+        ("OperatingModelConfigurationID", "OMC-DRIFTED"),
+        ("OperatingModelFingerprint", f"sha256:{'0' * 64}"),
+        ("DDMRPConfigurationID", "DDMRP-DRIFTED"),
+        ("RelevantPlanningLedgerIdentity", "DPL-DRIFTED"),
+        ("RelevantPlanningLedgerFingerprint", f"sha256:{'1' * 64}"),
+    ),
+)
+# BE-DDMRP-007
+def test_be_ddmrp_007_workbench_get_rejects_each_frozen_authority_source_link_drift(
+    run_field,
+    drifted_value,
+):
+    from sdbr.ddmrp_replenishment import canonical_fingerprint
+
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    assert _post_ddmrp_evaluation(client).status_code == 200
+    run = next(iter(store.ddmrp_evaluation_runs.values()))
+    run[run_field] = drifted_value
+    run["EvaluationFingerprint"] = canonical_fingerprint({
+        key: value
+        for key, value in run.items()
+        if key != "EvaluationFingerprint"
+    })
+
+    response = client.get("/planner/workbench/ddmrp/workbench")
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "DdmrpReplenishmentConflict"
+    assert "DDMRP evaluation run provenance differs" in response.json()["Data"][
+        "Message"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("initial_qty", "initial_status", "monitor_qty", "monitor_status"),
+    (
+        (10, "Red", 75, "Green"),
+        (35, "Yellow", 150, "AboveGreen"),
+    ),
+)
+# UI-DDMRP-003 / BE-DDMRP-007
+def test_be_ddmrp_007_workbench_api_retains_open_recommendation_after_monitor_evaluation(
+    initial_qty,
+    initial_status,
+    monitor_qty,
+    monitor_status,
+):
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    snapshot = store.ddsop_runtime_planning_input_packages["RPI-API-001"][
+        "Payload"
+    ]["RuntimeEvidenceSnapshot"]
+    inventory = snapshot["InventoryPositions"][0]
+    inventory["OnHandQty"] = initial_qty
+    inventory["AvailableQty"] = initial_qty
+
+    first = _post_ddmrp_evaluation(client, request_id="DDMRP-LIFECYCLE-1")
+    assert first.status_code == 200
+    assert first.json()["Data"]["Workbench"]["Rows"][0]["PlanningStatus"] == (
+        initial_status
+    )
+
+    snapshot["SnapshotAt"] = "2026-07-01T01:00:00Z"
+    inventory["OnHandQty"] = monitor_qty
+    inventory["AvailableQty"] = monitor_qty
+    second = _post_ddmrp_evaluation(client, request_id="DDMRP-LIFECYCLE-2")
+
+    assert second.status_code == 200
+    workbench = second.json()["Data"]["Workbench"]
+    assert workbench["Rows"][0]["PlanningStatus"] == monitor_status
+    assert workbench["Rows"][0]["RecommendationID"] is None
+    assert workbench["Summary"]["BlockedRecommendationCount"] == 1
+    assert len(workbench["History"]) == 1
+    assert workbench["History"][0]["CurrentStatus"] == "Blocked"
+    assert workbench["History"][0]["RecommendationVersion"] == 1
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_replays_before_stale_if_match_after_unrelated_write():
+    store = _ddmrp_api_store()
+    app = create_app(state_store=store)
+
+    @app.post("/test/ddmrp-unrelated-write")
+    def unrelated_write():
+        store.audit_events.append({"Action": "UnrelatedToDdmrpScope"})
+        return {"Status": "Recorded"}
+
+    client = TestClient(app)
+    original_if_match = {"If-Match": "0"}
+
+    first = _post_ddmrp_evaluation(client, headers=original_if_match)
+    assert first.status_code == 200
+    assert store.current_revision() == 1
+
+    unrelated = client.post("/test/ddmrp-unrelated-write")
+    assert unrelated.status_code == 200
+    assert store.current_revision() == 2
+
+    replay = _post_ddmrp_evaluation(client, headers=original_if_match)
+
+    assert replay.status_code == 200
+    assert replay.json()["Data"]["Status"] == "Duplicate"
+    assert replay.json()["Data"]["EvaluationID"] == first.json()["Data"]["EvaluationID"]
+    assert len(store.ddmrp_evaluation_request_results) == 1
+
+    new_request = _post_ddmrp_evaluation(
+        client,
+        request_id="DDMRP-REQUEST-API-NEW",
+        headers=original_if_match,
+    )
+
+    assert new_request.status_code == 409
+    assert new_request.json()["Data"]["Status"] == "StateStoreRevisionConflict"
+    assert len(store.ddmrp_evaluation_request_results) == 1
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_request_id_reuse_with_different_package_returns_409():
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    assert _post_ddmrp_evaluation(client).status_code == 200
+    before = store.snapshot_state()
+
+    response = _post_ddmrp_evaluation(client, package_id="RPI-NOT-STORED")
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "DdmrpReplenishmentConflict"
+    assert "EVALUATION_REQUEST_ID_REUSED" in response.json()["Data"]["Message"]
+    assert store.snapshot_state() == before
+
+
+@pytest.mark.parametrize(
+    "snapshot_at",
+    [
+        "2026-06-30T01:00:00Z",
+        "2026-06-30T09:00:00+08:00",
+        "2026-06-29T20:00:00-05:00",
+    ],
+)
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_canonicalizes_z_and_offset_snapshot_at_for_signature_evaluation_and_rows(
+    snapshot_at,
+):
+    store = _ddmrp_api_store(snapshot_at=snapshot_at)
+    client = TestClient(create_app(state_store=store))
+
+    response = _post_ddmrp_evaluation(client)
+
+    assert response.status_code == 200
+    canonical = "2026-06-30T01:00:00+00:00"
+    run = next(iter(store.ddmrp_evaluation_runs.values()))
+    assert run["EvaluationAt"] == canonical
+    assert run["AuthoritySignature"]["runtime_snapshot_at"] == canonical
+    assert {row["EvaluationAt"] for row in store.ddmrp_evaluation_rows.values()} == {
+        canonical
+    }
+    assert run["EvaluationID"] == response.json()["Data"]["EvaluationID"]
+    assert run["EvaluationFingerprint"].startswith("sha256:")
+    assert run["AuthoritySignatureFingerprint"].startswith("sha256:")
+    assert all(
+        row["EvaluationRowFingerprint"].startswith("sha256:")
+        for row in store.ddmrp_evaluation_rows.values()
+    )
+
+
+@pytest.mark.parametrize("snapshot_at", ["2026-06-30T01:00:00", "not-a-timestamp"])
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_rejects_naive_or_invalid_snapshot_at(snapshot_at):
+    store = _ddmrp_api_store(snapshot_at=snapshot_at)
+    client = TestClient(create_app(state_store=store))
+
+    response = _post_ddmrp_evaluation(client)
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "DdmrpReplenishmentConflict"
+    assert "RUNTIME_SNAPSHOT_AT_INVALID" in response.json()["Data"]["Message"]
+    assert store.ddmrp_evaluation_runs == {}
+    assert store.ddmrp_evaluation_request_results == {}
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_public_demo_is_read_only():
+    store = _ddmrp_api_store(public_demo=True)
+    client = TestClient(create_app(state_store=store))
+
+    response = _post_ddmrp_evaluation(client)
+
+    assert response.status_code == 200
+    data = response.json()["Data"]
+    assert data["OperationalActionAllowed"] is False
+    assert data["Workbench"]["Boundary"].startswith("Read-only SDBR")
+    assert data["Workbench"]["ActiveGraphs"] == []
+    assert all(
+        recommendation["InitialStatus"] == "Blocked"
+        for recommendation in store.ddmrp_replenishment_recommendations.values()
+    )
+    assert store.planning_demand_commitments == {}
+    assert store.planning_reservation_batches == {}
+    assert store.ccr_capacity_reservations == {}
+    assert store.material_planning_allocations == {}
+
+
+# UI-DDMRP-003 / BE-DDMRP-007
+def test_be_ddmrp_007_workbench_api_uses_standard_wrapper_and_safe_shape():
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    assert _post_ddmrp_evaluation(client).status_code == 200
+
+    response = client.get("/planner/workbench/ddmrp/workbench")
+
+    assert response.status_code == 200
+    assert response.headers["X-Workbench-Revision"] == str(store.current_revision())
+    payload = response.json()
+    assert set(payload) == {"Endpoint", "StatusCode", "Data"}
+    assert payload["Endpoint"] == "/planner/workbench/ddmrp/workbench"
+    assert payload["StatusCode"] == 200
+    assert set(payload["Data"]) == {
+        "Evaluation",
+        "Summary",
+        "Rows",
+        "ActiveGraphs",
+        "History",
+        "Issues",
+        "Boundary",
+        "TechnicalDetails",
+    }
+    assert "AuthoritySignature" not in payload["Data"]
+    assert "Payload" not in payload["Data"]
+    assert all("EvaluationAt" not in row for row in payload["Data"]["Rows"])
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_write_revision_and_save_failure_restore_every_ledger():
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    stale = _post_ddmrp_evaluation(client, headers={"If-Match": "99"})
+    assert stale.status_code == 409
+    assert stale.headers["X-Workbench-Revision"] == "0"
+    assert store.ddmrp_evaluation_runs == {}
+
+    class FailingSaveStore(WorkbenchStateStore):
+        def save(self):
+            super().save()
+            self.audit_events.append({"Action": "SAVE_FAILURE_SIDE_EFFECT"})
+            raise OSError("deterministic DDMRP save failure")
+
+    failing_store = _ddmrp_api_store(store=FailingSaveStore())
+    aliases = {
+        "runs": failing_store.ddmrp_evaluation_runs,
+        "rows": failing_store.ddmrp_evaluation_rows,
+        "chains": failing_store.ddmrp_replenishment_chains,
+        "recommendations": failing_store.ddmrp_replenishment_recommendations,
+        "events": failing_store.ddmrp_replenishment_events,
+        "graphs": failing_store.ddmrp_active_replenishment_graphs,
+        "results": failing_store.ddmrp_evaluation_request_results,
+    }
+    failing_client = TestClient(
+        create_app(state_store=failing_store), raise_server_exceptions=False
+    )
+    before = failing_store.snapshot_state()
+
+    failed = _post_ddmrp_evaluation(failing_client)
+
+    assert failed.status_code == 500
+    assert failing_store.snapshot_state() == before
+    assert failing_store.current_revision() == 0
+    assert aliases == {
+        "runs": failing_store.ddmrp_evaluation_runs,
+        "rows": failing_store.ddmrp_evaluation_rows,
+        "chains": failing_store.ddmrp_replenishment_chains,
+        "recommendations": failing_store.ddmrp_replenishment_recommendations,
+        "events": failing_store.ddmrp_replenishment_events,
+        "graphs": failing_store.ddmrp_active_replenishment_graphs,
+        "results": failing_store.ddmrp_evaluation_request_results,
+    }
+
+
+# BE-DDMRP-007 / BE-OPS-001
+def test_be_ddmrp_007_ddmrp_routes_enforce_viewer_planner_admin_rbac():
+    for role in ("Viewer", "Planner", "Admin"):
+        store = _ddmrp_api_store()
+        client = TestClient(create_app(state_store=store, require_auth=True))
+        headers = {"X-Actor-ID": role.lower(), "X-Actor-Role": role}
+        assert client.get(
+            "/planner/workbench/ddmrp/workbench", headers=headers
+        ).status_code == 200
+
+    for role in ("Planner", "Admin"):
+        store = _ddmrp_api_store()
+        client = TestClient(create_app(state_store=store, require_auth=True))
+        assert _post_ddmrp_evaluation(
+            client,
+            headers={"X-Actor-ID": role.lower(), "X-Actor-Role": role},
+        ).status_code == 200
+
+    for role in ("Viewer", "Worker"):
+        store = _ddmrp_api_store()
+        client = TestClient(create_app(state_store=store, require_auth=True))
+        headers = {"X-Actor-ID": role.lower(), "X-Actor-Role": role}
+        denied_write = _post_ddmrp_evaluation(client, headers=headers)
+        assert denied_write.status_code == 403
+        assert denied_write.headers["X-Workbench-Revision"] == "0"
+        expected_get = 200 if role == "Viewer" else 403
+        get_response = client.get(
+            "/planner/workbench/ddmrp/workbench", headers=headers
+        )
+        assert get_response.status_code == expected_get
+        assert get_response.headers["X-Workbench-Revision"] == "0"
+
+    client = TestClient(create_app(state_store=_ddmrp_api_store(), require_auth=True))
+    unauthenticated_get = client.get("/planner/workbench/ddmrp/workbench")
+    unauthenticated_post = _post_ddmrp_evaluation(client)
+    assert unauthenticated_get.status_code == 401
+    assert unauthenticated_post.status_code == 401
+    assert unauthenticated_get.headers["X-Workbench-Revision"] == "0"
+    assert unauthenticated_post.headers["X-Workbench-Revision"] == "0"
+
+
+# BE-DDMRP-007
+def test_be_ddmrp_007_unrelated_workbench_write_does_not_change_relevant_ledger_identity():
+    recorded_at = datetime(2026, 7, 12, 4, 5, 6, tzinfo=timezone.utc)
+    baseline_store = _ddmrp_api_store()
+    baseline_client = TestClient(
+        create_app(state_store=baseline_store, utc_now=lambda: recorded_at)
+    )
+    assert _post_ddmrp_evaluation(baseline_client).status_code == 200
+    baseline_run = next(iter(baseline_store.ddmrp_evaluation_runs.values()))
+
+    changed_store = _ddmrp_api_store()
+    changed_app = create_app(state_store=changed_store, utc_now=lambda: recorded_at)
+
+    @changed_app.post("/test/ddmrp-unrelated-write")
+    def unrelated_write():
+        changed_store.audit_events.append({"Action": "UnrelatedToDdmrpScope"})
+        return {"Status": "Recorded"}
+
+    changed_client = TestClient(changed_app)
+    assert changed_client.post("/test/ddmrp-unrelated-write").status_code == 200
+    assert changed_store.current_revision() == 1
+    assert _post_ddmrp_evaluation(changed_client).status_code == 200
+    changed_run = next(iter(changed_store.ddmrp_evaluation_runs.values()))
+
+    assert changed_run["RelevantPlanningLedgerIdentity"] == baseline_run[
+        "RelevantPlanningLedgerIdentity"
+    ]
+    assert changed_run["RelevantPlanningLedgerFingerprint"] == baseline_run[
+        "RelevantPlanningLedgerFingerprint"
+    ]
+    assert changed_run["EvaluationID"] == baseline_run["EvaluationID"]
+    assert changed_run["EvaluationFingerprint"] == baseline_run[
+        "EvaluationFingerprint"
+    ]
 
 
 def test_planner_workbench_master_data_validate_endpoint_returns_summary_and_issues():

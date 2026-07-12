@@ -2,7 +2,7 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 5.36 |
+| 文档版本 | 5.38 |
 | 日期 | 2026-07-12 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
@@ -341,6 +341,47 @@ SAFE_AUDIT_DETAIL_FIELDS = frozenset({
 - 所有建议、物料、生命周期、预留、异常和操作标签必须提供中英文；语言切换不得改变对象 ID。
 - 重新评估使用服务端选择的当前运行快照；决定发生 409 stale conflict 时显示本地化提示并刷新详情，不自动重试决定。
 - option-2 接受终态文字为 `已接受，待正式排程 / Accepted, pending formal schedule`；只允许显式计划员决定创建共享 Phase 0 对象，不自动创建 Planning Run，不确认外部订单，不修改 DDAE、主数据、ERP/WMS、MES、供应商或生产权威状态。
+
+### UI-DDMRP-003 DDMRP 版本化评估与契约门控工作台
+
+**状态：已验证待用户确认**
+
+页面位置：独立导航页 `物料计划 / Materials Planning` 的版本化只读补货评估工作台。
+
+页面显示：
+
+- 已校验运行包、运行快照、Operating Model Configuration 和评估时间等权威来源与冻结版本标识。
+- 物料-地点的稳定逻辑补货链、评估周期、建议版本、缓冲区、净流位置、建议补货量和计量单位。
+- Red/Yellow 的版本化补货建议，以及 Green/AboveGreen 的零数量监控行。
+- 目标日期、ERP/MRP Advice、Plan BOM、物料/产能可行性或生产权威不足时的结构化门控状态和业务原因。
+
+交互边界：
+
+- 只读查看不可变评估、当前建议和历史版本；不提供 Buy/Make 确认、候选创建、CCR/物料预留、外部订单创建或投递动作。
+- 直接展示契约校验后的权威结果，不接收或展示调用方自报 Advice/BOM/物料/产能证据，不在界面推导目标日期或重新计算 DDAE 主参数。
+- 日常计划员流程不得暴露原始 DDAE、ERP/MRP 或主数据 JSON；技术追溯信息以安全摘要和稳定标识展示。
+- 公开演示、Reviewed Draft 或其他非生产权威证据只能解释只读行，不得显示为可执行或影响共享运行预留台账。
+
+验证证据：2026-07-12 使用 `tests.ddmrp_browser_acceptance_app:create_runtime_app` 在 `http://127.0.0.1:8011/planner/workbench#material-planning` 完成并在最终复核修复后重跑 seeded/empty/error/403/409 浏览器矩阵；定向测试 412 passed、全量测试 862 passed（各保留 1 个既有 `StarletteDeprecationWarning`），`python -m compileall -q sdbr tests` 和本地 Node `--check sdbr/web/planner-workbench.js` 均退出 0。seeded DOM 在 1280x720、1920x1080、390x844 均显示权威可用在手量 `10/35/75/150` 而非 `-`，无页面级横向溢出且无确认控件。浏览器记录为 `.tmp/ddmrp-ui-acceptance/browser-report.md`，截图为 `.tmp/ddmrp-ui-acceptance/seeded-1280x720.png`、`.tmp/ddmrp-ui-acceptance/seeded-1920x1080.png`、`.tmp/ddmrp-ui-acceptance/seeded-390x844.png`、`.tmp/ddmrp-ui-acceptance/empty-1280x720.png`、`.tmp/ddmrp-ui-acceptance/error-1280x720.png`、`.tmp/ddmrp-ui-acceptance/403-1280x720.png`、`.tmp/ddmrp-ui-acceptance/409-1280x720.png`。未开始 `UI-DDMRP-004`，不得视为用户确认或开启 `CONTRACT-GATE-DDMRP-ACTIVATION-001`。
+
+### UI-DDMRP-004 DDMRP Buy/Make 计划员确认
+
+**状态：未开始**
+
+前置条件：验收单元 14 `UI-DDMRP-003` 已实现、验证并获得用户明确确认，且 `CONTRACT-GATE-DDMRP-ACTIVATION-001` 的目标日期、ERP/MRP Advice、Plan BOM/可行性和生产权威证据关闭项已全部验收。
+
+页面显示：
+
+- 由服务端已验收契约证据决定的 Buy/Make 建议、数量、计量单位、标准目标收货时间、可行性摘要和结构化门控原因。
+- Make 建议的计划制造候选、CCR 时间/窗口、物料覆盖或短缺，以及不创建外部正式订单的明确边界。
+- 计划员逐条确认的影响摘要、服务端记录的确认身份/时间、原因和可追溯结果。
+
+交互边界：
+
+- 本单元仅包含 Buy/Make 人工确认；不得接受客户端自报建议类型、ERP/MRP 证据、身份或确认时间。
+- 未通过权威、目标日期、BOM、物料或产能门控的行不得显示有效确认动作；确认 Make 必须由后台原子创建候选、CCR 预留和下级物料分配并进入 Planning Run 生命周期。
+- 确认不等于创建、发送或接受 ERP/MES 外部正式订单；外部投递与回执仍由相应集成能力跟踪。
+- Transfer 保持延期且不属于本验收单元；只有在 Transfer 权威、可行性和治理证据被验收，并建立未来后台/UI 规格版本及全新实施计划后，方可另行启动。
 
 ### UI-DDOM-001 DDOM 运营指标与偏差反馈
 
@@ -969,6 +1010,8 @@ UI 不得直接构造或修改 SQLite 数据。
 | 11 | 计划发布治理 | UI-PLANPUB-001 | 是 |
 | 12 | 测试案例验收总览 | UI-OVERVIEW-001 | 是 |
 | 13 | MTO 订单承诺评估 | UI-COMMIT-001 | 是 |
+| 14 | DDMRP 版本化评估与契约门控工作台 | UI-DDMRP-003 | 是 |
+| 15 | DDMRP Buy/Make 计划员确认 | UI-DDMRP-004 | 是 |
 
 任何验收单元未确认前，原则上不进入下一单元的正式开发；若用户明确要求继续，未确认单元状态保持 `已验证待用户确认`，不得写成 `用户已确认`。
 
@@ -1205,6 +1248,8 @@ UI 不得直接构造或修改 SQLite 数据。
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.38 | 2026-07-11 | `UI-DDMRP-003` 完成 seeded/empty/error/403/409 浏览器矩阵及 1280x720、1920x1080、390x844 响应式验证；2026-07-12 最终复核修复后重跑矩阵并验证权威可用在手量 `10/35/75/150`、不可变建议历史与无页面级横向溢出，定向测试 412 passed、全量测试 862 passed。状态保持已验证待用户确认；保留只读边界，不提供确认、候选、预留、分配或外部订单动作。`UI-DDMRP-004` 保持未开始，且不构成用户确认或 Activation gate 开启。 |
+| 5.37 | 2026-07-11 | 新增 `UI-DDMRP-003` 版本化只读补货评估与契约门控工作台，以及后续 `UI-DDMRP-004` Buy/Make 人工确认单元；两单元分开验收，当前不暴露确认动作或外部订单创建 |
 | 5.36 | 2026-07-12 | 完成 `UI-COMMIT-001` Task28 验证：API-only 可重放种子、SQLite 实服 smoke、24 项 focused 和 1072 项全量回归、本机 Edge/Playwright 桌面与真实 390x844 移动证据、双语、键盘、状态门控及 stale 无重试；状态为已验证待用户确认 |
 | 5.35 | 2026-07-11 | 启动 `UI-COMMIT-001` 独立 MTO 订单承诺工作台：精确列表/详情字段、预留与异常状态、AllowedActions 门控、安全审计、当前快照重新评估和 option-2 决定；不发送物料窗口、不创建 Planning Run、不修改外部权威 |
 | 5.34 | 2026-07-09 | 完成 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if 第一版：排程结果页新增冲击评估面板，仿真结果页新增 Simio 使用条件 hover/focus 提示；状态为已验证待用户确认 |

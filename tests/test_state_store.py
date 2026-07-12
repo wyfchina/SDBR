@@ -1,6 +1,12 @@
+"""Persistence evidence for BE-DDMRP-007 and existing state-store capabilities."""
+
+from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import sqlite3
 
 from fastapi.testclient import TestClient
+import pytest
 
 from sdbr.api import app, create_app
 from sdbr.operational_state import create_operational_state_snapshot
@@ -10,6 +16,57 @@ from sdbr.release_candidates import MaterialAvailability, WipLimit
 from sdbr.replanning import create_replan_request
 from sdbr.state_store import SQLiteWorkbenchStateStore, WorkbenchStateStore
 from sdbr.state_store import StateStoreManagedRequestRejected
+
+
+_DDMRP_LEDGER_VALUES = {
+    "ddmrp_evaluation_runs": {
+        "EVAL-1": {"EvaluationID": "EVAL-1", "EvaluationRequestID": "REQ-1"}
+    },
+    "ddmrp_evaluation_rows": {
+        "ROW-1": {"EvaluationRowID": "ROW-1", "EvaluationID": "EVAL-1"}
+    },
+    "ddmrp_replenishment_chains": {
+        "CHAIN-1": {"LogicalReplenishmentID": "CHAIN-1", "RecordVersion": 1}
+    },
+    "ddmrp_replenishment_recommendations": {
+        "REC-1": {"RecommendationID": "REC-1", "EvaluationID": "EVAL-1"}
+    },
+    "ddmrp_replenishment_events": [
+        {"EventID": "EVENT-1", "EvaluationID": "EVAL-1"}
+    ],
+    "ddmrp_active_replenishment_graphs": {
+        "CHAIN-1": {
+            "LogicalReplenishmentID": "CHAIN-1",
+            "RecommendationID": "REC-1",
+        }
+    },
+    "ddmrp_evaluation_request_results": {
+        "REQ-1": {"EvaluationRequestID": "REQ-1", "EvaluationID": "EVAL-1"}
+    },
+}
+
+
+def _seed_ddmrp_evaluation_ledgers(store: WorkbenchStateStore) -> None:
+    for name, value in _DDMRP_LEDGER_VALUES.items():
+        target = getattr(store, name)
+        if isinstance(target, list):
+            target.extend(deepcopy(value))
+        else:
+            target.update(deepcopy(value))
+
+
+def _assert_ddmrp_evaluation_ledgers(store: WorkbenchStateStore) -> None:
+    for name, value in _DDMRP_LEDGER_VALUES.items():
+        assert getattr(store, name) == value
+
+
+class _FailingMemoryWorkbenchStateStore(WorkbenchStateStore):
+    fail_save = False
+
+    def save(self):
+        if self.fail_save:
+            raise OSError("memory save failed")
+        return super().save()
 
 
 def test_default_service_uses_sqlite_state_store():
@@ -517,3 +574,123 @@ def test_api_exposes_revision_header_and_rejects_stale_client_revision():
     )
     assert retry.status_code == 200
     assert retry.headers["X-Workbench-Revision"] == "2"
+
+
+def test_be_ddmrp_007_sqlite_round_trip_clear_health_and_complete_rollback(
+    tmp_path,
+    monkeypatch,
+):
+    memory_store = _FailingMemoryWorkbenchStateStore()
+    _seed_ddmrp_evaluation_ledgers(memory_store)
+    memory_store.save()
+    memory_snapshot = memory_store.snapshot_state()
+
+    def clear_memory_ledgers() -> None:
+        for name in _DDMRP_LEDGER_VALUES:
+            getattr(memory_store, name).clear()
+
+    memory_store.fail_save = True
+    with pytest.raises(OSError, match="memory save failed"):
+        memory_store.atomic_update(clear_memory_ledgers)
+
+    _assert_ddmrp_evaluation_ledgers(memory_store)
+    assert memory_store.current_revision() == 1
+    memory_store.restore_state(memory_snapshot)
+    _assert_ddmrp_evaluation_ledgers(memory_store)
+
+    database_path = tmp_path / "ddmrp-evaluation-ledgers.db"
+    sqlite_store = SQLiteWorkbenchStateStore(database_path)
+    _seed_ddmrp_evaluation_ledgers(sqlite_store)
+    sqlite_store.save()
+
+    restarted = SQLiteWorkbenchStateStore(database_path)
+    _assert_ddmrp_evaluation_ledgers(restarted)
+    assert restarted.current_revision() == 1
+    assert restarted.health()["SchemaVersion"] == 1
+    assert restarted.health()["StateCounts"] == {
+        **{
+            key: value
+            for key, value in restarted.health()["StateCounts"].items()
+            if not key.startswith("DdmrpEvaluation")
+            and not key.startswith("DdmrpReplenishment")
+            and key != "DdmrpActiveReplenishmentGraphs"
+        },
+        "DdmrpEvaluationRuns": 1,
+        "DdmrpEvaluationRows": 1,
+        "DdmrpReplenishmentChains": 1,
+        "DdmrpReplenishmentRecommendations": 1,
+        "DdmrpReplenishmentEvents": 1,
+        "DdmrpActiveReplenishmentGraphs": 1,
+        "DdmrpEvaluationRequestResults": 1,
+    }
+
+    sqlite_snapshot = restarted.snapshot_state()
+    restarted._clear()
+    for name in _DDMRP_LEDGER_VALUES:
+        assert not getattr(restarted, name)
+    restarted.restore_state(sqlite_snapshot)
+    _assert_ddmrp_evaluation_ledgers(restarted)
+
+    def clear_sqlite_ledgers() -> None:
+        for name in _DDMRP_LEDGER_VALUES:
+            getattr(restarted, name).clear()
+
+    def fail_write(*args, **kwargs) -> None:
+        raise OSError("sqlite save failed")
+
+    monkeypatch.setattr(restarted, "_write_connection_state", fail_write)
+    with pytest.raises(OSError, match="sqlite save failed"):
+        restarted.atomic_update(clear_sqlite_ledgers)
+
+    _assert_ddmrp_evaluation_ledgers(restarted)
+    assert restarted.current_revision() == 1
+    _assert_ddmrp_evaluation_ledgers(SQLiteWorkbenchStateStore(database_path))
+
+    with sqlite3.connect(database_path) as connection:
+        connection.executemany(
+            "DELETE FROM workbench_state WHERE state_key = ?",
+            ((name,) for name in _DDMRP_LEDGER_VALUES),
+        )
+    backward_compatible = SQLiteWorkbenchStateStore(database_path)
+    for name in _DDMRP_LEDGER_VALUES:
+        assert not getattr(backward_compatible, name)
+
+    malformed_path = tmp_path / "malformed-ddmrp-request-result.db"
+    malformed = SQLiteWorkbenchStateStore(malformed_path)
+    malformed._initialize()
+    with sqlite3.connect(malformed_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO workbench_state (state_key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET payload = excluded.payload
+            """,
+            (
+                "ddmrp_evaluation_request_results",
+                json.dumps(
+                    {
+                        "REQ-KEY": {
+                            "EvaluationRequestID": "REQ-DIFFERENT",
+                            "EvaluationID": "EVAL-1",
+                        }
+                    }
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match="EvaluationRequestID"):
+        SQLiteWorkbenchStateStore(malformed_path)
+
+
+def test_be_ddmrp_007_memory_complete_state_snapshot_restore():
+    store = WorkbenchStateStore()
+    _seed_ddmrp_evaluation_ledgers(store)
+    store.revision = 4
+    snapshot = store.snapshot_state()
+
+    for name in _DDMRP_LEDGER_VALUES:
+        getattr(store, name).clear()
+    store.revision = 9
+    store.restore_state(snapshot)
+
+    _assert_ddmrp_evaluation_ledgers(store)
+    assert store.current_revision() == 4

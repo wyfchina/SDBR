@@ -21,6 +21,105 @@ from sdbr.test_data import (
 )
 
 
+# BE-DDMRP-007 / UI-DDMRP-003
+def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
+    tmp_path,
+):
+    database_path = tmp_path / "workbench-state.db"
+    reset_test_database(database_path=database_path)
+    runtime_environment = resolve_runtime_environment(
+        environment_id="test",
+        database_path=database_path,
+    )
+    client = TestClient(
+        create_app(
+            state_store=SQLiteWorkbenchStateStore(database_path),
+            runtime_environment=runtime_environment,
+        )
+    )
+
+    catalog_response = client.get("/planner/workbench/test-data/cases")
+
+    assert catalog_response.status_code == 200
+    catalog = catalog_response.json()["Data"]
+    seeded_cases = [
+        case
+        for case in catalog["DdmrpRuntimeCases"]
+        if case["CaseID"] == "TST-DDMRP-REPLENISHMENT-READONLY-20260711"
+    ]
+    assert len(seeded_cases) == 1
+    seeded_case = seeded_cases[0]
+    assert seeded_case["CaseGroup"] == "DDMRPRuntimeCases"
+    assert seeded_case["ExpectedSummary"] == {
+        "RedCount": 1,
+        "YellowCount": 1,
+        "GreenCount": 1,
+        "AboveGreenCount": 1,
+        "BlockedRecommendationCount": 2,
+        "PendingReviewCount": 0,
+        "AdjustmentRequiredCount": 0,
+        "ActiveGraphCount": 0,
+    }
+    assert seeded_case["CoveredSpecIDs"] == ["BE-DDMRP-007", "UI-DDMRP-003"]
+
+    workbench_response = client.get("/planner/workbench/ddmrp/workbench")
+
+    assert workbench_response.status_code == 200
+    workbench = workbench_response.json()["Data"]
+    assert workbench["Evaluation"]["EvaluationAt"] == "2026-07-11T01:00:00+00:00"
+    assert workbench["Summary"] == seeded_case["ExpectedSummary"]
+    assert sorted(
+        (row["ItemID"], row["LocationID"]) for row in workbench["Rows"]
+    ) == [
+        ("TST-DDMRP-RO-ABOVE-GREEN", "TST-MAIN"),
+        ("TST-DDMRP-RO-GREEN", "TST-MAIN"),
+        ("TST-DDMRP-RO-RED", "TST-MAIN"),
+        ("TST-DDMRP-RO-YELLOW", "TST-MAIN"),
+    ]
+    expected_authority_on_hand = {
+        "TST-DDMRP-RO-ABOVE-GREEN": 150.0,
+        "TST-DDMRP-RO-GREEN": 75.0,
+        "TST-DDMRP-RO-RED": 10.0,
+        "TST-DDMRP-RO-YELLOW": 35.0,
+    }
+    assert {
+        row["ItemID"]: row["QualifiedOnHandQty"] for row in workbench["Rows"]
+    } == expected_authority_on_hand
+    assert {
+        row["ItemID"]: row["AuthorityAvailableQty"] for row in workbench["Rows"]
+    } == expected_authority_on_hand
+    assert all(
+        row["StandardTargetReceiptAt"] is None
+        and [gate["Code"] for gate in row["GateCodes"]]
+        == [
+            "DLT_TARGET_SEMANTICS_INSUFFICIENT",
+            "OPERATIONAL_AUTHORITY_NOT_ACCEPTED",
+            "PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED",
+            "PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED",
+        ]
+        and row["OperationalActionAllowed"] is False
+        and row["PendingReviewCount"] == 0
+        for row in workbench["Rows"]
+    )
+    assert {
+        row["PlanningStatus"]: row["RecommendationStatus"]
+        for row in workbench["Rows"]
+    } == {
+        "Red": "Blocked",
+        "Yellow": "Blocked",
+        "Green": None,
+        "AboveGreen": None,
+    }
+    assert all(
+        row["SuggestedReplenishmentQty"] == 0
+        and row["RecommendedAction"] == "Monitor"
+        for row in workbench["Rows"]
+        if row["PlanningStatus"] in {"Green", "AboveGreen"}
+    )
+    assert workbench["ActiveGraphs"] == []
+    assert all("OperationalControl" not in row for row in workbench["Rows"])
+
+
 def test_seed_baseline_test_data_builds_business_readable_state():
     store = WorkbenchStateStore()
 

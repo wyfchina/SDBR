@@ -1320,13 +1320,20 @@ def create_app(
             response.headers["X-SDBR-Environment"] = active_environment.environment_id
             return response
 
+        is_ddmrp_evaluation_create = (
+            request.method == "POST"
+            and request.url.path == "/planner/workbench/ddmrp/evaluations"
+        )
         async with active_store.state_admission():
             expected_revision = _client_revision_from_if_match(
                 request.headers.get("if-match")
             )
             if (
-                expected_revision is not None
-                and expected_revision != active_store.current_revision()
+                not is_ddmrp_evaluation_create
+                and (
+                    expected_revision is not None
+                    and expected_revision != active_store.current_revision()
+                )
             ):
                 return _revision_conflict_response(
                     endpoint=request.url.path,
@@ -1687,6 +1694,20 @@ def create_app(
                         ),
                     },
                 }
+
+            expected_revision = _client_revision_from_if_match(
+                request.headers.get("if-match")
+            )
+            if (
+                expected_revision is not None
+                and expected_revision != active_store.current_revision()
+            ):
+                return _revision_conflict_response(
+                    endpoint=endpoint,
+                    expected_revision=expected_revision,
+                    current_revision=active_store.current_revision(),
+                    message="Workbench state changed; reload the latest state before retrying.",
+                )
 
             package_record = ddsop_runtime_planning_input_packages.get(
                 payload.RuntimePlanningInputPackageID

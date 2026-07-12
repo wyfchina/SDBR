@@ -9035,6 +9035,45 @@ def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after
 
 
 # BE-DDMRP-007
+def test_be_ddmrp_007_evaluation_api_replays_before_stale_if_match_after_unrelated_write():
+    store = _ddmrp_api_store()
+    app = create_app(state_store=store)
+
+    @app.post("/test/ddmrp-unrelated-write")
+    def unrelated_write():
+        store.audit_events.append({"Action": "UnrelatedToDdmrpScope"})
+        return {"Status": "Recorded"}
+
+    client = TestClient(app)
+    original_if_match = {"If-Match": "0"}
+
+    first = _post_ddmrp_evaluation(client, headers=original_if_match)
+    assert first.status_code == 200
+    assert store.current_revision() == 1
+
+    unrelated = client.post("/test/ddmrp-unrelated-write")
+    assert unrelated.status_code == 200
+    assert store.current_revision() == 2
+
+    replay = _post_ddmrp_evaluation(client, headers=original_if_match)
+
+    assert replay.status_code == 200
+    assert replay.json()["Data"]["Status"] == "Duplicate"
+    assert replay.json()["Data"]["EvaluationID"] == first.json()["Data"]["EvaluationID"]
+    assert len(store.ddmrp_evaluation_request_results) == 1
+
+    new_request = _post_ddmrp_evaluation(
+        client,
+        request_id="DDMRP-REQUEST-API-NEW",
+        headers=original_if_match,
+    )
+
+    assert new_request.status_code == 409
+    assert new_request.json()["Data"]["Status"] == "StateStoreRevisionConflict"
+    assert len(store.ddmrp_evaluation_request_results) == 1
+
+
+# BE-DDMRP-007
 def test_be_ddmrp_007_evaluation_api_request_id_reuse_with_different_package_returns_409():
     store = _ddmrp_api_store()
     client = TestClient(create_app(state_store=store))

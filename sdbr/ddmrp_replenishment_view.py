@@ -48,6 +48,20 @@ ACTIVE_GRAPH_VIEW_FIELDS = (
     "PlannedSupplyQty", "PlanningRunID", "FormalOrderRef",
     "AdjustmentRequired", "LastEventAt",
 )
+ACTIVE_GRAPH_SOURCE_FIELDS = frozenset({
+    "LogicalReplenishmentID", "RecommendationID", "ItemID", "LocationID",
+    "Uom", "GraphStatus", "CandidateStatus", "PlannedSupplyQty",
+    "PlanningRunID", "FormalOrderRef", "FormalSupplyID", "DemandCommitmentID",
+    "ReservationBatchID", "PlannedManufacturingCandidateID", "RecordVersion",
+})
+_ACTIVE_GRAPH_REQUIRED_SOURCE_FIELDS = frozenset({
+    "LogicalReplenishmentID", "RecommendationID", "ItemID", "LocationID",
+})
+_ACTIVE_GRAPH_TEXT_SOURCE_FIELDS = frozenset({
+    "Uom", "GraphStatus", "CandidateStatus", "PlanningRunID", "FormalOrderRef",
+    "FormalSupplyID", "DemandCommitmentID", "ReservationBatchID",
+    "PlannedManufacturingCandidateID",
+})
 HISTORY_VIEW_FIELDS = (
     "LogicalReplenishmentID", "RecommendationID", "RecommendationVersion",
     "PredecessorRecommendationID", "SupersededByRecommendationID",
@@ -290,6 +304,7 @@ def _validate_graph_links(
     recommendations: Mapping[str, Mapping[str, object]],
 ) -> None:
     for logical_id, graph in active_graphs.items():
+        _validate_active_graph_source(graph)
         recommendation_id = str(graph.get("RecommendationID") or "")
         recommendation = recommendations.get(recommendation_id)
         chain = chains.get(logical_id)
@@ -302,6 +317,34 @@ def _validate_graph_links(
             or chain_statuses[logical_id] in CHAIN_TERMINAL_STATUSES
         ):
             raise DdmrpReplenishmentConflict("Active graph scope differs from its chain.")
+
+
+def _validate_active_graph_source(graph: Mapping[str, object]) -> None:
+    source_fields = set(graph)
+    if source_fields - ACTIVE_GRAPH_SOURCE_FIELDS:
+        raise DdmrpReplenishmentConflict("Active graph source fields differ.")
+    if _ACTIVE_GRAPH_REQUIRED_SOURCE_FIELDS - source_fields:
+        raise DdmrpReplenishmentConflict("Active graph source fields are missing.")
+    if any(
+        not isinstance(graph[field], str) or not graph[field]
+        for field in _ACTIVE_GRAPH_REQUIRED_SOURCE_FIELDS
+    ):
+        raise DdmrpReplenishmentConflict("Active graph identity fields must be text.")
+    for field in _ACTIVE_GRAPH_TEXT_SOURCE_FIELDS & source_fields:
+        value = graph[field]
+        if value is not None and not isinstance(value, str):
+            raise DdmrpReplenishmentConflict("Active graph display fields must be text.")
+    if "PlannedSupplyQty" in graph and (
+        isinstance(graph["PlannedSupplyQty"], bool)
+        or not isinstance(graph["PlannedSupplyQty"], (int, float))
+    ):
+        raise DdmrpReplenishmentConflict("Active graph planned supply must be numeric.")
+    if "RecordVersion" in graph and (
+        isinstance(graph["RecordVersion"], bool)
+        or not isinstance(graph["RecordVersion"], int)
+        or graph["RecordVersion"] <= 0
+    ):
+        raise DdmrpReplenishmentConflict("Active graph record version must be positive.")
 
 
 def _validate_provenance_links(
@@ -410,8 +453,47 @@ def _validate_provenance_links(
         if dict(run["Summary"]) != expected_summary:
             raise DdmrpReplenishmentConflict("DDMRP evaluation summary differs.")
     for event in events:
-        if event["EvaluationID"] not in runs:
+        evaluation_id = str(event["EvaluationID"])
+        logical_id = str(event["LogicalReplenishmentID"])
+        run = runs.get(evaluation_id)
+        if run is None:
             raise DdmrpReplenishmentConflict("DDMRP event evaluation is orphaned.")
+        if any((
+            event["CausationID"] != run["EvaluationRequestID"],
+            event["CorrelationID"] != evaluation_id,
+            event["IdempotencyKey"] != event["EventID"],
+            event["TraceID"] != logical_id,
+            event["OccurredAt"] != run["RecordedAt"],
+            event["ActorID"] != run["RecordedBy"],
+        )):
+            raise DdmrpReplenishmentConflict(
+                "DDMRP event back-reference or provenance differs."
+            )
+        if event["EventType"] == "ReplenishmentChainOpened":
+            chain = chains[logical_id]
+            if any((
+                chain["OpenedByEvaluationID"] != evaluation_id,
+                chain["OpenedAt"] != run["EvaluationAt"],
+            )):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP chain creation event provenance differs."
+                )
+        if event["EventType"] == "RecommendationVersionCreated":
+            recommendation = recommendations[str(event["RecommendationID"])]
+            if any((
+                recommendation["EvaluationID"] != evaluation_id,
+                recommendation["CreatedAt"] != run["RecordedAt"],
+                recommendation["CreatedBy"] != run["RecordedBy"],
+            )):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP recommendation creation event provenance differs."
+                )
+        if event["EventType"] == "RecommendationSuperseded":
+            successor = recommendations[str(event["RelatedRecommendationID"])]
+            if successor["EvaluationID"] != evaluation_id:
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP recommendation supersession event provenance differs."
+                )
 
 
 def _validate_single_current_version(

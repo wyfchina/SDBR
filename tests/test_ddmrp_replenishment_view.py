@@ -33,7 +33,10 @@ def test_be_ddmrp_007_view_returns_latest_rows_plus_older_active_or_adjustment_c
     recommendation = first.recommendation_versions[0]
     chain = first.chain_records[0]
     existing = _existing_from(first)
-    existing["events"] += _confirmation_events(recommendation, chain)
+    existing["events"] = _events_with_run_provenance(
+        (*existing["events"], *_confirmation_events(recommendation, chain)),
+        first.evaluation_run,
+    )
     existing["active_graphs"] = {
         chain["LogicalReplenishmentID"]: _active_graph(chain, recommendation)
     }
@@ -202,7 +205,10 @@ def test_be_ddmrp_007_view_nested_projection_allowlists_are_exact() -> None:
     recommendation = first.recommendation_versions[0]
     chain = first.chain_records[0]
     existing = _existing_from(first)
-    existing["events"] += _confirmation_events(recommendation, chain)
+    existing["events"] = _events_with_run_provenance(
+        (*existing["events"], *_confirmation_events(recommendation, chain)),
+        first.evaluation_run,
+    )
     existing["active_graphs"] = {
         chain["LogicalReplenishmentID"]: _active_graph(chain, recommendation)
     }
@@ -223,6 +229,95 @@ def test_be_ddmrp_007_view_nested_projection_allowlists_are_exact() -> None:
     assert tuple(result["TechnicalDetails"]["RecommendationFingerprints"][0]) == (
         RECOMMENDATION_FINGERPRINT_FIELDS
     )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "Uom",
+        "GraphStatus",
+        "CandidateStatus",
+        "PlannedSupplyQty",
+        "PlanningRunID",
+        "FormalOrderRef",
+        "FormalSupplyID",
+    ),
+)
+def test_be_ddmrp_007_view_rejects_nested_active_graph_display_values(
+    field: str,
+) -> None:
+    """BE-DDMRP-007: graph display leaves cannot carry raw evidence payloads."""
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+    recommendation = write_set.recommendation_versions[0]
+    chain = write_set.chain_records[0]
+    ledgers = _ledgers(write_set)
+    graph = _active_graph(chain, recommendation)
+    graph.update({
+        "CandidateStatus": "Planned",
+        "PlannedSupplyQty": 70.0,
+        "PlanningRunID": "PLAN-1",
+    })
+    if field != "FormalSupplyID":
+        graph["FormalOrderRef"] = "ORDER-1"
+    graph[field] = {"Payload": {"InventoryPositions": [{"secret": "raw"}]}}
+    ledgers["active_replenishment_graphs"] = {
+        chain["LogicalReplenishmentID"]: graph
+    }
+
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        _build(**ledgers)
+
+
+def test_be_ddmrp_007_view_rejects_unallowlisted_active_graph_source_field() -> None:
+    """BE-DDMRP-007: active graphs have an exact safe source contract."""
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+    recommendation = write_set.recommendation_versions[0]
+    chain = write_set.chain_records[0]
+    ledgers = _ledgers(write_set)
+    graph = _active_graph(chain, recommendation)
+    graph["Payload"] = {"InventoryPositions": [{"secret": "raw"}]}
+    ledgers["active_replenishment_graphs"] = {
+        chain["LogicalReplenishmentID"]: graph
+    }
+
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        _build(**ledgers)
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    (
+        ("ActorID", "forged-operator"),
+        ("OccurredAt", "2026-07-12T01:00:00+00:00"),
+    ),
+)
+def test_be_ddmrp_007_view_rejects_forged_history_actor_or_time_provenance(
+    field: str,
+    forged_value: str,
+) -> None:
+    """BE-DDMRP-007: history event actor/time must match its immutable run."""
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+    ledgers = _ledgers(write_set)
+    event = next(
+        event for event in ledgers["events"]
+        if event["EventType"] == "RecommendationVersionCreated"
+    )
+    event[field] = forged_value
+
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict
+
+    with pytest.raises(DdmrpReplenishmentConflict):
+        _build(**ledgers)
 
 
 def _build(**ledgers):
@@ -295,6 +390,18 @@ def _ledgers(*write_sets, existing=None):
         "events": tuple(events),
         "active_replenishment_graphs": active_graphs,
     }
+
+
+def _events_with_run_provenance(events, run):
+    return tuple({
+        **deepcopy(event),
+        "CausationID": run["EvaluationRequestID"],
+        "CorrelationID": run["EvaluationID"],
+        "IdempotencyKey": event["EventID"],
+        "TraceID": event["LogicalReplenishmentID"],
+        "OccurredAt": run["RecordedAt"],
+        "ActorID": run["RecordedBy"],
+    } for event in events)
 
 
 def _nested_keys(value):

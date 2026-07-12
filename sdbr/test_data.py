@@ -17,6 +17,8 @@ from sdbr.material_state import (
 )
 from sdbr.operational_state import create_operational_state_snapshot
 from sdbr.order_import import OrderImportRow, import_orders_from_rows
+from sdbr.plan_publication import schedule_fingerprint
+from sdbr.planner_view import InventoryBufferPolicy
 from sdbr.planner_workbench import Operation, Resource, Routing, SchedulingOrder, Shift, WorkCalendar
 from sdbr.resource_import import ResourceCapacityImportRow, import_resources_from_capacity_rows
 from sdbr.routing_import import RoutingImportRow, import_routings_from_operation_rows
@@ -31,6 +33,9 @@ WIP_LIMIT_OPERATIONAL_STATE_ID = "TST-OPS-WIP-LIMIT-20260619"
 DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID = "TST-DDMRP-MDV-NET-FLOW-20260625"
 P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID = "TST-P1-MDV-MARKET-CONTROL-20260709"
 P1_MARKET_CONTROL_RUN_ID = "TST-P1-RUN-MARKET-CONTROL-20260709"
+MTO_COMMITMENT_MASTER_DATA_VERSION_ID = "TST-MTO-MDV-COMMITMENT"
+MTO_COMMITMENT_OPERATIONAL_STATE_ID = "TST-MTO-OPS-CURRENT"
+MTO_COMMITMENT_BASELINE_RUN_ID = "TST-MTO-RUN-BASELINE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +550,222 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
         routing_count=len(routings),
         order_count=len(orders),
     )
+
+
+def seed_mto_order_commitment_fixture(
+    store: WorkbenchStateStore,
+    *,
+    captured_at: datetime,
+) -> dict[str, object]:
+    if captured_at.tzinfo is None or captured_at.utcoffset() is None:
+        raise ValueError("MTO fixture time must be timezone-aware.")
+    captured_at = captured_at.astimezone(timezone.utc)
+    due_date = captured_at.date() + timedelta(days=2)
+    next_date = captured_at.date() + timedelta(days=3)
+    due_start = datetime.combine(
+        due_date, time(8, 0), tzinfo=timezone.utc
+    )
+    due_end = datetime.combine(
+        due_date, time(16, 0), tzinfo=timezone.utc
+    )
+    next_start = datetime.combine(
+        next_date, time(8, 0), tzinfo=timezone.utc
+    )
+    next_end = datetime.combine(
+        next_date, time(16, 0), tzinfo=timezone.utc
+    )
+
+    store.order_commitment_evaluations.clear()
+    store.order_commitment_events.clear()
+    store.planning_demand_commitments.clear()
+    store.planning_reservation_batches.clear()
+    store.ccr_capacity_reservations.clear()
+    store.material_planning_allocations.clear()
+    store.planning_reservation_events.clear()
+    store.processed_planning_event_keys.clear()
+
+    day_calendar = WorkCalendar(
+        calendar_id="TST-MTO-CAL-DAY",
+        working_weekdays=set(range(7)),
+        shifts=[Shift("Day", time(8, 0), time(16, 0))],
+        maintenance_windows=[],
+        holidays=set(),
+    )
+    resources = [
+        Resource(
+            "TST-MTO-CCR-1",
+            "MTO Constraint",
+            True,
+            {due_date: 480, next_date: 480},
+            calendar=day_calendar,
+            capacity_units=1,
+            efficiency_percent=100,
+        ),
+        Resource(
+            "TST-MTO-NCR-1",
+            "MTO Pack",
+            False,
+            {due_date: 480, next_date: 480},
+            calendar=day_calendar,
+        ),
+    ]
+    routing = Routing(
+        product_id="TST-MTO-FG-1",
+        routing_id="PRIMARY",
+        is_primary=True,
+        operations=[
+            Operation("CCR-CUT", "TST-MTO-CCR-1", 60, 10),
+            Operation("PACK", "TST-MTO-NCR-1", 30, 20),
+        ],
+    )
+    inventory_buffers = [
+        InventoryBufferPolicy(
+            "TST-MTO-RM-1", "TST-MAIN", 100.0, 20.0, 40.0, 80.0
+        )
+    ]
+    validation = validate_master_data(
+        resources=resources,
+        routings=[routing],
+        orders=[],
+        inventory_buffers=inventory_buffers,
+        material_requirements=[],
+        calendar_timezone="UTC",
+    )
+    if not validation.is_valid:
+        raise ValueError("MTO fixture master data must validate.")
+    store.master_data_versions[MTO_COMMITMENT_MASTER_DATA_VERSION_ID] = {
+        "VersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "CapturedAt": captured_at.isoformat(),
+        "SourceSystem": "SDBR-TestData",
+        "CreatedBy": "sdbr-test-data",
+        "CalendarTimezone": "UTC",
+        "Status": "Valid",
+        "Resources": _resources_to_dict(resources),
+        "Routings": _routings_to_dict([routing]),
+        "Orders": [],
+        "InventoryBuffers": _inventory_buffers_to_dict(
+            inventory_buffers
+        ),
+        "MaterialRequirements": [],
+        "Validation": _validation_to_dict(validation),
+    }
+
+    snapshot = create_operational_state_snapshot(
+        snapshot_id=MTO_COMMITMENT_OPERATIONAL_STATE_ID,
+        captured_at=captured_at - timedelta(minutes=5),
+        inventory_buffers=inventory_buffers,
+        material_availability=import_material_availability_from_rows([
+            MaterialAvailabilityImportRow(
+                "TST-MTO-RM-1", "TST-MAIN", 0.0, 0.0, None
+            )
+        ]),
+        wip_limits=[],
+    )
+    store.operational_state_snapshots[snapshot.snapshot_id] = snapshot
+
+    schedule = {
+        "GeneratedAt": captured_at.isoformat(),
+        "GanttRows": [
+            {
+                "ResourceID": "TST-MTO-CCR-1",
+                "Bars": [
+                    {
+                        "OrderID": "TST-MTO-BASELOAD",
+                        "OperationID": "TST-MTO-BASELOAD:CCR-CUT",
+                        "BarType": "Processing",
+                        "Start": due_start.isoformat(),
+                        "End": (
+                            due_start + timedelta(minutes=180)
+                        ).isoformat(),
+                        "DurationMinutes": 180,
+                    }
+                ],
+            }
+        ],
+        "Orders": [],
+        "Diagnostics": [],
+    }
+    frozen_release_policy = {
+        "VersionID": "TST-MTO-RELEASE-POLICY-1",
+        "RopeBufferMinutes": 60,
+        "MaterialCheckWindowMinutes": 1440,
+    }
+    run = {
+        "RunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+        "ProblemID": "TST-MTO-PROBLEM-BASELINE",
+        "Status": "Completed",
+        "PublicationStatus": "Published",
+        "MasterDataVersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "OperatingModelConfigurationID": None,
+        "OperatingModelFingerprint": None,
+        "SchedulingConfigurationID": None,
+        "DDMRPConfigurationID": None,
+        "ReleasePolicyVersionID": frozen_release_policy["VersionID"],
+        "FrozenReleasePolicy": frozen_release_policy,
+        "FrozenBaseCalendars": [],
+        "FrozenResourceCalendarAssignments": [],
+        "FrozenCalendarOverrides": [],
+        "SetupTransitions": [],
+        "TimeBufferMinutes": 60,
+        "RequestedBy": "sdbr-test-data",
+        "RequestedAt": captured_at.isoformat(),
+        "StartedAt": captured_at.isoformat(),
+        "CompletedAt": captured_at.isoformat(),
+        "Schedule": schedule,
+        "PublicationHistory": [],
+    }
+    run["ScheduleFingerprint"] = schedule_fingerprint(run)
+    store.planning_runs[MTO_COMMITMENT_BASELINE_RUN_ID] = run
+
+    return {
+        "MasterDataVersionID": MTO_COMMITMENT_MASTER_DATA_VERSION_ID,
+        "OperationalStateSnapshotID": snapshot.snapshot_id,
+        "BaselinePlanningRunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+        "CapacityWindowKeys": [
+            (
+                "TST-MTO-CCR-1",
+                due_start.isoformat(),
+                due_end.isoformat(),
+            ),
+            (
+                "TST-MTO-CCR-1",
+                next_start.isoformat(),
+                next_end.isoformat(),
+            ),
+        ],
+        "IntakePayloadTemplate": {
+            "SourceSystem": "MockERP",
+            "SourceObjectType": "CustomerOrder",
+            "OrderID": "TST-MTO-SO-ORDINARY",
+            "OrderVersion": "1",
+            "DemandLineID": "10",
+            "ProductID": "TST-MTO-FG-1",
+            "LocationID": "TST-MAIN",
+            "Quantity": 1.0,
+            "Uom": "EA",
+            "RequestedDueAt": datetime.combine(
+                due_date, time(18, 0), tzinfo=timezone.utc
+            ).isoformat(),
+            "BusinessPriority": 100,
+            "ReceivedAt": captured_at.isoformat(),
+            "TraceID": "TRACE-TST-MTO-ORDINARY",
+            "BaselinePlanningRunID": MTO_COMMITMENT_BASELINE_RUN_ID,
+            "RoutingID": "PRIMARY",
+            "OperationalStateSnapshotID": snapshot.snapshot_id,
+            "MaterialRequirements": [
+                {
+                    "RequirementLineID": (
+                        "TST-MTO-SO-ORDINARY:10:TST-MTO-RM-1"
+                    ),
+                    "ItemID": "TST-MTO-RM-1",
+                    "LocationID": "TST-MAIN",
+                    "RequiredQty": 5.0,
+                    "Uom": "EA",
+                }
+            ],
+        },
+    }
 
 
 def reset_test_case_state(

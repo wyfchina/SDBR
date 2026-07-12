@@ -232,6 +232,7 @@ from sdbr.state_store import (
 from sdbr.test_data import (
     reset_test_case_state,
     seed_baseline_test_data,
+    seed_mto_order_commitment_fixture,
     test_case_catalog_payload,
 )
 from sdbr.test_case_acceptance import (
@@ -1924,6 +1925,29 @@ def create_app(
                 "Scope": "AllCases",
                 "Summary": summary.to_dict(),
             },
+        }
+
+    @app.post("/planner/workbench/test-data/order-commitment/reset")
+    def planner_workbench_order_commitment_test_data_reset():
+        endpoint = "/planner/workbench/test-data/order-commitment/reset"
+        if active_environment.is_production:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {"Status": "TestDataResetNotAllowed"},
+                },
+            )
+        seed_baseline_test_data(active_store)
+        fixture = seed_mto_order_commitment_fixture(
+            active_store,
+            captured_at=server_utc_now(),
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {"Status": "Reset", **fixture},
         }
 
     @app.post("/planner/workbench/test-data/acceptance/{case_id}/reset")

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -152,6 +152,139 @@ def test_reset_test_database_refuses_production_environment(tmp_path):
             environment_id="production",
             database_path=tmp_path / "production.db",
         )
+
+
+class TestOrderCommitmentBrowserSeed:
+    """BE-DATA-014 / BE-SDBR-010: controlled MTO browser fixture."""
+
+    def test_seed_builds_valid_master_fresh_snapshot_and_published_completed_baseline(
+        self,
+    ):
+        from sdbr import test_data
+
+        store = WorkbenchStateStore()
+        captured_at = datetime(2026, 7, 12, 8, tzinfo=timezone.utc)
+
+        fixture = test_data.seed_mto_order_commitment_fixture(
+            store,
+            captured_at=captured_at,
+        )
+
+        master_data = store.master_data_versions[
+            fixture["MasterDataVersionID"]
+        ]
+        snapshot = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        baseline = store.planning_runs[fixture["BaselinePlanningRunID"]]
+        assert master_data["VersionID"] == "TST-MTO-MDV-COMMITMENT"
+        assert master_data["Status"] == "Valid"
+        assert master_data["Validation"]["IsValid"] is True
+        assert snapshot.snapshot_id == "TST-MTO-OPS-CURRENT"
+        assert snapshot.captured_at == captured_at - timedelta(minutes=5)
+        assert baseline["RunID"] == "TST-MTO-RUN-BASELINE"
+        assert baseline["Status"] == "Completed"
+        assert baseline["PublicationStatus"] == "Published"
+        assert baseline["ScheduleFingerprint"]
+
+    def test_seed_returns_exact_api_intake_template_and_window_ids(self):
+        from sdbr import test_data
+
+        store = WorkbenchStateStore()
+        captured_at = datetime(2026, 7, 12, 8, tzinfo=timezone.utc)
+
+        fixture = test_data.seed_mto_order_commitment_fixture(
+            store,
+            captured_at=captured_at,
+        )
+
+        assert fixture["MasterDataVersionID"] == "TST-MTO-MDV-COMMITMENT"
+        assert fixture["OperationalStateSnapshotID"] == "TST-MTO-OPS-CURRENT"
+        assert fixture["BaselinePlanningRunID"] == "TST-MTO-RUN-BASELINE"
+        assert fixture["CapacityWindowKeys"] == [
+            (
+                "TST-MTO-CCR-1",
+                "2026-07-14T08:00:00+00:00",
+                "2026-07-14T16:00:00+00:00",
+            ),
+            (
+                "TST-MTO-CCR-1",
+                "2026-07-15T08:00:00+00:00",
+                "2026-07-15T16:00:00+00:00",
+            ),
+        ]
+        assert fixture["IntakePayloadTemplate"] == {
+            "SourceSystem": "MockERP",
+            "SourceObjectType": "CustomerOrder",
+            "OrderID": "TST-MTO-SO-ORDINARY",
+            "OrderVersion": "1",
+            "DemandLineID": "10",
+            "ProductID": "TST-MTO-FG-1",
+            "LocationID": "TST-MAIN",
+            "Quantity": 1.0,
+            "Uom": "EA",
+            "RequestedDueAt": "2026-07-14T18:00:00+00:00",
+            "BusinessPriority": 100,
+            "ReceivedAt": "2026-07-12T08:00:00+00:00",
+            "TraceID": "TRACE-TST-MTO-ORDINARY",
+            "BaselinePlanningRunID": "TST-MTO-RUN-BASELINE",
+            "RoutingID": "PRIMARY",
+            "OperationalStateSnapshotID": "TST-MTO-OPS-CURRENT",
+            "MaterialRequirements": [
+                {
+                    "RequirementLineID": "TST-MTO-SO-ORDINARY:10:TST-MTO-RM-1",
+                    "ItemID": "TST-MTO-RM-1",
+                    "LocationID": "TST-MAIN",
+                    "RequiredQty": 5.0,
+                    "Uom": "EA",
+                }
+            ],
+        }
+
+    def test_test_environment_reset_endpoint_uses_server_time_and_is_repeatable(
+        self,
+    ):
+        server_time = datetime(2026, 7, 12, 8, tzinfo=timezone.utc)
+        store = WorkbenchStateStore()
+        client = TestClient(create_app(state_store=store, utc_now=lambda: server_time))
+
+        first = client.post("/planner/workbench/test-data/order-commitment/reset")
+        assert first.status_code == 200
+        first_data = first.json()["Data"]
+        assert first_data["Status"] == "Reset"
+        assert first_data["IntakePayloadTemplate"]["ReceivedAt"] == (
+            server_time.isoformat()
+        )
+        assert store.operational_state_snapshots[
+            "TST-MTO-OPS-CURRENT"
+        ].captured_at == server_time - timedelta(minutes=5)
+
+        store.order_commitment_evaluations["TST-MTO-EVAL-STALE"] = {}
+        second = client.post("/planner/workbench/test-data/order-commitment/reset")
+        assert second.status_code == 200
+        assert second.json()["Data"] == first_data
+        assert store.order_commitment_evaluations == {}
+
+    def test_production_environment_rejects_order_commitment_fixture_reset(self, tmp_path):
+        runtime_environment = resolve_runtime_environment(
+            environment_id="production",
+            database_path=tmp_path / "production.db",
+        )
+        client = TestClient(
+            create_app(
+                state_store=WorkbenchStateStore(),
+                runtime_environment=runtime_environment,
+            )
+        )
+
+        response = client.post("/planner/workbench/test-data/order-commitment/reset")
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "Endpoint": "/planner/workbench/test-data/order-commitment/reset",
+            "StatusCode": 409,
+            "Data": {"Status": "TestDataResetNotAllowed"},
+        }
 
 
 def test_seeded_test_database_feeds_data_readiness_endpoint(tmp_path):

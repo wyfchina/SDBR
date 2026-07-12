@@ -136,6 +136,17 @@ const I18N = {
     action_Replenish: "建议补货", action_Monitor: "保持观察",
     zone_Red: "红区：需要行动", zone_Yellow: "黄区：需要关注", zone_Green: "绿区：正常", zone_AboveGreen: "高于绿区：暂不补货",
     materialPlanningSummary: "物料计划摘要", criticalPriority: "紧急", attentionPriority: "关注", normalPriority: "正常",
+    blockedRecommendations: "受门控建议", adjustmentRequired: "需要调整", activeGraphs: "活动图",
+    evaluationFreshness: "评估与权威新鲜度", versionedEvaluation: "版本化评估", evaluationId: "评估编号",
+    evaluationTime: "评估时间", recordedAt: "记录时间", runtimePlanningPackage: "运行包", packageVersion: "包版本",
+    operatingModelConfiguration: "运行模型配置", ddmrpConfiguration: "DDMRP 配置", workbenchRevision: "工作台修订",
+    standardTargetStatus: "标准目标状态", recommendationStatus: "建议状态", activeReplenishmentGraphs: "活动补货图",
+    logicalReplenishment: "逻辑补货链", recommendationVersion: "建议版本", recommendation: "建议", status: "状态",
+    replenishmentHistory: "补货历史", noActiveReplenishmentGraphs: "当前没有活动补货图。",
+    noReplenishmentHistory: "当前没有可显示的补货历史。", businessGates: "业务门控",
+    technicalDetailsAdvice: "仅显示安全摘要和稳定标识；不显示原始权威载荷。",
+    evaluationFingerprint: "评估指纹", authoritySignatureFingerprint: "权威签名指纹", runtimeSnapshot: "运行快照",
+    relevantPlanningLedger: "相关计划台账", planningBoundary: "计划边界",
     materialPlanningWorkbench: "物料计划工作台", searchItemOrLocation: "搜索物料或地点", sortBy: "排序",
     planningPriority: "计划优先级", bufferPercent: "缓冲百分比", openSupply: "在途供应", qualifiedDemand: "合格需求",
     materialPlanningLoadFailed: "无法读取物料计划工作台", materialPlanningRetryAdvice: "请确认 DDMRP 运行数据可用后重试。",
@@ -562,6 +573,17 @@ const I18N = {
     action_Replenish: "Replenish", action_Monitor: "Monitor",
     zone_Red: "Red: action required", zone_Yellow: "Yellow: watch", zone_Green: "Green: normal", zone_AboveGreen: "Above green: no replenishment",
     materialPlanningSummary: "Materials planning summary", criticalPriority: "Critical", attentionPriority: "Attention", normalPriority: "Normal",
+    blockedRecommendations: "Blocked recommendations", adjustmentRequired: "Adjustment required", activeGraphs: "Active graphs",
+    evaluationFreshness: "Evaluation and authority freshness", versionedEvaluation: "Versioned evaluation", evaluationId: "Evaluation ID",
+    evaluationTime: "Evaluation time", recordedAt: "Recorded at", runtimePlanningPackage: "Runtime package", packageVersion: "Package version",
+    operatingModelConfiguration: "Operating model configuration", ddmrpConfiguration: "DDMRP configuration", workbenchRevision: "Workbench revision",
+    standardTargetStatus: "Standard target status", recommendationStatus: "Recommendation status", activeReplenishmentGraphs: "Active replenishment graphs",
+    logicalReplenishment: "Logical replenishment", recommendationVersion: "Recommendation version", recommendation: "Recommendation", status: "Status",
+    replenishmentHistory: "Replenishment history", noActiveReplenishmentGraphs: "No active replenishment graphs are available.",
+    noReplenishmentHistory: "No replenishment history is available.", businessGates: "Business gates",
+    technicalDetailsAdvice: "Only safe summaries and stable identifiers are shown; raw authority payloads are not displayed.",
+    evaluationFingerprint: "Evaluation fingerprint", authoritySignatureFingerprint: "Authority signature fingerprint", runtimeSnapshot: "Runtime snapshot",
+    relevantPlanningLedger: "Relevant planning ledger", planningBoundary: "Planning boundary",
     materialPlanningWorkbench: "Materials planning workbench", searchItemOrLocation: "Search item or location", sortBy: "Sort by",
     planningPriority: "Planning priority", bufferPercent: "% of buffer", openSupply: "Open supply", qualifiedDemand: "Qualified demand",
     materialPlanningLoadFailed: "Materials planning workbench could not be loaded", materialPlanningRetryAdvice: "Check that DDMRP runtime data is available and retry.",
@@ -878,6 +900,7 @@ let operationalMetricsData = null;
 let selectedOperationalMetricsRunID = null;
 let dataReadiness = null;
 let materialPlanningData = null;
+let materialPlanningRevision = null;
 let materialPlanningSortKey = "PriorityRank";
 let selectedMaterialPlanningKey = null;
 let planningRunWorkbench = null;
@@ -1613,18 +1636,12 @@ function ddmrpZoneClass(value) {
 }
 
 function materialPlanningRows() {
-  return (materialPlanningData?.Lines || []).map((line) => {
-    const topOfGreen = Number(line.TopOfGreen || 0);
-    const netFlow = Number(line.NetFlowPosition || 0);
-    const bufferPercent = topOfGreen > 0 ? (netFlow / topOfGreen) * 100 : null;
-    return {
-      ...line,
-      BufferPercent: bufferPercent,
-      BufferPercentText: bufferPercent === null ? "-" : `${formatNumber(bufferPercent)}%`,
-      PriorityRank: ddmrpZoneRank(line.PlanningStatus),
-      RowKey: `${line.ItemID}@@${line.LocationID}`
-    };
-  });
+  return (materialPlanningData?.Rows || []).map((line) => ({
+    ...line,
+    BufferPercentText: line.BufferPercent === null || line.BufferPercent === undefined ? "-" : `${formatNumber(line.BufferPercent)}%`,
+    PriorityRank: ddmrpZoneRank(line.PlanningStatus),
+    RowKey: line.RecommendationID || line.RowKey
+  }));
 }
 
 function filteredMaterialPlanningRows() {
@@ -1693,6 +1710,8 @@ function renderMaterialPlanningTable() {
       textCell(formatNumber(rowData.QualifiedDemandQty)),
       textCell(formatNumber(rowData.NetFlowPosition)),
       textCell(formatNumber(rowData.SuggestedReplenishmentQty)),
+      textCell(displayValue(rowData.TargetStatusCode)),
+      textCell(displayValue(rowData.RecommendationStatus)),
       nodeCell(action)
     ].forEach((cell) => row.append(cell));
     body.append(row);
@@ -1718,7 +1737,7 @@ function renderMaterialPlanningDetail() {
   if (!selected) return;
   document.querySelectorAll("[data-material-detail]").forEach((element) => {
     const key = element.dataset.materialDetail;
-    element.textContent = key === "BufferPercentText" ? selected.BufferPercentText : formatNumber(selected[key]);
+    element.textContent = key === "BufferPercentText" ? selected.BufferPercentText : displayMaterialPlanningValue(key, selected[key]);
   });
   const demandCount = selected.DemandComponents?.length || 0;
   const supplyCount = selected.SupplyComponents?.length || 0;
@@ -1726,6 +1745,18 @@ function renderMaterialPlanningDetail() {
     "material-detail-components",
     `${translateWith("demandComponentsCount", { count: demandCount })} · ${translateWith("supplyComponentsCount", { count: supplyCount })}`
   );
+  const gates = document.getElementById("material-detail-gates");
+  gates.replaceChildren();
+  (selected.GateCodes || []).forEach((gate) => {
+    const item = document.createElement("li");
+    item.textContent = `${displayValue(gate.Code)}: ${displayValue(gate.Message)}`;
+    gates.append(item);
+  });
+  if (!gates.children.length) {
+    const item = document.createElement("li");
+    item.textContent = translate("notAvailable");
+    gates.append(item);
+  }
 }
 
 function selectMaterialPlanningRow(rowKey) {
@@ -1737,27 +1768,101 @@ function selectMaterialPlanningRow(rowKey) {
 function renderMaterialPlanning(payload) {
   materialPlanningData = payload || null;
   renderMaterialPlanningSummary(payload?.Summary || {});
-  const source = payload?.Source?.VersionID ? `${translate("version")}: ${payload.Source.VersionID}` : "";
-  setText("material-planning-source", source);
-  document.getElementById("material-planning-error").hidden = true;
+  renderMaterialPlanningEvaluation(payload?.Evaluation || null);
+  renderMaterialPlanningActiveGraphs(payload?.ActiveGraphs || []);
+  renderMaterialPlanningHistory(payload?.History || []);
+  renderMaterialPlanningTechnicalDetails(payload?.TechnicalDetails || null, payload?.Boundary || null);
+  setText("material-planning-source", payload?.Evaluation ? `${translate("evaluationId")}: ${payload.Evaluation.EvaluationID}` : "");
+  document.getElementById("material-planning-error").hidden = Boolean(payload);
   renderMaterialPlanningTable();
 }
 
 async function loadMaterialPlanning() {
   try {
-    const response = await fetch("/planner/workbench/ddmrp/status", { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(String(response.status));
-    renderMaterialPlanning((await response.json()).Data);
-  } catch (_error) {
-    materialPlanningData = null;
-    renderMaterialPlanningSummary({});
-    setText("material-planning-source", "");
-    document.getElementById("material-planning-table-body").replaceChildren();
-    document.getElementById("material-planning-empty").hidden = false;
-    document.getElementById("material-planning-error").hidden = false;
-    selectedMaterialPlanningKey = null;
-    renderMaterialPlanningDetail();
+    const response = await fetch("/planner/workbench/ddmrp/workbench", {
+      headers: { Accept: "application/json" }
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload?.Data?.Message || String(response.status));
+    materialPlanningRevision = response.headers.get("X-Workbench-Revision");
+    renderMaterialPlanning(payload.Data);
+  } catch (error) {
+    materialPlanningRevision = null;
+    renderMaterialPlanning(null);
+    showNotification(error.message || translate("materialPlanningLoadFailed"), "error");
   }
+}
+
+function displayMaterialPlanningValue(key, value) {
+  return ["TopOfRed", "TopOfYellow", "TopOfGreen", "QualifiedOpenSupplyQty", "QualifiedDemandQty", "RecommendationVersion"].includes(key)
+    ? formatNumber(value)
+    : displayValue(value);
+}
+
+function renderMaterialPlanningEvaluation(evaluation) {
+  document.querySelectorAll("[data-material-evaluation]").forEach((element) => {
+    const key = element.dataset.materialEvaluation;
+    element.textContent = evaluation ? displayMaterialPlanningEvaluationValue(key, evaluation[key]) : "-";
+  });
+  setText("material-planning-revision", materialPlanningRevision || "-");
+  setStatusChip(
+    document.getElementById("material-planning-evaluation-status"),
+    evaluation ? (evaluation.OperationalActionAllowed ? translate("available") : translate("readOnly")) : translate("notAvailable"),
+    evaluation ? (evaluation.OperationalActionAllowed ? "is-valid" : "is-warning") : "neutral"
+  );
+}
+
+function displayMaterialPlanningEvaluationValue(key, value) {
+  return ["EvaluationAt", "RecordedAt"].includes(key) ? formatDate(value) : displayValue(value);
+}
+
+function renderMaterialPlanningActiveGraphs(graphs) {
+  const body = document.getElementById("material-planning-active-graphs-body");
+  body.replaceChildren();
+  graphs.forEach((graph) => {
+    const row = document.createElement("tr");
+    [
+      textCell(graph.LogicalReplenishmentID), textCell(graph.ItemID), textCell(graph.LocationID),
+      textCell(formatNumber(graph.RecommendationVersion)), textCell(displayValue(graph.GraphStatus)),
+      textCell(graph.AdjustmentRequired ? translate("adjustmentRequired") : "-")
+    ].forEach((cell) => row.append(cell));
+    body.append(row);
+  });
+  document.getElementById("material-planning-active-graphs-empty").hidden = graphs.length !== 0;
+}
+
+function renderMaterialPlanningHistory(history) {
+  const body = document.getElementById("material-planning-history-body");
+  body.replaceChildren();
+  history.forEach((entry) => {
+    const row = document.createElement("tr");
+    [
+      textCell(entry.LogicalReplenishmentID), textCell(entry.RecommendationID),
+      textCell(formatNumber(entry.RecommendationVersion)), textCell(displayValue(entry.CurrentStatus)),
+      textCell(formatDate(entry.EvaluationAt))
+    ].forEach((cell) => row.append(cell));
+    body.append(row);
+  });
+  document.getElementById("material-planning-history-empty").hidden = history.length !== 0;
+}
+
+function renderMaterialPlanningTechnicalDetails(details, boundary) {
+  const list = document.getElementById("material-planning-technical-list");
+  list.replaceChildren();
+  const fields = [
+    ["evaluationId", details?.EvaluationID], ["evaluationFingerprint", details?.EvaluationFingerprint],
+    ["authoritySignatureFingerprint", details?.AuthoritySignatureFingerprint], ["runtimeSnapshot", details?.RuntimeSnapshotID],
+    ["relevantPlanningLedger", details?.RelevantPlanningLedgerIdentity], ["planningBoundary", boundary]
+  ];
+  fields.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const definition = document.createElement("dd");
+    term.textContent = translate(label);
+    definition.textContent = displayValue(value);
+    row.append(term, definition);
+    list.append(row);
+  });
 }
 
 function refreshDdmrpDetailsAction() {

@@ -5971,12 +5971,12 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert "loadMaterialPlanning" in script
     assert "renderMaterialPlanningTable" in script
     assert "filteredMaterialPlanningRows" in script
-    assert "const bufferPercent = topOfGreen > 0 ? (netFlow / topOfGreen) * 100 : null" in script
+    assert "RecommendationID || line.RowKey" in script
     assert "ddmrpZoneRank" in script
     assert "SuggestedReplenishmentQty" in script
     assert "materialPlanningSortKey" in script
     assert "materialPlanningData" in script
-    assert "/planner/workbench/ddmrp/status" in script
+    assert "/planner/workbench/ddmrp/workbench" in script
     assert 'action_Replenish: "建议补货"' in script
     assert 'action_Monitor: "保持观察"' in script
     assert "批准全部订单" not in html
@@ -5984,6 +5984,32 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert "生成 ERP" not in html
     assert "Buffer Profile 治理" not in html
     assert "调整因子审批" not in html
+
+
+def test_ui_ddmrp_003_renders_versioned_gated_workbench_without_operational_actions() -> None:
+    # UI-DDMRP-003 / BE-DDMRP-007
+    client = TestClient(create_app())
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'id="material-planning-evaluation"' in html
+    assert 'data-material-summary="BlockedRecommendationCount"' in html
+    assert 'data-i18n="standardTargetStatus"' in html
+    assert 'id="material-planning-active-graphs"' in html
+    assert 'id="material-planning-history"' in html
+    assert 'id="material-planning-technical-details"' in html
+    assert "/planner/workbench/ddmrp/workbench" in script
+    assert "payload.Data" in script
+    assert 'response.headers.get("X-Workbench-Revision")' in script
+    assert "showNotification(" in script
+    assert "/planner/workbench/ddmrp/recommendations/" not in script
+    assert 'id="confirm-material-recommendation"' not in html
+    assert 'id="ddmrp-buffer-profile-editor"' not in html
+    assert 'id="ddmrp-adjustment-factor-editor"' not in html
+    assert 'id="material-planning-erp-order"' not in html
+    assert 'id="material-planning-raw-json"' not in html
+    assert "StandardTargetReceiptAt =" not in script
+    assert "notify(" not in script
 
 
 def test_planning_run_workbench_endpoint_returns_safe_rows_and_capabilities():

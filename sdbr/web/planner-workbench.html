@@ -314,12 +314,33 @@
 
         <div id="material-planning-view" class="material-planning-view" hidden>
           <section class="material-planning-summary" aria-label="物料计划摘要" data-i18n-aria-label="materialPlanningSummary">
-            <div><span data-i18n="decouplingPoints">解耦点</span><strong data-material-summary="DecouplingPointCount">-</strong></div>
             <div><span data-i18n="criticalPriority">紧急</span><strong data-material-summary="RedCount">-</strong></div>
             <div><span data-i18n="attentionPriority">关注</span><strong data-material-summary="YellowCount">-</strong></div>
             <div><span data-i18n="normalPriority">正常</span><strong data-material-summary="GreenCount">-</strong></div>
             <div><span data-i18n="aboveGreenZone">高于绿区</span><strong data-material-summary="AboveGreenCount">-</strong></div>
-            <div><span data-i18n="replenishmentSuggestions">补货建议</span><strong data-material-summary="ReplenishmentSuggestionCount">-</strong></div>
+            <div><span data-i18n="blockedRecommendations">受门控建议</span><strong data-material-summary="BlockedRecommendationCount">-</strong></div>
+            <div><span data-i18n="adjustmentRequired">需要调整</span><strong data-material-summary="AdjustmentRequiredCount">-</strong></div>
+            <div><span data-i18n="activeGraphs">活动图</span><strong data-material-summary="ActiveGraphCount">-</strong></div>
+          </section>
+
+          <section id="material-planning-evaluation" class="material-evaluation" aria-labelledby="material-planning-evaluation-heading">
+            <div class="material-section-heading">
+              <div>
+                <span class="panel-kicker" data-i18n="evaluationFreshness">评估与权威新鲜度</span>
+                <h2 id="material-planning-evaluation-heading" data-i18n="versionedEvaluation">版本化评估</h2>
+              </div>
+              <span id="material-planning-evaluation-status" class="status-chip neutral" data-i18n="notAvailable">无可用数据</span>
+            </div>
+            <dl class="metadata-list material-evaluation-metadata">
+              <div><dt data-i18n="evaluationId">评估编号</dt><dd data-material-evaluation="EvaluationID">-</dd></div>
+              <div><dt data-i18n="evaluationTime">评估时间</dt><dd data-material-evaluation="EvaluationAt">-</dd></div>
+              <div><dt data-i18n="recordedAt">记录时间</dt><dd data-material-evaluation="RecordedAt">-</dd></div>
+              <div><dt data-i18n="runtimePlanningPackage">运行包</dt><dd data-material-evaluation="RuntimePlanningInputPackageID">-</dd></div>
+              <div><dt data-i18n="packageVersion">包版本</dt><dd data-material-evaluation="RuntimePlanningInputPackageVersion">-</dd></div>
+              <div><dt data-i18n="operatingModelConfiguration">运行模型配置</dt><dd data-material-evaluation="OperatingModelConfigurationID">-</dd></div>
+              <div><dt data-i18n="ddmrpConfiguration">DDMRP 配置</dt><dd data-material-evaluation="DDMRPConfigurationID">-</dd></div>
+              <div><dt data-i18n="workbenchRevision">工作台修订</dt><dd id="material-planning-revision">-</dd></div>
+            </dl>
           </section>
 
           <section class="material-workbench-panel" aria-labelledby="material-workbench-heading">
@@ -373,6 +394,8 @@
                     <th data-i18n="qualifiedDemand">合格需求</th>
                     <th data-i18n="netFlowPosition">净流位置</th>
                     <th data-i18n="suggestedReplenishmentQty">建议补货量</th>
+                    <th data-i18n="standardTargetStatus">标准目标状态</th>
+                    <th data-i18n="recommendationStatus">建议状态</th>
                     <th data-i18n="recommendedAction">建议动作</th>
                   </tr>
                 </thead>
@@ -383,6 +406,34 @@
               <strong data-i18n="materialPlanningNoRows">没有符合条件的物料计划记录</strong>
               <span data-i18n="materialPlanningNoRowsAdvice">请调整筛选条件或检查 DDMRP 输入数据。</span>
             </div>
+
+            <section id="material-planning-active-graphs" class="material-workbench-subsection" aria-labelledby="material-planning-active-graphs-heading">
+              <div class="material-section-heading">
+                <h3 id="material-planning-active-graphs-heading" data-i18n="activeReplenishmentGraphs">活动补货图</h3>
+                <span data-i18n="readOnly">只读</span>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table material-subtable">
+                  <thead><tr><th data-i18n="logicalReplenishment">逻辑补货链</th><th data-i18n="item">物料</th><th data-i18n="location">地点</th><th data-i18n="recommendationVersion">建议版本</th><th data-i18n="status">状态</th><th data-i18n="adjustmentRequired">需要调整</th></tr></thead>
+                  <tbody id="material-planning-active-graphs-body"></tbody>
+                </table>
+              </div>
+              <p id="material-planning-active-graphs-empty" class="muted" data-i18n="noActiveReplenishmentGraphs">当前没有活动补货图。</p>
+            </section>
+
+            <section id="material-planning-history" class="material-workbench-subsection" aria-labelledby="material-planning-history-heading">
+              <div class="material-section-heading">
+                <h3 id="material-planning-history-heading" data-i18n="replenishmentHistory">补货历史</h3>
+                <span data-i18n="readOnly">只读</span>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table material-subtable">
+                  <thead><tr><th data-i18n="logicalReplenishment">逻辑补货链</th><th data-i18n="recommendation">建议</th><th data-i18n="recommendationVersion">建议版本</th><th data-i18n="status">状态</th><th data-i18n="evaluationTime">评估时间</th></tr></thead>
+                  <tbody id="material-planning-history-body"></tbody>
+                </table>
+              </div>
+              <p id="material-planning-history-empty" class="muted" data-i18n="noReplenishmentHistory">当前没有可显示的补货历史。</p>
+            </section>
           </section>
 
           <section id="material-planning-detail" class="material-detail-panel" aria-labelledby="material-detail-heading">
@@ -405,19 +456,26 @@
                 <div><dt data-i18n="bufferPercent">缓冲百分比</dt><dd data-material-detail="BufferPercentText">-</dd></div>
                 <div><dt data-i18n="openSupply">在途供应</dt><dd data-material-detail="QualifiedOpenSupplyQty">-</dd></div>
                 <div><dt data-i18n="qualifiedDemand">合格需求</dt><dd data-material-detail="QualifiedDemandQty">-</dd></div>
+                <div><dt data-i18n="standardTargetStatus">标准目标状态</dt><dd data-material-detail="TargetStatusCode">-</dd></div>
+                <div><dt data-i18n="recommendationStatus">建议状态</dt><dd data-material-detail="RecommendationStatus">-</dd></div>
+                <div><dt data-i18n="recommendationVersion">建议版本</dt><dd data-material-detail="RecommendationVersion">-</dd></div>
               </dl>
-              <div class="material-detail-grid">
-                <div class="material-detail-card">
-                  <h3 data-i18n="supplyDemandComponents">需求与供应构成</h3>
-                  <p id="material-detail-components">-</p>
-                </div>
-                <div class="material-detail-card">
-                  <h3 data-i18n="trendPlaceholder">趋势分析</h3>
-                  <p data-i18n="trendPlaceholderMessage">第一版显示当前快照；历史缓冲、在手和净流趋势将在后续版本补充。</p>
-                </div>
-              </div>
+              <section class="material-detail-section" aria-labelledby="material-detail-components-heading">
+                <h3 id="material-detail-components-heading" data-i18n="supplyDemandComponents">需求与供应构成</h3>
+                <p id="material-detail-components" class="muted">-</p>
+              </section>
+              <section class="material-detail-section" aria-labelledby="material-detail-gates-heading">
+                <h3 id="material-detail-gates-heading" data-i18n="businessGates">业务门控</h3>
+                <ul id="material-detail-gates" class="material-gate-list"></ul>
+              </section>
             </div>
           </section>
+
+          <details id="material-planning-technical-details" class="material-technical-details">
+            <summary data-i18n="technicalDetails">技术追溯信息</summary>
+            <p class="muted" data-i18n="technicalDetailsAdvice">仅显示安全摘要和稳定标识；不显示原始权威载荷。</p>
+            <dl id="material-planning-technical-list" class="metadata-list material-technical-list"></dl>
+          </details>
         </div>
 
         <div id="planning-runs-view" class="planning-runs-view" hidden>

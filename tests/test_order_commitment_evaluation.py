@@ -838,3 +838,203 @@ class TestOrderCommitmentMaterialFeasibility:
         assert insufficient["Status"] == "EvidenceInsufficient"
         assert insufficient["Issues"][0]["Code"] == "MATERIAL_EVIDENCE_INVALID"
         assert insufficient["AllocationRequests"] == []
+
+
+class TestOrderCommitmentRecommendationMatrix:
+    """BE-SDBR-010: total MTO recommendation and action matrix."""
+
+    @staticmethod
+    def _policy(threshold_state: str) -> CcrProtectionPolicy:
+        if threshold_state == "ReferenceFallback":
+            return REFERENCE_CCR_PROTECTION_POLICY
+        return CcrProtectionPolicy(
+            target_percent=75.0,
+            source="ApprovedOperatingModel",
+            approved=True,
+            configuration_id="OMC-1",
+        )
+
+    @classmethod
+    def _recommendation(
+        cls,
+        *,
+        capacity: str,
+        material: str,
+        threshold_state: str,
+    ) -> dict[str, object]:
+        return order_commitment_evaluation.build_order_commitment_recommendation(
+            shadow_schedule={
+                "Status": capacity,
+                "SelectedAssessment": {
+                    "ThresholdExceeded": threshold_state == "ApprovedExceeded"
+                },
+            },
+            material_assessment={"Status": material},
+            protection_policy=cls._policy(threshold_state),
+        )
+
+    @pytest.mark.parametrize(
+        (
+            "capacity, material, threshold_state, decision, actions, "
+            "requires_ccr, requires_material"
+        ),
+        [
+            ("NotAssessable", "Feasible", "ApprovedWithin", "DoNotRecommendAccept", ["Reevaluate", "Reject"], False, False),
+            ("NotAssessable", "Feasible", "ApprovedExceeded", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+            ("NotAssessable", "Feasible", "ReferenceFallback", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+            ("OnTime", "Feasible", "ApprovedWithin", "RecommendAccept", ["AcceptRequestedDate", "Reevaluate", "Reject"], False, False),
+            ("OnTime", "Feasible", "ApprovedExceeded", "PlannerConfirmationRequired", ["AcceptRequestedDate", "Reevaluate", "Reject"], True, False),
+            ("OnTime", "Feasible", "ReferenceFallback", "PlannerConfirmationRequired", ["AcceptRequestedDate", "Reevaluate", "Reject"], True, False),
+            ("OnTime", "SkippedPendingConfirmation", "ApprovedWithin", "CapacityAcceptableMaterialPending", ["ConditionallyAcceptRequestedDate", "Reevaluate", "Reject"], False, True),
+            ("OnTime", "SkippedPendingConfirmation", "ApprovedExceeded", "PlannerConfirmationRequired", ["ConditionallyAcceptRequestedDate", "Reevaluate", "Reject"], True, True),
+            ("OnTime", "SkippedPendingConfirmation", "ReferenceFallback", "PlannerConfirmationRequired", ["ConditionallyAcceptRequestedDate", "Reevaluate", "Reject"], True, True),
+            ("OnTime", "EvidenceInsufficient", "ApprovedWithin", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], False, False),
+            ("OnTime", "EvidenceInsufficient", "ApprovedExceeded", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], True, False),
+            ("OnTime", "EvidenceInsufficient", "ReferenceFallback", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], True, False),
+            ("OnTime", "Shortage", "ApprovedWithin", "DoNotRecommendAccept", ["Reevaluate", "Reject"], False, False),
+            ("OnTime", "Shortage", "ApprovedExceeded", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+            ("OnTime", "Shortage", "ReferenceFallback", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "Feasible", "ApprovedWithin", "RecommendLaterPromise", ["AcceptRecommendedDate", "Reevaluate", "Reject"], False, False),
+            ("LaterSafeDate", "Feasible", "ApprovedExceeded", "PlannerConfirmationRequired", ["AcceptRecommendedDate", "Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "Feasible", "ReferenceFallback", "PlannerConfirmationRequired", ["AcceptRecommendedDate", "Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "SkippedPendingConfirmation", "ApprovedWithin", "RecommendLaterPromise", ["ConditionallyAcceptRecommendedDate", "Reevaluate", "Reject"], False, True),
+            ("LaterSafeDate", "SkippedPendingConfirmation", "ApprovedExceeded", "PlannerConfirmationRequired", ["ConditionallyAcceptRecommendedDate", "Reevaluate", "Reject"], True, True),
+            ("LaterSafeDate", "SkippedPendingConfirmation", "ReferenceFallback", "PlannerConfirmationRequired", ["ConditionallyAcceptRecommendedDate", "Reevaluate", "Reject"], True, True),
+            ("LaterSafeDate", "EvidenceInsufficient", "ApprovedWithin", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], False, False),
+            ("LaterSafeDate", "EvidenceInsufficient", "ApprovedExceeded", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "EvidenceInsufficient", "ReferenceFallback", "MaterialEvidenceRequired", ["Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "Shortage", "ApprovedWithin", "DoNotRecommendAccept", ["Reevaluate", "Reject"], False, False),
+            ("LaterSafeDate", "Shortage", "ApprovedExceeded", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+            ("LaterSafeDate", "Shortage", "ReferenceFallback", "DoNotRecommendAccept", ["Reevaluate", "Reject"], True, False),
+        ],
+    )
+    def test_total_recommendation_matrix(
+        self,
+        capacity: str,
+        material: str,
+        threshold_state: str,
+        decision: str,
+        actions: list[str],
+        requires_ccr: bool,
+        requires_material: bool,
+    ):
+        result = self._recommendation(
+            capacity=capacity,
+            material=material,
+            threshold_state=threshold_state,
+        )
+
+        assert result["Decision"] == decision
+        assert result["AllowedActions"] == actions
+        assert result["RequiresCcrAcknowledgement"] is requires_ccr
+        assert result["RequiresMaterialAcknowledgement"] is requires_material
+        assert result["RequiresPlannerDecision"] is True
+        for action in actions:
+            expected_acceptance = action.startswith("Accept") or action.startswith(
+                "ConditionallyAccept"
+            )
+            assert result["ActionAcknowledgementRequirements"][action] == {
+                "RequiresCcrAcknowledgement": expected_acceptance and requires_ccr,
+                "RequiresMaterialAcknowledgement": (
+                    expected_acceptance and requires_material
+                ),
+            }
+
+    def test_later_safe_skipped_material_allows_conditional_recommended_date(self):
+        result = self._recommendation(
+            capacity="LaterSafeDate",
+            material="SkippedPendingConfirmation",
+            threshold_state="ApprovedWithin",
+        )
+
+        assert result["AllowedActions"] == [
+            "ConditionallyAcceptRecommendedDate",
+            "Reevaluate",
+            "Reject",
+        ]
+
+    def test_later_safe_reference_fallback_requires_ccr_acknowledgement(self):
+        result = self._recommendation(
+            capacity="LaterSafeDate",
+            material="Feasible",
+            threshold_state="ReferenceFallback",
+        )
+
+        assert result["RequiresCcrAcknowledgement"] is True
+        assert result["ActionAcknowledgementRequirements"][
+            "AcceptRecommendedDate"
+        ]["RequiresCcrAcknowledgement"] is True
+
+    def test_later_safe_approved_threshold_exceeded_requires_ccr_acknowledgement(
+        self,
+    ):
+        result = self._recommendation(
+            capacity="LaterSafeDate",
+            material="Feasible",
+            threshold_state="ApprovedExceeded",
+        )
+
+        assert result["RequiresCcrAcknowledgement"] is True
+        assert result["ActionAcknowledgementRequirements"][
+            "AcceptRecommendedDate"
+        ]["RequiresCcrAcknowledgement"] is True
+
+    def test_later_safe_insufficient_material_has_no_acceptance_action(self):
+        result = self._recommendation(
+            capacity="LaterSafeDate",
+            material="EvidenceInsufficient",
+            threshold_state="ApprovedWithin",
+        )
+
+        assert result["AllowedActions"] == ["Reevaluate", "Reject"]
+
+    @pytest.mark.parametrize(
+        ("capacity", "material"),
+        [
+            (capacity, material)
+            for capacity in ("NotAssessable", "OnTime", "LaterSafeDate")
+            for material in (
+                "Feasible",
+                "SkippedPendingConfirmation",
+                "EvidenceInsufficient",
+                "Shortage",
+            )
+        ],
+    )
+    def test_every_reference_fallback_sets_ccr_acknowledgement(
+        self,
+        capacity: str,
+        material: str,
+    ):
+        result = self._recommendation(
+            capacity=capacity,
+            material=material,
+            threshold_state="ReferenceFallback",
+        )
+
+        assert result["RequiresCcrAcknowledgement"] is True
+
+    @pytest.mark.parametrize(
+        ("capacity", "threshold_state"),
+        [
+            (capacity, threshold_state)
+            for capacity in ("NotAssessable", "OnTime", "LaterSafeDate")
+            for threshold_state in (
+                "ApprovedWithin",
+                "ApprovedExceeded",
+                "ReferenceFallback",
+            )
+        ],
+    )
+    def test_every_skipped_material_row_sets_material_acknowledgement(
+        self,
+        capacity: str,
+        threshold_state: str,
+    ):
+        result = self._recommendation(
+            capacity=capacity,
+            material="SkippedPendingConfirmation",
+            threshold_state=threshold_state,
+        )
+
+        assert result["RequiresMaterialAcknowledgement"] is True

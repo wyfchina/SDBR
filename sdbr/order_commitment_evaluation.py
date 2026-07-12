@@ -54,6 +54,38 @@ REFERENCE_CCR_PROTECTION_POLICY = CcrProtectionPolicy(
 
 ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES = 60
 
+ACCEPTANCE_DECISIONS = frozenset(
+    {
+        "AcceptRequestedDate",
+        "ConditionallyAcceptRequestedDate",
+        "AcceptRecommendedDate",
+        "ConditionallyAcceptRecommendedDate",
+    }
+)
+
+ACCEPTANCE_ACTION_CONTEXT = {
+    "AcceptRequestedDate": (
+        "OnTime",
+        "Feasible",
+        "RequestedDateAssessment",
+    ),
+    "ConditionallyAcceptRequestedDate": (
+        "OnTime",
+        "SkippedPendingConfirmation",
+        "RequestedDateAssessment",
+    ),
+    "AcceptRecommendedDate": (
+        "LaterSafeDate",
+        "Feasible",
+        "EarliestSafeAssessment",
+    ),
+    "ConditionallyAcceptRecommendedDate": (
+        "LaterSafeDate",
+        "SkippedPendingConfirmation",
+        "EarliestSafeAssessment",
+    ),
+}
+
 
 def require_aware(value: datetime, field: str) -> datetime:
     if not isinstance(value, datetime):
@@ -600,4 +632,112 @@ def evaluate_mto_material_availability(
         "AllocationRequests": allocation_requests,
         "PendingRequirements": [],
         "Issues": [],
+    }
+
+
+def action_acknowledgement_requirements(
+    *,
+    action: str,
+    requires_ccr_acknowledgement: bool,
+    requires_material_acknowledgement: bool,
+) -> dict[str, bool]:
+    is_acceptance = action in ACCEPTANCE_DECISIONS
+    return {
+        "RequiresCcrAcknowledgement": (
+            is_acceptance and requires_ccr_acknowledgement
+        ),
+        "RequiresMaterialAcknowledgement": (
+            is_acceptance and requires_material_acknowledgement
+        ),
+    }
+
+
+def build_order_commitment_recommendation(
+    *,
+    shadow_schedule: Mapping[str, object],
+    material_assessment: Mapping[str, object],
+    protection_policy: CcrProtectionPolicy,
+) -> dict[str, object]:
+    """Map frozen capacity/material evidence to a planner decision request."""
+    capacity = shadow_schedule["Status"]
+    material = material_assessment["Status"]
+    selected = shadow_schedule.get("SelectedAssessment") or {}
+    threshold_state = (
+        "ReferenceFallback"
+        if protection_policy.source == "ReferenceFallback"
+        else "ApprovedExceeded"
+        if bool(selected.get("ThresholdExceeded"))
+        else "ApprovedWithin"
+    )
+    requires_ccr = threshold_state in {
+        "ReferenceFallback",
+        "ApprovedExceeded",
+    }
+    requires_material = material == "SkippedPendingConfirmation"
+
+    if capacity == "NotAssessable":
+        decision, actions = "DoNotRecommendAccept", ["Reevaluate", "Reject"]
+    elif material == "EvidenceInsufficient":
+        decision, actions = "MaterialEvidenceRequired", ["Reevaluate", "Reject"]
+    elif material == "Shortage":
+        decision, actions = "DoNotRecommendAccept", ["Reevaluate", "Reject"]
+    elif capacity == "OnTime" and material == "Feasible":
+        decision = (
+            "RecommendAccept"
+            if threshold_state == "ApprovedWithin"
+            else "PlannerConfirmationRequired"
+        )
+        actions = ["AcceptRequestedDate", "Reevaluate", "Reject"]
+    elif capacity == "OnTime" and material == "SkippedPendingConfirmation":
+        decision = (
+            "CapacityAcceptableMaterialPending"
+            if threshold_state == "ApprovedWithin"
+            else "PlannerConfirmationRequired"
+        )
+        actions = [
+            "ConditionallyAcceptRequestedDate",
+            "Reevaluate",
+            "Reject",
+        ]
+    elif capacity == "LaterSafeDate" and material == "Feasible":
+        decision = (
+            "RecommendLaterPromise"
+            if threshold_state == "ApprovedWithin"
+            else "PlannerConfirmationRequired"
+        )
+        actions = ["AcceptRecommendedDate", "Reevaluate", "Reject"]
+    elif (
+        capacity == "LaterSafeDate"
+        and material == "SkippedPendingConfirmation"
+    ):
+        decision = (
+            "RecommendLaterPromise"
+            if threshold_state == "ApprovedWithin"
+            else "PlannerConfirmationRequired"
+        )
+        actions = [
+            "ConditionallyAcceptRecommendedDate",
+            "Reevaluate",
+            "Reject",
+        ]
+    else:
+        raise OrderCommitmentConflict(
+            f"Unsupported recommendation state: {capacity}/{material}."
+        )
+
+    return {
+        "Decision": decision,
+        "AllowedActions": actions,
+        "ThresholdState": threshold_state,
+        "RequiresPlannerDecision": True,
+        "RequiresCcrAcknowledgement": requires_ccr,
+        "RequiresMaterialAcknowledgement": requires_material,
+        "ActionAcknowledgementRequirements": {
+            action: action_acknowledgement_requirements(
+                action=action,
+                requires_ccr_acknowledgement=requires_ccr,
+                requires_material_acknowledgement=requires_material,
+            )
+            for action in actions
+        },
     }

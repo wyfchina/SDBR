@@ -1378,9 +1378,12 @@ def create_app(
             persistence_snapshot = active_store.snapshot_state()
             try:
                 response = await call_next_after_downstream_completion()
-                if response.status_code < 400 or getattr(
-                    request.state, "persist_workbench_write", False
-                ):
+                if (
+                    response.status_code < 400
+                    and not getattr(
+                        request.state, "skip_workbench_persistence", False
+                    )
+                ) or getattr(request.state, "persist_workbench_write", False):
                     try:
                         active_store.save()
                     except StateStoreRevisionConflict as error:
@@ -2510,6 +2513,243 @@ def create_app(
                 **test_case_catalog_payload(),
                 "Environment": active_environment.to_dict(),
             },
+        }
+
+    def _order_commitment_row(
+        evaluation: Mapping[str, object],
+    ) -> dict[str, object]:
+        workbench = build_order_commitment_workbench(
+            evaluations=[deepcopy(dict(evaluation))],
+            demand_commitments=planning_demand_commitments,
+            reservation_batches=planning_reservation_batches,
+        )
+        return deepcopy(workbench["Rows"][0])
+
+    def _order_commitment_boundary() -> dict[str, object]:
+        return {
+            "RecommendationOnly": True,
+            "ExternalOrderAcceptance": "NotPerformed",
+            "PlanningRunCreation": "NotPerformed",
+            "ProductionMutation": "NotPerformed",
+            "ReleaseMaterialGateStillRequired": True,
+        }
+
+    def _append_order_commitment_event(
+        *,
+        evaluation: Mapping[str, object],
+        event_type: str,
+        actor_id: str,
+        occurred_at: datetime,
+        decision_id: str | None = None,
+        reservation_batch_id: str | None = None,
+        causation_id: str,
+        details: Mapping[str, object],
+    ) -> dict[str, object]:
+        safe_details = {
+            key: deepcopy(value)
+            for key, value in details.items()
+            if key in SAFE_AUDIT_DETAIL_FIELDS
+        }
+        identity = {
+            "EvaluationID": evaluation["EvaluationID"],
+            "EventType": event_type,
+            "DecisionID": decision_id,
+            "ReservationBatchID": reservation_batch_id,
+            "CausationID": causation_id,
+        }
+        order = evaluation["Order"]
+        event = {
+            "EventID": "OCEV-" + sha256(
+                canonical_json(identity).encode("utf-8")
+            ).hexdigest()[:20],
+            "EventType": event_type,
+            "EvaluationID": evaluation["EvaluationID"],
+            "OccurredAt": occurred_at.isoformat(),
+            "ActorID": actor_id,
+            "TraceID": order["TraceID"],
+            "CausationID": causation_id,
+            "CorrelationID": order["LogicalOrderKey"],
+            "DecisionID": decision_id,
+            "ReservationBatchID": reservation_batch_id,
+            "Details": safe_details,
+        }
+        existing = next(
+            (
+                row
+                for row in order_commitment_events
+                if row.get("EventID") == event["EventID"]
+            ),
+            None,
+        )
+        if existing is None:
+            order_commitment_events.append(event)
+        elif canonical_fingerprint(existing) != canonical_fingerprint(event):
+            raise OrderCommitmentConflict(
+                "Order commitment event identity/content conflict."
+            )
+        return event
+
+    @app.post("/planner/workbench/order-commitments/intake")
+    def planner_workbench_order_commitment_intake(
+        payload: MtoOrderCommitmentIntakePayload,
+        request: Request,
+    ):
+        endpoint = "/planner/workbench/order-commitments/intake"
+        order = normalize_mto_order(_mto_order_from_payload(payload))
+        try:
+            replay = exact_order_commitment_intake_replay(
+                evaluations=order_commitment_evaluations,
+                order=order,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=str(error),
+                message=str(error),
+            )
+        if replay is not None:
+            request.state.skip_workbench_persistence = True
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "RegistrationStatus": "Duplicate",
+                    "Evaluation": _order_commitment_row(replay),
+                    "Boundary": _order_commitment_boundary(),
+                },
+            }
+
+        evaluated_at = server_utc_now()
+        actor_id = _effective_actor_id(request, order["SourceSystem"])
+        candidate = _build_order_commitment_evaluation_from_state(
+            endpoint=endpoint,
+            order=order,
+            evaluated_at=evaluated_at,
+            check_material_availability=True,
+            material_check_skip_reason=None,
+            requested_operational_state_snapshot_id=(
+                payload.OperationalStateSnapshotID
+            ),
+        )
+        if isinstance(candidate, JSONResponse):
+            return candidate
+        registration, persisted = register_order_commitment_evaluation(
+            order_commitment_evaluations, candidate
+        )
+        if registration == "Created":
+            superseded = supersede_open_order_commitment_evaluations(
+                evaluations=order_commitment_evaluations,
+                candidate=persisted,
+                superseded_at=evaluated_at,
+            )
+            for superseded_id, superseded_row in superseded.items():
+                order_commitment_evaluations[superseded_id] = deepcopy(
+                    superseded_row
+                )
+                _append_order_commitment_event(
+                    evaluation=superseded_row,
+                    event_type="OrderCommitmentEvaluationSuperseded",
+                    actor_id=actor_id,
+                    occurred_at=evaluated_at,
+                    causation_id=persisted["EvaluationID"],
+                    details={
+                        "FromStatus": "AwaitingPlannerDecision",
+                        "ToStatus": "Superseded",
+                        "SupersededByEvaluationID": persisted["EvaluationID"],
+                    },
+                )
+            order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+                persisted
+            )
+            _append_order_commitment_event(
+                evaluation=persisted,
+                event_type="OrderCommitmentEvaluated",
+                actor_id=actor_id,
+                occurred_at=evaluated_at,
+                causation_id=persisted["Order"]["OrderKey"],
+                details={
+                    "ToStatus": "AwaitingPlannerDecision",
+                    "Recommendation": persisted["Recommendation"]["Decision"],
+                    "MaterialCheckEnabled": True,
+                    "MaterialEvidenceFreshnessStatus": persisted[
+                        "MaterialAssessment"
+                    ]["OperationalStateFreshnessStatus"],
+                },
+            )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "RegistrationStatus": registration,
+                "Evaluation": _order_commitment_row(persisted),
+                "Boundary": _order_commitment_boundary(),
+            },
+        }
+
+    @app.get("/planner/workbench/order-commitments/workbench")
+    def planner_workbench_order_commitment_workbench() -> dict[str, object]:
+        return {
+            "Endpoint": "/planner/workbench/order-commitments/workbench",
+            "StatusCode": 200,
+            "Data": build_order_commitment_workbench(
+                evaluations=deepcopy(list(order_commitment_evaluations.values())),
+                demand_commitments=deepcopy(planning_demand_commitments),
+                reservation_batches=deepcopy(planning_reservation_batches),
+            ),
+        }
+
+    @app.get("/planner/workbench/order-commitments/{evaluation_id}")
+    def planner_workbench_order_commitment_detail(
+        evaluation_id: str,
+    ):
+        endpoint = f"/planner/workbench/order-commitments/{evaluation_id}"
+        evaluation = order_commitment_evaluations.get(evaluation_id)
+        if evaluation is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        decision = evaluation.get("Decision")
+        decision = decision if isinstance(decision, Mapping) else {}
+        demand_id = decision.get("DemandCommitmentID")
+        batch_id = decision.get("ReservationBatchID")
+        demand = planning_demand_commitments.get(str(demand_id))
+        batch = planning_reservation_batches.get(str(batch_id))
+        if demand is None:
+            demand = next(
+                (
+                    row
+                    for row in planning_demand_commitments.values()
+                    if row.get("OrderCommitmentEvaluationID") == evaluation_id
+                ),
+                None,
+            )
+        if batch is None:
+            batch = next(
+                (
+                    row
+                    for row in planning_reservation_batches.values()
+                    if row.get("OrderCommitmentEvaluationID") == evaluation_id
+                ),
+                None,
+            )
+        events = [
+            deepcopy(event)
+            for event in order_commitment_events
+            if event.get("EvaluationID") == evaluation_id
+        ]
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": build_order_commitment_detail(
+                evaluation=deepcopy(evaluation),
+                events=events,
+                demand_commitment=deepcopy(demand) if demand is not None else None,
+                reservation_batch=deepcopy(batch) if batch is not None else None,
+            ),
         }
 
     @app.get("/planner/workbench/test-data/acceptance")

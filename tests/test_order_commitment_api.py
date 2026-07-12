@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sdbr import api
 from sdbr.operational_state import OperationalStateSnapshot
 from sdbr.order_commitment_evaluation import normalize_mto_order
+from sdbr.order_commitment_view import DETAIL_FIELDS, ORDER_COMMITMENT_ROW_FIELDS
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import seed_mto_order_commitment_fixture
 
@@ -32,6 +33,27 @@ def _order_commitment_store(
 def _intake_payload() -> dict[str, object]:
     _, fixture = _order_commitment_store()
     return deepcopy(fixture["IntakePayloadTemplate"])
+
+
+def _order_commitment_client(
+    now: datetime = MTO_FIXTURE_TIME,
+) -> tuple[TestClient, WorkbenchStateStore, dict[str, object]]:
+    store, fixture = _order_commitment_store(now)
+    return (
+        TestClient(
+            api.create_app(
+                state_store=store,
+                require_auth=True,
+                utc_now=lambda: now,
+            )
+        ),
+        store,
+        fixture,
+    )
+
+
+def _planner_headers() -> dict[str, str]:
+    return {"X-Actor-ID": "planner-task17", "X-Actor-Role": "Planner"}
 
 
 def _auth_request(method: str, role: str) -> Request:
@@ -459,3 +481,176 @@ class TestOrderCommitmentApiOrchestration:
             "Code": "CALENDAR_TIMEZONE_REQUIRED",
             "Message": "A calendar timezone is required for MTO shadow capacity.",
         }]
+
+
+class TestOrderCommitmentApiIntakeAndReads:
+    """BE-SDBR-010: idempotent MTO intake and sanitized read boundaries."""
+
+    def test_intake_automatically_evaluates_with_material_check_enabled(self):
+        client, store, fixture = _order_commitment_client()
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["Data"]["RegistrationStatus"] == "Created"
+        evaluation_id = payload["Data"]["Evaluation"]["EvaluationID"]
+        assert store.order_commitment_evaluations[evaluation_id][
+            "MaterialAssessment"
+        ]["CheckEnabled"] is True
+        assert store.order_commitment_events[0]["ActorID"] == "planner-task17"
+        assert payload["Data"]["Boundary"] == {
+            "RecommendationOnly": True,
+            "ExternalOrderAcceptance": "NotPerformed",
+            "PlanningRunCreation": "NotPerformed",
+            "ProductionMutation": "NotPerformed",
+            "ReleaseMaterialGateStillRequired": True,
+        }
+
+    def test_duplicate_intake_returns_same_evaluation_and_one_event(self):
+        client, store, fixture = _order_commitment_client()
+
+        first = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        revision_after_first = first.headers["X-Workbench-Revision"]
+        duplicate = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+
+        assert duplicate.status_code == 200
+        assert duplicate.json()["Data"]["RegistrationStatus"] == "Duplicate"
+        assert duplicate.json()["Data"]["Evaluation"]["EvaluationID"] == (
+            first.json()["Data"]["Evaluation"]["EvaluationID"]
+        )
+        assert len(store.order_commitment_evaluations) == 1
+        assert len(store.order_commitment_events) == 1
+        assert duplicate.headers["X-Workbench-Revision"] == revision_after_first
+
+    def test_intake_with_stale_evidence_has_no_acceptance_action(self):
+        client, store, fixture = _order_commitment_client()
+        current = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        stale_id = "TST-MTO-OPS-STALE-INTAKE"
+        store.operational_state_snapshots[stale_id] = OperationalStateSnapshot(
+            snapshot_id=stale_id,
+            captured_at=MTO_FIXTURE_TIME - timedelta(minutes=61),
+            inventory_buffers=current.inventory_buffers,
+            material_availability=current.material_availability,
+            wip_limits=current.wip_limits,
+        )
+        payload = deepcopy(fixture["IntakePayloadTemplate"])
+        payload["OperationalStateSnapshotID"] = stale_id
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=payload,
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        row = response.json()["Data"]["Evaluation"]
+        assert row["MaterialStatus"] == "EvidenceInsufficient"
+        assert not any(action.startswith("Accept") for action in row["AllowedActions"])
+
+    def test_intake_malformed_route_persists_do_not_recommend_with_issue(self):
+        client, store, fixture = _order_commitment_client()
+        master = store.master_data_versions[fixture["MasterDataVersionID"]]
+        master["Routings"] = []
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        row = response.json()["Data"]["Evaluation"]
+        assert row["Recommendation"] == "DoNotRecommendAccept"
+        evaluation = store.order_commitment_evaluations[row["EvaluationID"]]
+        assert evaluation["ShadowSchedule"]["Issues"] == [{
+            "Code": "ROUTING_NOT_PRIMARY_OR_AMBIGUOUS",
+            "Message": "Exactly one matching primary route is required.",
+        }]
+
+    def test_workbench_and_detail_return_exact_sanitized_contract_and_revision(self):
+        client, _, fixture = _order_commitment_client()
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+
+        workbench = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        )
+        detail = client.get(
+            f"/planner/workbench/order-commitments/{evaluation_id}",
+            headers=_planner_headers(),
+        )
+
+        assert workbench.status_code == 200
+        assert detail.status_code == 200
+        assert set(workbench.json()["Data"]["Rows"][0]) == set(
+            ORDER_COMMITMENT_ROW_FIELDS
+        )
+        assert set(detail.json()["Data"]) == set(DETAIL_FIELDS)
+        assert "OrderContentFingerprint" not in detail.json()["Data"]["Order"]
+        assert workbench.headers["X-Workbench-Revision"] == detail.headers[
+            "X-Workbench-Revision"
+        ]
+
+    def test_unknown_detail_returns_order_commitment_not_found(self):
+        client, _, _ = _order_commitment_client()
+
+        response = client.get(
+            "/planner/workbench/order-commitments/OCE-NOT-FOUND",
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 404
+        assert response.json()["Data"]["Status"] == (
+            "OrderCommitmentEvaluationNotFound"
+        )
+
+    def test_intake_creates_no_phase0_or_planning_run_objects(self):
+        client, store, fixture = _order_commitment_client()
+        before = {
+            "PlanningRuns": deepcopy(store.planning_runs),
+            "PlanningDemandCommitments": deepcopy(store.planning_demand_commitments),
+            "PlanningReservationBatches": deepcopy(store.planning_reservation_batches),
+            "CcrCapacityReservations": deepcopy(store.ccr_capacity_reservations),
+            "MaterialPlanningAllocations": deepcopy(store.material_planning_allocations),
+            "PlanningReservationEvents": deepcopy(store.planning_reservation_events),
+        }
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        assert store.planning_runs == before["PlanningRuns"]
+        assert store.planning_demand_commitments == before["PlanningDemandCommitments"]
+        assert store.planning_reservation_batches == before[
+            "PlanningReservationBatches"
+        ]
+        assert store.ccr_capacity_reservations == before["CcrCapacityReservations"]
+        assert store.material_planning_allocations == before[
+            "MaterialPlanningAllocations"
+        ]
+        assert store.planning_reservation_events == before[
+            "PlanningReservationEvents"
+        ]

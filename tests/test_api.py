@@ -5826,7 +5826,7 @@ def test_planner_workbench_page_returns_semantic_application_shell():
     assert 'value="en"' in html
     assert "需求驱动计划员工作台" in html
     assert (
-        'href="/planner/assets/planner-workbench.css?v=20260711-mto-order-commitment"'
+        'href="/planner/assets/planner-workbench.css?v=20260712-p1-integration"'
         in html
     )
     assert "/mock-operational-state-refresh" in script
@@ -6461,7 +6461,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260711-mto-order-commitment"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260712-p1-integration"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 

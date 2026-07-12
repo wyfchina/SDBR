@@ -22,7 +22,7 @@ from sdbr.order_commitment_evaluation import (
 )
 from sdbr.order_commitment_view import DETAIL_FIELDS, ORDER_COMMITMENT_ROW_FIELDS
 from sdbr.state_store import WorkbenchStateStore
-from sdbr.test_data import seed_mto_order_commitment_fixture
+from sdbr.test_data import seed_baseline_test_data, seed_mto_order_commitment_fixture
 
 
 MTO_FIXTURE_TIME = datetime(2026, 7, 12, 8, tzinfo=timezone.utc)
@@ -1082,6 +1082,67 @@ class TestOrderCommitmentApiReevaluation:
         )
         assert intake.status_code == 200
         return intake.json()["Data"]["Evaluation"]["EvaluationID"]
+
+    def test_acceptance_reset_all_removes_mto_evaluation_before_list_and_reevaluation(
+        self,
+    ):
+        # BE-DATA-014 / BE-SDBR-010 / BE-DDMRP-007
+        store = WorkbenchStateStore()
+        seed_baseline_test_data(store)
+        fixture = seed_mto_order_commitment_fixture(
+            store,
+            captured_at=MTO_FIXTURE_TIME,
+        )
+        client = TestClient(
+            api.create_app(
+                state_store=store,
+                require_auth=True,
+                utc_now=lambda: MTO_FIXTURE_TIME,
+            )
+        )
+        source_id = self._intake_open_evaluation(client, fixture)
+        assert store.order_commitment_events
+
+        reset = client.post("/planner/workbench/test-data/acceptance/reset")
+        workbench = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        )
+        reevaluation = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={"RequestedBy": "planner-after-acceptance-reset"},
+            headers=_planner_headers(),
+        )
+
+        expected = WorkbenchStateStore()
+        seed_baseline_test_data(expected)
+        assert reset.status_code == 200
+        assert workbench.status_code == 200
+        assert workbench.json()["Data"]["Rows"] == []
+        assert reevaluation.status_code == 404
+        assert reevaluation.json()["Data"]["Status"] == (
+            "OrderCommitmentEvaluationNotFound"
+        )
+        assert store.order_commitment_evaluations == {}
+        assert store.order_commitment_events == []
+        assert store.planning_demand_commitments == {}
+        assert store.planning_reservation_batches == {}
+        assert store.ccr_capacity_reservations == {}
+        assert store.material_planning_allocations == {}
+        assert store.planning_reservation_events == []
+        assert store.processed_planning_event_keys == set()
+        assert store.ddmrp_evaluation_runs == expected.ddmrp_evaluation_runs
+        assert store.ddmrp_evaluation_rows == expected.ddmrp_evaluation_rows
+        assert store.ddmrp_replenishment_chains == expected.ddmrp_replenishment_chains
+        assert (
+            store.ddmrp_replenishment_recommendations
+            == expected.ddmrp_replenishment_recommendations
+        )
+        assert store.ddmrp_replenishment_events == expected.ddmrp_replenishment_events
+        assert (
+            store.ddmrp_evaluation_request_results
+            == expected.ddmrp_evaluation_request_results
+        )
 
     def test_reevaluation_defaults_material_check_on_and_selects_new_latest_snapshot(self):
         client, store, fixture = _order_commitment_client()

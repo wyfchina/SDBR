@@ -1863,20 +1863,47 @@ def _pending_run_record(
 
 
 def _clear_store(store: WorkbenchStateStore) -> None:
-    store.execution_events.clear()
-    store.replan_requests.clear()
-    store.replan_schedule_snapshots.clear()
-    store.release_authorizations.clear()
-    store.operational_state_snapshots.clear()
-    store.release_decision_packages.clear()
-    store.dbr_release_policies.clear()
-    store.calendar_overrides.clear()
-    store.scheduling_strategy_versions.clear()
-    store.integration_messages.clear()
-    store.test_case_acceptance_decisions.clear()
-    store.master_data_versions.clear()
-    store.planning_runs.clear()
-    store.audit_events.clear()
+    collection_names = (
+        "execution_events",
+        "replan_requests",
+        "replan_schedule_snapshots",
+        "release_authorizations",
+        "operational_state_snapshots",
+        "release_decision_packages",
+        "dbr_release_policies",
+        "calendar_overrides",
+        "scheduling_strategy_versions",
+        "integration_messages",
+        "test_case_acceptance_decisions",
+        "ddmrp_decoupling_points",
+        "ddmrp_demand_signals",
+        "ddmrp_open_supply",
+        "ddmrp_evaluation_runs",
+        "ddmrp_evaluation_rows",
+        "ddmrp_replenishment_chains",
+        "ddmrp_replenishment_recommendations",
+        "ddmrp_replenishment_events",
+        "ddmrp_active_replenishment_graphs",
+        "ddmrp_evaluation_request_results",
+        "master_data_versions",
+        "planning_runs",
+        "planning_demand_commitments",
+        "planning_reservation_batches",
+        "ccr_capacity_reservations",
+        "material_planning_allocations",
+        "order_commitment_evaluations",
+        "order_commitment_events",
+        "planning_reservation_events",
+        "processed_planning_event_keys",
+        "audit_events",
+    )
+    snapshot = store.snapshot_state()
+    try:
+        for name in collection_names:
+            getattr(store, name).clear()
+    except BaseException:
+        store.restore_state(snapshot)
+        raise
 
 
 def _resources_to_dict(resources: list[Resource]) -> list[dict[str, object]]:

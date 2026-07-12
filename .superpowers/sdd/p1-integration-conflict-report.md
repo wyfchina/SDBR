@@ -57,3 +57,28 @@ Specifications: `BE-SDBR-010`, `BE-DDMRP-007`, `UI-COMMIT-001`, `UI-DDMRP-003`, 
 - Repository-local `.tmp` is not a reliable pytest basetemp in this environment; repeatable integration runs should continue to use a fresh system-temporary path.
 - The existing Starlette/httpx deprecation warning remains unresolved and is unrelated to this merge.
 - `BE-SDBR-010` remains partial, `UI-COMMIT-001` and `UI-DDMRP-003` still require explicit user confirmation, and DDMRP Buy/Make activation remains deferred behind its contract gate.
+
+## Post-Merge Narrow Integration Fix - 2026-07-12
+
+Specifications: `BE-DATA-014`, `BE-SDBR-010`, `BE-DDMRP-007`, `UI-COMMIT-001`, `UI-DDMRP-003`
+
+### Reset Consistency
+
+- Root cause: the test-data `_clear_store()` collection list predated the MTO, DDMRP evaluation, and shared Phase 0 ledgers. An all-cases acceptance reset rebuilt baseline runs but retained MTO evaluations that referenced the removed MTO baseline run.
+- `_clear_store()` now snapshots the complete store before clearing its reset collections. A clear failure restores the snapshot, so MTO, DDMRP, and shared Phase 0 ledger groups cannot be left partially cleared.
+- The reset clears MTO evaluations/events, DDMRP runtime and immutable evaluation ledgers, and shared demand/reservation/capacity/material/event ledgers before rebuilding the controlled baseline DDMRP fixture.
+- The cross-regression creates an MTO evaluation, executes the all-cases acceptance reset, verifies an empty MTO list, verifies re-evaluation returns `OrderCommitmentEvaluationNotFound`, and compares the rebuilt DDMRP immutable ledgers with a fresh baseline store.
+
+### Static Asset Version
+
+- Updated both planner CSS and JavaScript cache-busting URLs to `20260712-p1-integration`.
+- Updated the semantic shell and calendar static-contract assertions to require the same integration key.
+
+### Verification
+
+- RED: the new cross-regression failed because the post-reset MTO workbench retained one row.
+- GREEN targeted selection: 6 passed, 1 existing `StarletteDeprecationWarning` in 7.49s.
+- Full repository suite: 1224 passed, 1 existing `StarletteDeprecationWarning` in 153.81s.
+- `python -m compileall -q sdbr tests`: exit 0.
+- Bundled Node `--check sdbr/web/planner-workbench.js`: exit 0.
+- No service was started, and no business capability or authority boundary changed.

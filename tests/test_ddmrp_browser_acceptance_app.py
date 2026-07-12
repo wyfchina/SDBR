@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
+from importlib import import_module
 
 import pytest
 from fastapi.testclient import TestClient
+from uvicorn.importer import import_from_string
 
 from sdbr.api import create_app
 from sdbr.ddmrp_replenishment_view import build_ddmrp_replenishment_workbench
@@ -16,6 +16,9 @@ from sdbr.test_data import reset_test_database
 
 
 DDMRP_WORKBENCH_ENDPOINT = "/planner/workbench/ddmrp/workbench"
+DDMRP_RUNTIME_FACTORY_TARGET = (
+    "tests.ddmrp_browser_acceptance_app:create_runtime_app"
+)
 _EMPTY_WORKBENCH_KEYS = {
     "Evaluation",
     "Summary",
@@ -39,12 +42,7 @@ def _acceptance_client(tmp_path):
 
 
 def _acceptance_fixture_module():
-    fixture_path = Path(__file__).with_name("ddmrp_browser_acceptance_app.py")
-    spec = spec_from_file_location("ddmrp_browser_acceptance_app", fixture_path)
-    assert spec is not None and spec.loader is not None
-    fixture_module = module_from_spec(spec)
-    spec.loader.exec_module(fixture_module)
-    return fixture_module
+    return import_module("tests.ddmrp_browser_acceptance_app")
 
 
 @pytest.mark.parametrize(
@@ -148,3 +146,20 @@ def test_ui_ddmrp_003_browser_acceptance_fixture_is_absent_from_production_app(
         {"seeded", "empty", "error", "403", "409"}
     )
     assert response.status_code == 404
+
+
+def test_ui_ddmrp_003_runtime_factory_target_is_importable_and_starts(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "ddmrp-browser-runtime-factory.db"
+    reset_test_database(database_path=database_path)
+    monkeypatch.setenv("SDBR_ENVIRONMENT", "test")
+    monkeypatch.setenv("SDBR_WORKBENCH_DB_PATH", str(database_path))
+
+    runtime_factory = import_from_string(DDMRP_RUNTIME_FACTORY_TARGET)
+    runtime_client = TestClient(runtime_factory())
+
+    response = runtime_client.get("/planner/workbench/state-store/health")
+
+    assert response.status_code == 200

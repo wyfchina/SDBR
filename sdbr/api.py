@@ -2932,6 +2932,55 @@ def create_app(
                 },
             }
         if payload.Decision != "Reject":
+            material = evaluation["MaterialAssessment"]
+            requested_snapshot_id = (
+                material.get("RequestedOperationalStateSnapshotID")
+                if material["SnapshotSelectionMode"] == "Explicit"
+                else None
+            )
+            current = _build_order_commitment_evaluation_from_state(
+                endpoint=endpoint,
+                order=evaluation["Order"],
+                evaluated_at=decision_at,
+                check_material_availability=material["CheckEnabled"],
+                material_check_skip_reason=material.get("SkipReason"),
+                requested_operational_state_snapshot_id=requested_snapshot_id,
+            )
+            if isinstance(current, JSONResponse):
+                return current
+            current_facts = canonical_order_commitment_decision_facts(current)
+            stale = any((
+                current["DecisionStalenessBasisFingerprint"]
+                != evaluation["DecisionStalenessBasisFingerprint"],
+                current_facts != evaluation["DecisionFacts"],
+                canonical_fingerprint(current_facts)
+                != evaluation["DecisionFactsFingerprint"],
+                current["OrderContentFingerprint"]
+                != evaluation["OrderContentFingerprint"],
+                current["ProtectionPolicy"] != evaluation["ProtectionPolicy"],
+                current["ShadowSchedule"]["Algorithm"]
+                != evaluation["ShadowSchedule"]["Algorithm"],
+                current["MaterialAssessment"]["CheckEnabled"]
+                != material["CheckEnabled"],
+                current["MaterialAssessment"].get("SkipReason")
+                != material.get("SkipReason"),
+            ))
+            if stale:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 409,
+                        "Data": {
+                            "Status": "OrderCommitmentEvaluationStale",
+                            "EvaluationID": evaluation_id,
+                            "Message": (
+                                "Relevant capacity, material, schedule, calendar, "
+                                "configuration, release, or snapshot evidence changed."
+                            ),
+                        },
+                    },
+                )
             return _order_commitment_error(
                 endpoint=endpoint,
                 status_code=409,

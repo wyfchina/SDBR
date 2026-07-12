@@ -1406,3 +1406,377 @@ class TestOrderCommitmentApiDecisionReplay:
         event = store.order_commitment_events[-1]
         assert decision["DecidedBy"] == event["ActorID"] == "planner-task17"
         assert decision["DecidedAt"] == event["OccurredAt"] == MTO_FIXTURE_TIME.isoformat()
+
+
+class TestOrderCommitmentApiStaleness:
+    """BE-SDBR-008 through BE-SDBR-010: acceptance uses exact current facts."""
+
+    @staticmethod
+    def _fixture(
+        *,
+        explicit_snapshot: bool = True,
+    ) -> tuple[
+        TestClient,
+        WorkbenchStateStore,
+        dict[str, object],
+        list[datetime],
+        str,
+    ]:
+        clock = [MTO_FIXTURE_TIME]
+        store, fixture = _order_commitment_store(clock[0])
+        client = TestClient(api.create_app(
+            state_store=store,
+            require_auth=True,
+            utc_now=lambda: clock[0],
+        ))
+        payload = deepcopy(fixture["IntakePayloadTemplate"])
+        if not explicit_snapshot:
+            payload["OperationalStateSnapshotID"] = None
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=payload,
+            headers=_planner_headers(),
+        )
+        assert intake.status_code == 200
+        return (
+            client,
+            store,
+            fixture,
+            clock,
+            intake.json()["Data"]["Evaluation"]["EvaluationID"],
+        )
+
+    @staticmethod
+    def _decision_headers(client: TestClient) -> dict[str, str]:
+        return TestOrderCommitmentApiDecisionReplay._decision_headers(client)
+
+    @staticmethod
+    def _acceptance_payload(evaluation: dict[str, object]) -> dict[str, object]:
+        return _decision_payload(
+            evaluation,
+            decision_id="DEC-TST-MTO-STALE",
+            decision="AcceptRequestedDate",
+            reason="Planner requests an MTO acceptance after current-state checks.",
+            ccr_risk_acknowledged=True,
+        )
+
+    @staticmethod
+    def _capacity_request(evaluation: dict[str, object]) -> dict[str, object]:
+        request = evaluation["DecisionFacts"]["CapacityReservationRequests"][0]
+        assert request["ResourceID"] == "TST-MTO-CCR-1"
+        assert "08:00" in str(request["WindowStartAt"])
+        assert "16:00" in str(request["WindowEndAt"])
+        return request
+
+    @staticmethod
+    def _capacity_reservation(
+        request: dict[str, object],
+        capacity_reservation_id: str,
+        **overrides: object,
+    ) -> dict[str, object]:
+        return {
+            **request,
+            "CapacityReservationID": capacity_reservation_id,
+            "ReservationBatchID": "PRB-TST-MTO-OTHER",
+            "DemandCommitmentID": "DC-TST-MTO-OTHER",
+            "DemandClass": "MTO",
+            "Status": "ActivePlanReservation",
+            "RecordVersion": 1,
+            **overrides,
+        }
+
+    @staticmethod
+    def _material_allocation(
+        material_allocation_id: str,
+        **overrides: object,
+    ) -> dict[str, object]:
+        return {
+            "MaterialAllocationID": material_allocation_id,
+            "ReservationBatchID": "PRB-TST-MTO-OTHER",
+            "DemandCommitmentID": "DC-TST-MTO-OTHER",
+            "DemandClass": "MTO",
+            "ItemID": "TST-MTO-RM-1",
+            "LocationID": "TST-MAIN",
+            "AllocatedQty": 5.0,
+            "MaterialSnapshotID": "TST-MTO-OPS-CURRENT",
+            "Status": "ActivePlanReservation",
+            "RecordVersion": 1,
+            **overrides,
+        }
+
+    def _assert_stale(
+        self,
+        *,
+        client: TestClient,
+        store: WorkbenchStateStore,
+        evaluation_id: str,
+    ) -> None:
+        evaluation = deepcopy(store.order_commitment_evaluations[evaluation_id])
+        payload = self._acceptance_payload(evaluation)
+        before = _public_store_snapshot(store)
+        for _ in range(2):
+            response = client.post(
+                f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+                json=payload,
+                headers=self._decision_headers(client),
+            )
+            assert response.status_code == 409
+            assert response.json()["Data"]["Status"] == (
+                "OrderCommitmentEvaluationStale"
+            )
+            assert _public_store_snapshot(store) == before
+
+    def _assert_currently_eligible(
+        self,
+        *,
+        client: TestClient,
+        store: WorkbenchStateStore,
+        evaluation_id: str,
+    ) -> None:
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=self._acceptance_payload(
+                store.order_commitment_evaluations[evaluation_id]
+            ),
+            headers=self._decision_headers(client),
+        )
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == (
+            "OrderCommitmentDecisionNotImplemented"
+        )
+
+    def _rechecked_without_material(
+        self,
+        *,
+        client: TestClient,
+        store: WorkbenchStateStore,
+        evaluation_id: str,
+    ) -> str:
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-staleness",
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": "Capacity-only staleness test.",
+            },
+            headers=_planner_headers(),
+        )
+        assert response.status_code == 200
+        rechecked_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
+        assert store.order_commitment_evaluations[rechecked_id]["MaterialAssessment"][
+            "CheckEnabled"
+        ] is False
+        return rechecked_id
+
+    def test_exact_assessed_0800_1600_capacity_change_marks_evaluation_stale(self):
+        client, store, _, _, evaluation_id = self._fixture()
+        request = self._capacity_request(
+            store.order_commitment_evaluations[evaluation_id]
+        )
+        store.ccr_capacity_reservations["CCR-TST-MTO-STALE"] = (
+            self._capacity_reservation(request, "CCR-TST-MTO-STALE")
+        )
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_same_resource_different_window_does_not_mark_evaluation_stale(self):
+        client, store, fixture, _, evaluation_id = self._fixture()
+        request = self._capacity_request(
+            store.order_commitment_evaluations[evaluation_id]
+        )
+        _, start, end = fixture["CapacityWindowKeys"][1]
+        store.ccr_capacity_reservations["CCR-TST-MTO-OTHER-WINDOW"] = (
+            self._capacity_reservation(
+                request,
+                "CCR-TST-MTO-OTHER-WINDOW",
+                WindowStartAt=start,
+                WindowEndAt=end,
+                LatestAllowedCompletionAt=end,
+            )
+        )
+        store.save()
+
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_unrelated_resource_change_does_not_mark_evaluation_stale(self):
+        client, store, _, _, evaluation_id = self._fixture()
+        store.ccr_capacity_reservations["CCR-TST-MTO-UNRELATED"] = {
+            "CapacityReservationID": "CCR-TST-MTO-UNRELATED",
+            "ResourceID": "TST-MTO-NOT-A-CCR",
+            "WindowStartAt": "not-a-time",
+            "WindowEndAt": "still-not-a-time",
+        }
+        store.save()
+
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_relevant_requirement_item_location_change_marks_stale(self):
+        client, store, _, _, evaluation_id = self._fixture()
+        store.material_planning_allocations["MPA-TST-MTO-STALE"] = (
+            self._material_allocation("MPA-TST-MTO-STALE")
+        )
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_unrelated_item_location_change_remains_eligible_after_revision_refresh(self):
+        client, store, _, _, evaluation_id = self._fixture()
+        store.material_planning_allocations["MPA-TST-MTO-UNRELATED"] = {
+            "MaterialAllocationID": "MPA-TST-MTO-UNRELATED",
+            "ItemID": "TST-MTO-NOT-A-MATERIAL",
+            "LocationID": "TST-MTO-NOT-A-LOCATION",
+        }
+        store.save()
+
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_new_latest_snapshot_marks_latest_mode_evaluation_stale(self):
+        client, store, fixture, _, evaluation_id = self._fixture(
+            explicit_snapshot=False
+        )
+        selected = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        store.operational_state_snapshots["TST-MTO-OPS-LATEST"] = (
+            OperationalStateSnapshot(
+                snapshot_id="TST-MTO-OPS-LATEST",
+                captured_at=selected.captured_at + timedelta(minutes=1),
+                inventory_buffers=deepcopy(selected.inventory_buffers),
+                material_availability=deepcopy(selected.material_availability),
+                wip_limits=deepcopy(selected.wip_limits),
+            )
+        )
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_explicit_snapshot_remains_selected_until_its_freshness_changes(self):
+        client, store, fixture, clock, evaluation_id = self._fixture()
+        selected = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        store.operational_state_snapshots["TST-MTO-OPS-LATEST"] = (
+            OperationalStateSnapshot(
+                snapshot_id="TST-MTO-OPS-LATEST",
+                captured_at=selected.captured_at + timedelta(minutes=1),
+                inventory_buffers=deepcopy(selected.inventory_buffers),
+                material_availability=deepcopy(selected.material_availability),
+                wip_limits=deepcopy(selected.wip_limits),
+            )
+        )
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+        clock[0] = selected.captured_at + timedelta(minutes=61)
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_fresh_to_stale_time_boundary_blocks_acceptance(self):
+        client, store, fixture, clock, evaluation_id = self._fixture()
+        selected = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        clock[0] = selected.captured_at + timedelta(minutes=60)
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+        clock[0] = selected.captured_at + timedelta(minutes=61)
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_time_advance_inside_selected_window_changes_current_capacity_facts(self):
+        client, store, _, clock, evaluation_id = self._fixture()
+        evaluation_id = self._rechecked_without_material(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+        clock[0] = MTO_FIXTURE_TIME + timedelta(days=2, hours=1)
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_later_safe_window_and_promise_change_without_ledger_mutation_marks_stale(self):
+        client, store, _, clock, evaluation_id = self._fixture()
+        request = self._capacity_request(
+            store.order_commitment_evaluations[evaluation_id]
+        )
+        store.ccr_capacity_reservations["CCR-TST-MTO-LATER"] = (
+            self._capacity_reservation(
+                request,
+                "CCR-TST-MTO-LATER",
+                ReservedMinutes=300.0,
+            )
+        )
+        evaluation_id = self._rechecked_without_material(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        assert evaluation["DecisionFacts"]["CapacityStatus"] == "LaterSafeDate"
+        clock[0] = MTO_FIXTURE_TIME + timedelta(days=3, hours=1)
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_inbound_eligibility_cutoff_crossing_inside_fresh_snapshot_marks_stale(self):
+        client, store, fixture, clock, evaluation_id = self._fixture()
+        snapshot_id = fixture["OperationalStateSnapshotID"]
+        selected = store.operational_state_snapshots[snapshot_id]
+        availability = selected.material_availability[0]
+        store.operational_state_snapshots[snapshot_id] = OperationalStateSnapshot(
+            snapshot_id=snapshot_id,
+            captured_at=selected.captured_at,
+            inventory_buffers=deepcopy(selected.inventory_buffers),
+            material_availability=[
+                availability.__class__(
+                    item_id=availability.item_id,
+                    location_id=availability.location_id,
+                    allocated_qty=availability.allocated_qty,
+                    inbound_qty=5.0,
+                    inbound_available_at=MTO_FIXTURE_TIME + timedelta(
+                        days=1, minutes=10
+                    ),
+                )
+            ],
+            wip_limits=deepcopy(selected.wip_limits),
+        )
+        # Re-evaluate against the inbound cutoff without advancing freshness.
+        source = store.order_commitment_evaluations[evaluation_id]
+        reevaluation = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-staleness",
+                "OperationalStateSnapshotID": snapshot_id,
+            },
+            headers=_planner_headers(),
+        )
+        assert reevaluation.status_code == 200
+        evaluation_id = reevaluation.json()["Data"]["Evaluation"]["EvaluationID"]
+        assert source["EvaluationID"] != evaluation_id
+        clock[0] = MTO_FIXTURE_TIME + timedelta(minutes=11)
+
+        self._assert_stale(
+            client=client, store=store, evaluation_id=evaluation_id
+        )
+
+    def test_unchanged_canonical_decision_facts_allow_acceptance_despite_later_observation(self):
+        client, store, _, clock, evaluation_id = self._fixture()
+        clock[0] = MTO_FIXTURE_TIME + timedelta(minutes=1)
+
+        self._assert_currently_eligible(
+            client=client, store=store, evaluation_id=evaluation_id
+        )

@@ -2650,7 +2650,15 @@ def create_app(
         request: Request,
     ):
         endpoint = "/planner/workbench/order-commitments/intake"
-        order = normalize_mto_order(_mto_order_from_payload(payload))
+        try:
+            order = normalize_mto_order(_mto_order_from_payload(payload))
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status=error.status,
+                message=str(error),
+            )
         try:
             replay = exact_order_commitment_intake_replay(
                 evaluations=order_commitment_evaluations,

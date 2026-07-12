@@ -53,3 +53,21 @@ The five final-review findings were fixed in one wave. User confirmation remains
 2. Browser screenshots and SQLite fixtures are local `.tmp` evidence and are not committed product assets.
 3. The known Starlette/httpx deprecation warning remains unrelated to this change.
 4. Approved CCR-threshold intake and external formal-order/ERP/MES authority remain deferred by specification.
+
+## Duplicate Requirement Line Intake Fix
+
+Date: 2026-07-12
+
+Specification: `BE-SDBR-010`
+
+Scope was limited to the intake normalization boundary. Pydantic validates each material requirement row independently, while `normalize_mto_order` enforces cross-row `RequirementLineID` uniqueness. That normalization previously ran before the intake route's `OrderCommitmentConflict` handler, so a duplicate line escaped as HTTP 500.
+
+The intake route now maps normalization conflicts through the existing `_order_commitment_error` contract as HTTP 409 with `Status=OrderCommitmentConflict` and the domain message. Existing replay-conflict status semantics were left unchanged.
+
+Regression evidence:
+
+- Red: the duplicate-line endpoint test observed HTTP 500 before the route fix.
+- Focused: 19 passed, 1 known Starlette warning in 6.01s. Coverage includes duplicate-line HTTP 409 with an unchanged public store, normal intake creation, exact duplicate replay, and all 16 blank-typed intake identifier cases.
+- Full: 1100 passed, 1 known Starlette warning in 158.80s using fresh unique basetemp `.tmp/pytest-full-mto-duplicate-line-20260712-1-6f2a`.
+
+This full run also resolves the earlier report's residual that the 1099-test suite had not been rerun after the test-only indentation assertion correction. No UI, replay/revision/rollback, acceptance, authority, or specification-status behavior changed in this narrow fix.

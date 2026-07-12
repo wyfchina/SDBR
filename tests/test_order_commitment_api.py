@@ -725,6 +725,37 @@ class TestOrderCommitmentApiOrchestration:
 class TestOrderCommitmentApiIntakeAndReads:
     """BE-SDBR-010: idempotent MTO intake and sanitized read boundaries."""
 
+    def test_duplicate_material_requirement_line_returns_structured_409_without_writes(
+        self,
+    ):
+        store, fixture = _order_commitment_store()
+        client = TestClient(
+            api.create_app(
+                state_store=store,
+                require_auth=True,
+                utc_now=lambda: MTO_FIXTURE_TIME,
+            ),
+            raise_server_exceptions=False,
+        )
+        payload = deepcopy(fixture["IntakePayloadTemplate"])
+        payload["MaterialRequirements"].append(
+            deepcopy(payload["MaterialRequirements"][0])
+        )
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=payload,
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"] == {
+            "Status": "OrderCommitmentConflict",
+            "Message": "Material requirement line is duplicated.",
+        }
+        assert _public_store_snapshot(store) == before
+
     def test_intake_automatically_evaluates_with_material_check_enabled(self):
         client, store, fixture = _order_commitment_client()
 

@@ -1799,6 +1799,59 @@ class TestOrderCommitmentAcceptancePreparation:
         assert rejected["Decision"]["CcrRiskAcknowledged"] is False
         assert rejected["Decision"]["MaterialRiskAcknowledged"] is False
 
+    def test_accepted_record_rejects_decision_not_allowed_by_evaluation(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+        write_set = self._prepare(evaluation, "AcceptRequestedDate")
+
+        with pytest.raises(OrderCommitmentConflict, match="Acceptance is not allowed"):
+            order_commitment_evaluation.accepted_evaluation_record(
+                evaluation=evaluation,
+                write_set=write_set,
+                decision_id="DEC-MTO-1",
+                decision="AcceptRecommendedDate",
+                decided_by="planner-1",
+                decided_at=self.evaluated_at,
+                reason="Planner reviewed frozen evidence.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
+    def test_accepted_record_rejects_write_set_for_different_action_context(self):
+        requested_evaluation = self._evaluation_for_action("AcceptRequestedDate")
+        write_set = self._prepare(requested_evaluation, "AcceptRequestedDate")
+        recommended_evaluation = self._evaluation_for_action("AcceptRecommendedDate")
+        recommended_evaluation["EvaluationID"] = requested_evaluation["EvaluationID"]
+
+        with pytest.raises(OrderCommitmentConflict, match="write set context"):
+            order_commitment_evaluation.accepted_evaluation_record(
+                evaluation=recommended_evaluation,
+                write_set=write_set,
+                decision_id="DEC-MTO-1",
+                decision="AcceptRecommendedDate",
+                decided_by="planner-1",
+                decided_at=self.evaluated_at,
+                reason="Planner reviewed frozen evidence.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
+    def test_accepted_record_rejects_decision_id_different_from_confirmation_id(self):
+        evaluation = self._evaluation_for_action("AcceptRequestedDate")
+        write_set = self._prepare(evaluation, "AcceptRequestedDate")
+
+        with pytest.raises(OrderCommitmentConflict, match="does not match reservation batch"):
+            order_commitment_evaluation.accepted_evaluation_record(
+                evaluation=evaluation,
+                write_set=write_set,
+                decision_id="DEC-MTO-2",
+                decision="AcceptRequestedDate",
+                decided_by="planner-1",
+                decided_at=self.evaluated_at,
+                reason="Planner reviewed frozen evidence.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
     def test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context(
         self,
         monkeypatch: pytest.MonkeyPatch,

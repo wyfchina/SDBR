@@ -52,3 +52,27 @@ Reviewed the final diff against Task 11. The canonical fingerprint covers the
 required replay identity fields and excludes server observation time; the
 normalizer invocation is tested directly; acceptance preserves Phase 0-only
 authority boundaries. No blocking issue was found.
+
+## Medium Finding Remediation (2026-07-12)
+
+Applicable backend capability IDs: `BE-SDBR-006` through `BE-SDBR-010`.
+
+- `accepted_evaluation_record` now requires the supplied decision to remain in
+  the evaluation's `AllowedActions`, validates the action's frozen
+  capacity/material context, and binds the reservation write set to the same
+  evaluation ID, selected promise, and expected material commitment status.
+- The record builder also requires `decision_id` to equal the write set batch
+  `ConfirmationID`, preventing persisted evidence from claiming a different
+  decision than the Phase 0 reservation batch.
+- TDD RED evidence: the three added regressions failed before the guard was
+  implemented because each call returned an accepted record. They cover a
+  disallowed decision, a write set from a different action/context, and a
+  decision ID that differs from the batch confirmation ID.
+- GREEN evidence: `python -m pytest
+  tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation
+  -q` passed with 14 tests. Related verification passed with 192 tests:
+  `python -m pytest tests/test_order_commitment_evaluation.py
+  tests/test_planning_reservations.py tests/test_ccr_shadow_scheduler.py -q`.
+  `python -m compileall -q sdbr` and `git diff --check` also passed.
+- Scope remains Task 11 only. Task 10 fix commit `5b5b9d2` is preserved; no
+  Task 12 or later work was included.

@@ -1490,6 +1490,49 @@ def _decision_evidence(
     }
 
 
+def _assert_accepted_write_set_context(
+    *,
+    evaluation: Mapping[str, object],
+    write_set: PlanningReservationWriteSet,
+    decision_id: str,
+    decision: str,
+) -> None:
+    normalized_decision_id = _decision_text(decision_id, "DecisionID")
+    context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
+    if (
+        context is None
+        or decision not in evaluation["Recommendation"]["AllowedActions"]
+    ):
+        raise OrderCommitmentConflict("Acceptance is not allowed.")
+    capacity_status, material_status, candidate_key = context
+    if (
+        evaluation["ShadowSchedule"]["Status"] != capacity_status
+        or evaluation["MaterialAssessment"]["Status"] != material_status
+    ):
+        raise OrderCommitmentConflict("Acceptance context does not match evaluation.")
+    candidate = evaluation["ShadowSchedule"].get(candidate_key)
+    if not isinstance(candidate, Mapping):
+        raise OrderCommitmentConflict("Selected capacity assessment is missing.")
+    demand = write_set.demand_commitment
+    if demand.get("OrderCommitmentEvaluationID") != evaluation["EvaluationID"]:
+        raise OrderCommitmentConflict("Reservation write set context does not match evaluation.")
+    if _parse_aware(demand.get("AcceptedPromiseAt")) != _parse_aware(
+        candidate["PromiseAt"]
+    ):
+        raise OrderCommitmentConflict("Reservation write set context does not match evaluation.")
+    expected_material_status = (
+        "PlannedAllocationPrepared"
+        if material_status == "Feasible"
+        else "PendingConfirmation"
+    )
+    if demand.get("MaterialCommitmentStatus") != expected_material_status:
+        raise OrderCommitmentConflict("Reservation write set context does not match evaluation.")
+    if write_set.batch.get("ConfirmationID") != normalized_decision_id:
+        raise OrderCommitmentConflict(
+            "Decision ID does not match reservation batch confirmation ID."
+        )
+
+
 def accepted_evaluation_record(
     *,
     evaluation: Mapping[str, object],
@@ -1504,8 +1547,12 @@ def accepted_evaluation_record(
 ) -> dict[str, object]:
     if evaluation["Status"] != "AwaitingPlannerDecision":
         raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
-    if decision not in ACCEPTANCE_ACTION_CONTEXT:
-        raise OrderCommitmentConflict("Decision is not an acceptance action.")
+    _assert_accepted_write_set_context(
+        evaluation=evaluation,
+        write_set=write_set,
+        decision_id=decision_id,
+        decision=decision,
+    )
     updated = deepcopy(dict(evaluation))
     evidence = _decision_evidence(
         evaluation=evaluation,

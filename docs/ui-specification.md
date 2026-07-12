@@ -2,8 +2,8 @@
 
 | 属性 | 内容 |
 | --- | --- |
-| 文档版本 | 5.35 |
-| 日期 | 2026-07-11 |
+| 文档版本 | 5.36 |
+| 日期 | 2026-07-12 |
 | 状态 | UI 验收单元基线已完成；进入产品级 UI 审计与后续能力联动阶段 |
 | 适用范围 | 计划员工作台及其直接支撑页面 |
 | 后端基线 | `docs/backend-readiness-2026-06-19.md` |
@@ -278,7 +278,7 @@ UI 必须帮助计划员快速回答五个问题：
 
 ### UI-COMMIT-001 MTO 订单承诺工作台
 
-**状态：开发中**
+**状态：已验证待用户确认**
 
 页面位置：独立导航页 `订单承诺 / Order Commitments`。
 
@@ -1187,16 +1187,25 @@ UI 不得直接构造或修改 SQLite 数据。
 
 - 规格：`UI-COMMIT-001`
 - 后台依赖：`BE-SDBR-006` 至 `BE-SDBR-010`、`BE-RUN-011`
-- 状态：开发中
+- 状态：已验证待用户确认
 - 范围：独立 MTO 订单承诺工作台，提供服务端当前证据驱动的 CCR 优先自动评估、重新评估、建议和计划员最终决定。
 - 读模型：列表、详情、操作确认要求和安全审计严格使用 `UI-COMMIT-001` 定义的白名单字段；显示 `ReservationStatus`、`ExceptionStatus` 和生命周期派生的 `AllowedActions`，不显示原始 JSON。
 - 决定边界：接收和重新评估只产生建议；option-2 接受结束于 `AcceptedPendingFormalSchedule`，不自动创建 Planning Run，不发送外部订单确认，不修改 DDAE、主数据、ERP/WMS、MES、供应商或生产权威状态。
+- 自动化验证：2026-07-12 执行 PowerShell seed 脚本语法解析、`python -m compileall -q sdbr`、最终 Task28 focused pytest（25 passed）和 post-edit fresh unique-basetemp 全量 pytest（1072 passed，1 个既有 Starlette deprecation warning，128.68 秒）；`git diff --check` 无空白错误。
+- 实服种子验证：使用 SQLite-backed `uvicorn` 地址 `http://127.0.0.1:8876` 执行 `scripts/seed_mto_order_commitment_browser.ps1`，得到 baseline `TST-MTO-RUN-BASELINE`、snapshot `TST-MTO-OPS-CURRENT`、普通/跳过物料/已接受/已拒绝/过期决定五类评估、有效预留批次、`OrderCommitmentEvaluationStale` 和 final revision 9；脚本只调用公开 API。
+- 浏览器验证：使用本机 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` 由 standalone Playwright 控制。桌面 `1280x720` 和移动 `390x844` 截图像素已从 PNG IHDR 复核；移动 DOM 同时返回 `innerWidth=390`、`innerHeight=844`、`clientWidth=390`、`document.scrollWidth=390`。导航抽屉、四项摘要、11 列滚动容器、详情、重新评估控件和决定对话框均在视口内，文档无横向溢出。
+- 状态与交互验证：普通、跳过物料、已接受待正式排程、已拒绝、已替代和 stale 409 均已覆盖；终态及已替代详情无操作；物料跳过空原因由 required gate 阻止且不发请求；CCR/物料确认按动作显示并门控提交；stale 决定只发出一次 POST、显示本地化错误且不自动重试。
+- 双语与键盘验证：中文/英文列表、详情、建议、物料、生命周期、预留、异常、动作和边界标签均切换，业务 ID 保持不变；Tab 可聚焦订单承诺路由并以 Enter 打开，详情按钮可通过键盘打开，路由与详情按钮显示 3px focus outline，原生 checkbox 获得浏览器 focus indicator。
+- 浏览器证据：`.tmp/mto-order-commitment-task28-desktop-1280x720.png`、`.tmp/mto-order-commitment-task28-desktop-en-detail-1280x720.png`、`.tmp/mto-order-commitment-task28-mobile-main-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-nav-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-detail-controls-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-decision-controls-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-material-pending-dialog-390x844.png`、`.tmp/mto-order-commitment-task28-mobile-stale-error-390x844.png`。
+- 控制台结果：应用 JavaScript `pageerror` 为 0；唯一普通资源噪声为浏览器请求 `/favicon.ico` 返回 404。应用 CSS/JS、工作台 API 和详情 API 均成功；stale 决定的 409 为预期业务证据。
+- 详细记录：`docs/mto-order-commitment-task28-evidence-2026-07-12.md`。
 - 用户确认：未确认。
 
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| 5.36 | 2026-07-12 | 完成 `UI-COMMIT-001` Task28 验证：API-only 可重放种子、SQLite 实服 smoke、24 项 focused 和 1072 项全量回归、本机 Edge/Playwright 桌面与真实 390x844 移动证据、双语、键盘、状态门控及 stale 无重试；状态为已验证待用户确认 |
 | 5.35 | 2026-07-11 | 启动 `UI-COMMIT-001` 独立 MTO 订单承诺工作台：精确列表/详情字段、预留与异常状态、AllowedActions 门控、安全审计、当前快照重新评估和 option-2 决定；不发送物料窗口、不创建 Planning Run、不修改外部权威 |
 | 5.34 | 2026-07-09 | 完成 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if 第一版：排程结果页新增冲击评估面板，仿真结果页新增 Simio 使用条件 hover/focus 提示；状态为已验证待用户确认 |
 | 5.33 | 2026-07-09 | 启动 `UI-SCHEDULE-006` P2 S-DBR 执行级 What-if UI 规格：排程结果页规划只读/轻编辑 what-if 面板，并在仿真结果页规划 Simio 使用条件 hover/focus 提示；状态待实现、未用户确认 |

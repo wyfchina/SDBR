@@ -5767,8 +5767,8 @@ class TestOrderCommitmentUiShell:
         ]
 
 
-def test_ui_commit_specification_remains_in_development_until_task_28():
-    # UI-COMMIT-001: Task 24 establishes the shell; Task 28 owns verification.
+def test_ui_commit_specification_is_verified_pending_confirmation_after_task_28():
+    # UI-COMMIT-001: Task 28 verifies the unit but cannot confirm it for the user.
     specification = Path("docs/ui-specification.md").read_text(encoding="utf-8")
     capability = specification.split("### UI-COMMIT-001", 1)[1].split(
         "### UI-DDOM-001", 1
@@ -5777,13 +5777,57 @@ def test_ui_commit_specification_remains_in_development_until_task_28():
         "## 18.", 1
     )[0]
 
-    assert "| 文档版本 | 5.35 |" in specification
-    assert "**状态：开发中**" in capability
-    assert "- 状态：开发中" in acceptance_record
+    assert "| 文档版本 | 5.36 |" in specification
+    assert "**状态：已验证待用户确认**" in capability
+    assert "- 状态：已验证待用户确认" in acceptance_record
+    assert "用户已确认" not in capability
+    assert "用户已确认" not in acceptance_record
 
 
 class TestOrderCommitmentUiReadFlow:
     # UI-COMMIT-001 / BE-SDBR-010
+    def test_detail_and_reevaluation_copy_has_bilingual_business_labels(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+
+        for key, zh, en in (
+            ("quantity", "数量", "Quantity"),
+            ("businessPriority", "业务优先级", "Business priority"),
+            (
+                "checkMaterialAvailability",
+                "检查物料计划可用性",
+                "Check material planning availability",
+            ),
+            (
+                "orderCommitmentMaterialGateReminder",
+                "释放阶段仍执行物料硬门控",
+                "Material hard gate still applies at release",
+            ),
+            ("materialSkipReason", "跳过原因", "Skip reason"),
+            ("plannerDecision", "计划员决定", "Planner decision"),
+            (
+                "acknowledgeCcrRisk",
+                "我已复核 CCR 保护负荷风险",
+                "I reviewed the CCR protection-load risk",
+            ),
+            (
+                "acknowledgeMaterialPending",
+                "我确认物料仍待处理，且释放阶段继续硬门控",
+                "I acknowledge material remains pending and the release hard gate still applies",
+            ),
+            (
+                "orderCommitmentExternalBoundary",
+                "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES",
+                "This action does not accept the external order, create a Planning Run, or change ERP/MES",
+            ),
+            ("evaluationFingerprint", "评估指纹", "Evaluation fingerprint"),
+            ("decisionFingerprint", "决定指纹", "Decision fingerprint"),
+            ("traceId", "追踪编号", "Trace ID"),
+        ):
+            assert f'{key}: "{zh}"' in script
+            assert f'{key}: "{en}"' in script
+
     def test_script_uses_workbench_detail_endpoints_and_revision_header(self):
         client = TestClient(create_app())
 

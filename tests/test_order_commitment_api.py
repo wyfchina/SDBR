@@ -2549,3 +2549,187 @@ class TestOrderCommitmentApiAcceptance:
             assert store.order_commitment_evaluations[evaluation_id]["Decision"][
                 "DecidedBy"
             ] == actor_id
+
+
+class TestOrderCommitmentBrowserSequence:
+    """UI-COMMIT-001 / BE-SDBR-010: reproducible public browser fixture."""
+
+    def test_public_sequence_creates_ordinary_skipped_accepted_and_stale_states(
+        self,
+    ):
+        store = WorkbenchStateStore()
+        client = TestClient(api.create_app(
+            state_store=store,
+            require_auth=True,
+            utc_now=lambda: MTO_FIXTURE_TIME,
+        ))
+        reset = client.post(
+            "/planner/workbench/test-data/order-commitment/reset",
+            headers=_planner_headers(),
+        )
+        assert reset.status_code == 200
+        fixture = reset.json()["Data"]
+        template = fixture["IntakePayloadTemplate"]
+        authority_fields = tuple(
+            field
+            for field in PUBLIC_STORE_FIELDS
+            if field not in MTO_FIELDS | PHASE0_FIELDS
+        )
+        authority_before = {
+            field: deepcopy(getattr(store, field))
+            for field in authority_fields
+        }
+        baseline_runs = deepcopy(store.planning_runs)
+
+        evaluations = {}
+        for suffix in ("ORDINARY", "SKIP", "STALE", "ACCEPT", "REJECT"):
+            payload = deepcopy(template)
+            payload["OrderID"] = f"TST-MTO-SO-{suffix}"
+            payload["TraceID"] = f"TRACE-TST-MTO-{suffix}"
+            payload["MaterialRequirements"][0]["RequirementLineID"] = (
+                f"{payload['OrderID']}:10:TST-MTO-RM-1"
+            )
+            intake = client.post(
+                "/planner/workbench/order-commitments/intake",
+                json=payload,
+                headers=_planner_headers(),
+            )
+            assert intake.status_code == 200
+            evaluations[suffix] = intake.json()["Data"]["Evaluation"]
+
+        skipped = client.post(
+            "/planner/workbench/order-commitments/"
+            f"{evaluations['SKIP']['EvaluationID']}/reevaluate",
+            json={
+                "RequestedBy": "planner-browser",
+                "OperationalStateSnapshotID": None,
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": (
+                    "Browser capacity-only acceptance evidence."
+                ),
+            },
+            headers=_planner_headers(),
+        )
+        assert skipped.status_code == 200
+        skipped_id = skipped.json()["Data"]["Evaluation"]["EvaluationID"]
+
+        stale_id = evaluations["STALE"]["EvaluationID"]
+        original_stale_detail = client.get(
+            f"/planner/workbench/order-commitments/{stale_id}",
+            headers=_planner_headers(),
+        )
+        assert original_stale_detail.status_code == 200
+        stale_fingerprint = original_stale_detail.json()["Data"][
+            "TechnicalDetails"
+        ]["EvaluationFingerprint"]
+
+        accept_id = evaluations["ACCEPT"]["EvaluationID"]
+        accept_detail = client.get(
+            f"/planner/workbench/order-commitments/{accept_id}",
+            headers=_planner_headers(),
+        )
+        accepted = client.post(
+            f"/planner/workbench/order-commitments/{accept_id}/decision",
+            json={
+                "DecisionID": "DEC-TST-MTO-BROWSER-ACCEPT",
+                "Decision": "AcceptRequestedDate",
+                "DecidedBy": "planner-browser",
+                "Reason": "Browser acceptance evidence.",
+                "ExpectedEvaluationFingerprint": accept_detail.json()["Data"][
+                    "TechnicalDetails"
+                ]["EvaluationFingerprint"],
+                "CcrRiskAcknowledged": True,
+                "MaterialRiskAcknowledged": False,
+            },
+            headers={
+                **_planner_headers(),
+                "If-Match": accept_detail.headers["X-Workbench-Revision"],
+            },
+        )
+        assert accepted.status_code == 200
+
+        stale_detail = client.get(
+            f"/planner/workbench/order-commitments/{stale_id}",
+            headers=_planner_headers(),
+        )
+        stale_request = {
+            "DecisionID": "DEC-TST-MTO-BROWSER-STALE",
+            "Decision": "AcceptRequestedDate",
+            "DecidedBy": "planner-browser",
+            "Reason": "Must be rejected as stale.",
+            "ExpectedEvaluationFingerprint": stale_fingerprint,
+            "CcrRiskAcknowledged": True,
+            "MaterialRiskAcknowledged": False,
+        }
+        stale_headers = {
+            **_planner_headers(),
+            "If-Match": stale_detail.headers["X-Workbench-Revision"],
+        }
+        before_stale = _public_store_snapshot(store)
+        stale_responses = [
+            client.post(
+                f"/planner/workbench/order-commitments/{stale_id}/decision",
+                json=stale_request,
+                headers=stale_headers,
+            )
+            for _ in range(2)
+        ]
+        for response in stale_responses:
+            assert response.status_code == 409
+            assert response.json()["Data"]["Status"] == (
+                "OrderCommitmentEvaluationStale"
+            )
+        assert _public_store_snapshot(store) == before_stale
+
+        reject_id = evaluations["REJECT"]["EvaluationID"]
+        reject_detail = client.get(
+            f"/planner/workbench/order-commitments/{reject_id}",
+            headers=_planner_headers(),
+        )
+        rejected = client.post(
+            f"/planner/workbench/order-commitments/{reject_id}/decision",
+            json={
+                "DecisionID": "DEC-TST-MTO-BROWSER-REJECT",
+                "Decision": "Reject",
+                "DecidedBy": "planner-browser",
+                "Reason": "Browser rejected-terminal evidence.",
+                "ExpectedEvaluationFingerprint": reject_detail.json()["Data"][
+                    "TechnicalDetails"
+                ]["EvaluationFingerprint"],
+                "CcrRiskAcknowledged": False,
+                "MaterialRiskAcknowledged": False,
+            },
+            headers={
+                **_planner_headers(),
+                "If-Match": reject_detail.headers["X-Workbench-Revision"],
+            },
+        )
+        assert rejected.status_code == 200
+
+        def detail(evaluation_id: str) -> dict[str, object]:
+            response = client.get(
+                f"/planner/workbench/order-commitments/{evaluation_id}",
+                headers=_planner_headers(),
+            )
+            assert response.status_code == 200
+            return response.json()["Data"]
+
+        ordinary_detail = detail(evaluations["ORDINARY"]["EvaluationID"])
+        skipped_detail = detail(skipped_id)
+        accepted_detail = detail(accept_id)
+        rejected_detail = detail(reject_id)
+        assert ordinary_detail["Status"] == "AwaitingPlannerDecision"
+        assert skipped_detail["MaterialEvidence"]["Status"] == (
+            "SkippedPendingConfirmation"
+        )
+        assert skipped_detail["MaterialEvidence"]["CheckEnabled"] is False
+        assert accepted_detail["Status"] == "AcceptedPendingFormalSchedule"
+        assert accepted_detail["Reservation"]["ReservationBatchID"]
+        assert rejected_detail["Status"] == "Rejected"
+        assert rejected_detail["Recommendation"]["AllowedActions"] == []
+        assert store.planning_runs == baseline_runs
+        assert fixture["BaselinePlanningRunID"] in store.planning_runs
+        assert {
+            field: deepcopy(getattr(store, field))
+            for field in authority_fields
+        } == authority_before

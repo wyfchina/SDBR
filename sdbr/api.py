@@ -2687,6 +2687,114 @@ def create_app(
             },
         }
 
+    @app.post(
+        "/planner/workbench/order-commitments/{evaluation_id}/reevaluate"
+    )
+    def planner_workbench_order_commitment_reevaluate(
+        evaluation_id: str,
+        payload: MtoOrderCommitmentReevaluationPayload,
+        request: Request,
+    ):
+        endpoint = (
+            "/planner/workbench/order-commitments/"
+            f"{evaluation_id}/reevaluate"
+        )
+        source = order_commitment_evaluations.get(evaluation_id)
+        if source is None:
+            return _order_commitment_error(
+                endpoint=endpoint, status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        if source["Status"] != "AwaitingPlannerDecision":
+            return _order_commitment_error(
+                endpoint=endpoint, status_code=409,
+                status="OrderCommitmentEvaluationNotReevaluatable",
+                message="Only an open evaluation may be re-evaluated.",
+            )
+        observed_at = server_utc_now()
+        actor_id = _effective_actor_id(request, payload.RequestedBy)
+        order = deepcopy(source["Order"])
+        if payload.BaselinePlanningRunID is not None:
+            order["BaselinePlanningRunID"] = (
+                payload.BaselinePlanningRunID.strip()
+            )
+        order = normalize_mto_order(order)
+        candidate = _build_order_commitment_evaluation_from_state(
+            endpoint=endpoint,
+            order=order,
+            evaluated_at=observed_at,
+            check_material_availability=payload.CheckMaterialAvailability,
+            material_check_skip_reason=payload.MaterialCheckSkipReason,
+            requested_operational_state_snapshot_id=(
+                payload.OperationalStateSnapshotID
+            ),
+        )
+        if isinstance(candidate, JSONResponse):
+            return candidate
+        registration, persisted = register_order_commitment_evaluation(
+            order_commitment_evaluations, candidate
+        )
+        if registration == "Duplicate":
+            request.state.skip_workbench_persistence = True
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "RegistrationStatus": "Duplicate",
+                    "Evaluation": _order_commitment_row(persisted),
+                    "Boundary": _order_commitment_boundary(),
+                },
+            }
+        updates = supersede_open_order_commitment_evaluations(
+            evaluations=order_commitment_evaluations,
+            candidate=persisted,
+            superseded_at=observed_at,
+        )
+        for updated_id, updated_row in updates.items():
+            order_commitment_evaluations[updated_id] = deepcopy(updated_row)
+            _append_order_commitment_event(
+                evaluation=updated_row,
+                event_type="OrderCommitmentEvaluationSuperseded",
+                actor_id=actor_id,
+                occurred_at=observed_at,
+                causation_id=persisted["EvaluationID"],
+                details={
+                    "FromStatus": "AwaitingPlannerDecision",
+                    "ToStatus": "Superseded",
+                    "SupersededByEvaluationID": persisted["EvaluationID"],
+                },
+            )
+        order_commitment_evaluations[persisted["EvaluationID"]] = deepcopy(
+            persisted
+        )
+        _append_order_commitment_event(
+            evaluation=persisted,
+            event_type="OrderCommitmentReevaluated",
+            actor_id=actor_id,
+            occurred_at=observed_at,
+            causation_id=source["EvaluationID"],
+            details={
+                "ToStatus": "AwaitingPlannerDecision",
+                "Recommendation": persisted["Recommendation"]["Decision"],
+                "MaterialCheckEnabled": persisted["MaterialAssessment"][
+                    "CheckEnabled"
+                ],
+                "MaterialEvidenceFreshnessStatus": persisted[
+                    "MaterialAssessment"
+                ]["OperationalStateFreshnessStatus"],
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "RegistrationStatus": registration,
+                "Evaluation": _order_commitment_row(persisted),
+                "Boundary": _order_commitment_boundary(),
+            },
+        }
+
     @app.get("/planner/workbench/order-commitments/workbench")
     def planner_workbench_order_commitment_workbench() -> dict[str, object]:
         return {

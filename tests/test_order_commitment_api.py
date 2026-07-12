@@ -799,3 +799,263 @@ class TestOrderCommitmentApiIntakeAndReads:
         assert v3.json()["Data"]["Status"] == (
             "AcceptedOrderVersionChangeRequiresExplicitAmendment"
         )
+
+
+class TestOrderCommitmentApiReevaluation:
+    """BE-SDBR-010: immutable, current-evidence MTO re-evaluation."""
+
+    @staticmethod
+    def _intake_open_evaluation(
+        client: TestClient,
+        fixture: dict[str, object],
+    ) -> str:
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        assert intake.status_code == 200
+        return intake.json()["Data"]["Evaluation"]["EvaluationID"]
+
+    def test_reevaluation_defaults_material_check_on_and_selects_new_latest_snapshot(self):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        current = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        latest_id = "TST-MTO-OPS-LATEST-REEVALUATION"
+        store.operational_state_snapshots[latest_id] = OperationalStateSnapshot(
+            snapshot_id=latest_id,
+            captured_at=MTO_FIXTURE_TIME,
+            inventory_buffers=current.inventory_buffers,
+            material_availability=current.material_availability,
+            wip_limits=current.wip_limits,
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={"RequestedBy": "planner-re-evaluation"},
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        reevaluated_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
+        reevaluated = store.order_commitment_evaluations[reevaluated_id]
+        assert reevaluated["MaterialAssessment"]["CheckEnabled"] is True
+        assert reevaluated["MaterialAssessment"]["OperationalStateSnapshotID"] == latest_id
+
+    @pytest.mark.parametrize(
+        ("snapshot_id", "captured_at", "freshness"),
+        (
+            ("TST-MTO-OPS-STALE-REEVALUATION", MTO_FIXTURE_TIME - timedelta(minutes=61), "Stale"),
+            ("TST-MTO-OPS-FUTURE-REEVALUATION", MTO_FIXTURE_TIME + timedelta(minutes=1), "Future"),
+        ),
+    )
+    def test_explicit_stale_or_future_snapshot_persists_insufficient_evidence(
+        self,
+        snapshot_id: str,
+        captured_at: datetime,
+        freshness: str,
+    ):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        current = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        store.operational_state_snapshots[snapshot_id] = OperationalStateSnapshot(
+            snapshot_id=snapshot_id,
+            captured_at=captured_at,
+            inventory_buffers=current.inventory_buffers,
+            material_availability=current.material_availability,
+            wip_limits=current.wip_limits,
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "OperationalStateSnapshotID": snapshot_id,
+            },
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        reevaluated_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
+        material = store.order_commitment_evaluations[reevaluated_id][
+            "MaterialAssessment"
+        ]
+        assert material["OperationalStateFreshnessStatus"] == freshness
+        assert material["Status"] == "EvidenceInsufficient"
+        assert material["AllocationRequests"] == []
+
+    def test_material_opt_out_requires_reason_and_has_no_allocations(self):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+
+        invalid = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": "   ",
+            },
+            headers=_planner_headers(),
+        )
+        valid = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": "Capacity-only commitment review.",
+            },
+            headers=_planner_headers(),
+        )
+
+        assert invalid.status_code == 409
+        assert valid.status_code == 200
+        reevaluated_id = valid.json()["Data"]["Evaluation"]["EvaluationID"]
+        material = store.order_commitment_evaluations[reevaluated_id][
+            "MaterialAssessment"
+        ]
+        assert material["CheckEnabled"] is False
+        assert material["AllocationRequests"] == []
+
+    def test_reevaluation_payload_cannot_override_material_window(self):
+        client, _, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "MaterialAvailabilityWindowMinutes": 999,
+            },
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 422
+        assert "MaterialAvailabilityWindowMinutes" in response.text
+
+    def test_new_evaluation_supersedes_only_open_source_and_preserves_events(self):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        current = store.operational_state_snapshots[
+            fixture["OperationalStateSnapshotID"]
+        ]
+        store.operational_state_snapshots["TST-MTO-OPS-NEW-EVIDENCE"] = (
+            OperationalStateSnapshot(
+                snapshot_id="TST-MTO-OPS-NEW-EVIDENCE",
+                captured_at=MTO_FIXTURE_TIME,
+                inventory_buffers=current.inventory_buffers,
+                material_availability=current.material_availability,
+                wip_limits=current.wip_limits,
+            )
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={"RequestedBy": "planner-re-evaluation"},
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        reevaluated_id = response.json()["Data"]["Evaluation"]["EvaluationID"]
+        assert store.order_commitment_evaluations[source_id]["Status"] == "Superseded"
+        assert store.order_commitment_evaluations[source_id][
+            "SupersededByEvaluationID"
+        ] == reevaluated_id
+        assert [event["EventType"] for event in store.order_commitment_events] == [
+            "OrderCommitmentEvaluated",
+            "OrderCommitmentEvaluationSuperseded",
+            "OrderCommitmentReevaluated",
+        ]
+        superseded_event, reevaluated_event = store.order_commitment_events[-2:]
+        assert superseded_event["ActorID"] == reevaluated_event["ActorID"] == "planner-task17"
+        assert superseded_event["OccurredAt"] == reevaluated_event["OccurredAt"]
+        assert reevaluated_event["CausationID"] == source_id
+
+    def test_unchanged_replay_returns_duplicate_without_second_event(self):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        before_revision = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        ).headers["X-Workbench-Revision"]
+
+        first = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "OperationalStateSnapshotID": fixture[
+                    "OperationalStateSnapshotID"
+                ],
+            },
+            headers=_planner_headers(),
+        )
+        second = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-re-evaluation",
+                "OperationalStateSnapshotID": fixture[
+                    "OperationalStateSnapshotID"
+                ],
+            },
+            headers=_planner_headers(),
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["Data"]["RegistrationStatus"] == "Duplicate"
+        assert second.json()["Data"]["RegistrationStatus"] == "Duplicate"
+        assert first.headers["X-Workbench-Revision"] == before_revision
+        assert second.headers["X-Workbench-Revision"] == before_revision
+        assert len(store.order_commitment_events) == 1
+
+    @pytest.mark.parametrize(
+        "status", ("AcceptedPendingFormalSchedule", "Rejected", "Superseded")
+    )
+    def test_terminal_or_superseded_source_has_no_reevaluation(self, status: str):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        store.order_commitment_evaluations[source_id]["Status"] = status
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={"RequestedBy": "planner-re-evaluation"},
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == "OrderCommitmentEvaluationNotReevaluatable"
+
+    def test_reevaluation_creates_no_phase0_or_planning_run_objects(self):
+        client, store, fixture = _order_commitment_client()
+        source_id = self._intake_open_evaluation(client, fixture)
+        before = {
+            "PlanningRuns": deepcopy(store.planning_runs),
+            "PlanningDemandCommitments": deepcopy(store.planning_demand_commitments),
+            "PlanningReservationBatches": deepcopy(store.planning_reservation_batches),
+            "CcrCapacityReservations": deepcopy(store.ccr_capacity_reservations),
+            "MaterialPlanningAllocations": deepcopy(store.material_planning_allocations),
+            "PlanningReservationEvents": deepcopy(store.planning_reservation_events),
+        }
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={"RequestedBy": "planner-re-evaluation"},
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        assert store.planning_runs == before["PlanningRuns"]
+        assert store.planning_demand_commitments == before["PlanningDemandCommitments"]
+        assert store.planning_reservation_batches == before[
+            "PlanningReservationBatches"
+        ]
+        assert store.ccr_capacity_reservations == before["CcrCapacityReservations"]
+        assert store.material_planning_allocations == before[
+            "MaterialPlanningAllocations"
+        ]
+        assert store.planning_reservation_events == before[
+            "PlanningReservationEvents"
+        ]

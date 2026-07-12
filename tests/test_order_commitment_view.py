@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from sdbr.order_commitment_view import (
     AUDIT_FIELDS,
     CAPACITY_WINDOW_FIELDS,
@@ -213,6 +215,90 @@ class TestOrderCommitmentViewContract:
         )
 
         assert result["Rows"][0]["AllowedActions"] == []
+
+    @pytest.mark.parametrize(
+        ("allowed_actions", "requirements", "match"),
+        [
+            (
+                ["AcceptRequestedDate", {"Raw": "must not leak"}],
+                {
+                    "AcceptRequestedDate": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                },
+                "AllowedActions must contain only supported action strings",
+            ),
+            (
+                ["AcceptRequestedDate", 7],
+                {
+                    "AcceptRequestedDate": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                },
+                "AllowedActions must contain only supported action strings",
+            ),
+            (
+                ["AcceptRequestedDate", "UnknownAction"],
+                {
+                    "AcceptRequestedDate": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                    "UnknownAction": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                },
+                "AllowedActions must contain only supported action strings",
+            ),
+            (
+                ["AcceptRequestedDate"],
+                {
+                    "AcceptRequestedDate": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                    "Reject": {
+                        "RequiresCcrAcknowledgement": False,
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                },
+                "ActionAcknowledgementRequirements cannot introduce unsupported actions",
+            ),
+            (
+                ["AcceptRequestedDate"],
+                {
+                    "AcceptRequestedDate": {
+                        "RequiresCcrAcknowledgement": {"Raw": "must not leak"},
+                        "RequiresMaterialAcknowledgement": False,
+                    },
+                },
+                "Action acknowledgement requirements must contain exactly two boolean flags",
+            ),
+        ],
+    )
+    def test_detail_rejects_unsafe_action_and_acknowledgement_requirement_shapes(
+        self,
+        allowed_actions: list[object],
+        requirements: dict[object, object],
+        match: str,
+    ):
+        evaluation = self._evaluation()
+        evaluation["Recommendation"] = {
+            **evaluation["Recommendation"],
+            "AllowedActions": allowed_actions,
+            "ActionAcknowledgementRequirements": requirements,
+        }
+
+        with pytest.raises(ValueError, match=match):
+            build_order_commitment_detail(
+                evaluation=evaluation,
+                events=[],
+                demand_commitment=None,
+                reservation_batch=None,
+            )
 
     def test_held_batch_maps_to_planning_error_pending(self):
         result = build_order_commitment_workbench(

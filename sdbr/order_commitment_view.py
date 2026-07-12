@@ -59,6 +59,20 @@ RECOMMENDATION_VIEW_FIELDS = (
     "ActionAcknowledgementRequirements",
 )
 
+ORDER_COMMITMENT_ACTIONS = frozenset({
+    "AcceptRequestedDate",
+    "ConditionallyAcceptRequestedDate",
+    "AcceptRecommendedDate",
+    "ConditionallyAcceptRecommendedDate",
+    "Reevaluate",
+    "Reject",
+})
+
+ACTION_ACKNOWLEDGEMENT_REQUIREMENT_FIELDS = (
+    "RequiresCcrAcknowledgement",
+    "RequiresMaterialAcknowledgement",
+)
+
 AUDIT_FIELDS = (
     "EventID", "EventType", "OccurredAt", "ActorID",
     "DecisionID", "ReservationBatchID", "Details",
@@ -174,9 +188,49 @@ def _project_recommendation(
     *,
     terminal: bool,
 ) -> dict[str, object]:
-    allowed_actions = [] if terminal else deepcopy(recommendation.get("AllowedActions", []))
-    allowed_actions = allowed_actions if isinstance(allowed_actions, list) else []
-    requirements = _mapping(recommendation.get("ActionAcknowledgementRequirements"))
+    source_actions = recommendation.get("AllowedActions")
+    if (
+        not isinstance(source_actions, list)
+        or any(
+            not isinstance(action, str) or action not in ORDER_COMMITMENT_ACTIONS
+            for action in source_actions
+        )
+        or len(source_actions) != len(set(source_actions))
+    ):
+        raise ValueError("AllowedActions must contain only supported action strings.")
+
+    requirements = recommendation.get("ActionAcknowledgementRequirements")
+    if not isinstance(requirements, Mapping):
+        raise ValueError("ActionAcknowledgementRequirements must be a mapping.")
+    if any(
+        isinstance(action, str)
+        and action in ORDER_COMMITMENT_ACTIONS
+        and action not in source_actions
+        for action in requirements
+    ):
+        raise ValueError(
+            "ActionAcknowledgementRequirements cannot introduce unsupported actions."
+        )
+
+    projected_requirements = {}
+    for action in source_actions:
+        requirement = requirements.get(action)
+        if (
+            not isinstance(requirement, Mapping)
+            or any(
+                not isinstance(requirement.get(field), bool)
+                for field in ACTION_ACKNOWLEDGEMENT_REQUIREMENT_FIELDS
+            )
+        ):
+            raise ValueError(
+                "Action acknowledgement requirements must contain exactly two boolean flags."
+            )
+        projected_requirements[action] = {
+            field: requirement[field]
+            for field in ACTION_ACKNOWLEDGEMENT_REQUIREMENT_FIELDS
+        }
+
+    allowed_actions = [] if terminal else deepcopy(source_actions)
     return {
         "Decision": deepcopy(recommendation.get("Decision")),
         "AllowedActions": allowed_actions,
@@ -190,21 +244,9 @@ def _project_recommendation(
         "RequiresMaterialAcknowledgement": deepcopy(
             recommendation.get("RequiresMaterialAcknowledgement")
         ),
-        "ActionAcknowledgementRequirements": {
-            str(action): {
-                "RequiresCcrAcknowledgement": deepcopy(
-                    _mapping(requirements.get(str(action))).get(
-                        "RequiresCcrAcknowledgement"
-                    )
-                ),
-                "RequiresMaterialAcknowledgement": deepcopy(
-                    _mapping(requirements.get(str(action))).get(
-                        "RequiresMaterialAcknowledgement"
-                    )
-                ),
-            }
-            for action in allowed_actions
-        },
+        "ActionAcknowledgementRequirements": (
+            {} if terminal else projected_requirements
+        ),
     }
 
 

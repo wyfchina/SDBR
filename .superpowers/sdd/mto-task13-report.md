@@ -102,3 +102,56 @@ Result: `911 passed, 1 warning`.
 
 No Task 13 functional concern remains. The full suite retains the unrelated
 FastAPI TestClient deprecation warning noted above.
+
+## Review Follow-up: Recommendation Action Contract
+
+Date: 2026-07-12
+
+Addresses the independent-review finding for `BE-SDBR-010` / `UI-COMMIT-001`
+in `.superpowers/sdd/mto-task13-review.md`.
+
+- `AllowedActions` is now required to be a unique list of the six supported
+  MTO action strings. Structured values, non-string scalars, and unknown
+  action names raise `ValueError` rather than crossing the view boundary or
+  being coerced to acknowledgement keys.
+- Acknowledgement requirements are projected only for those validated actions.
+  A requirement key for another supported action raises `ValueError`; raw or
+  unrelated producer metadata remains excluded by the existing projection.
+- Each active action must provide both acknowledgement flags as booleans. The
+  view exposes only those two flags, so structured flag payloads cannot leak.
+
+### TDD Evidence
+
+RED:
+
+```powershell
+pytest tests/test_order_commitment_view.py::TestOrderCommitmentViewContract::test_detail_rejects_unsafe_action_and_acknowledgement_requirement_shapes -q --basetemp .tmp/pytest-mto-task13-contract-refined-red -p no:cacheprovider
+```
+
+Result: `5 failed` as expected because the prior projection copied or coerced
+unsafe action and acknowledgement data.
+
+Focused GREEN:
+
+```powershell
+pytest tests/test_order_commitment_view.py -q --basetemp .tmp/pytest-mto-task13-view-green -p no:cacheprovider
+```
+
+Result: `14 passed`.
+
+Related regression:
+
+```powershell
+pytest tests/test_order_commitment_evaluation.py -q --basetemp .tmp/pytest-mto-task13-evaluation-related-final -p no:cacheprovider
+```
+
+Result: `124 passed`.
+
+Task 14 preservation:
+
+```powershell
+pytest tests/test_test_data.py::TestOrderCommitmentBrowserSeed -q --basetemp .tmp/pytest-mto-task14-preservation-final -p no:cacheprovider
+```
+
+Result: `4 passed, 1 warning`; the warning is the existing FastAPI/Starlette
+`TestClient` deprecation warning. Commit `e168c60` remains unchanged.

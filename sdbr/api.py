@@ -2535,7 +2535,7 @@ def create_app(
             "ReleaseMaterialGateStillRequired": True,
         }
 
-    def _append_order_commitment_event(
+    def _order_commitment_event_record(
         *,
         evaluation: Mapping[str, object],
         event_type: str,
@@ -2559,7 +2559,7 @@ def create_app(
             "CausationID": causation_id,
         }
         order = evaluation["Order"]
-        event = {
+        return {
             "EventID": "OCEV-" + sha256(
                 canonical_json(identity).encode("utf-8")
             ).hexdigest()[:20],
@@ -2574,6 +2574,28 @@ def create_app(
             "ReservationBatchID": reservation_batch_id,
             "Details": safe_details,
         }
+
+    def _append_order_commitment_event(
+        *,
+        evaluation: Mapping[str, object],
+        event_type: str,
+        actor_id: str,
+        occurred_at: datetime,
+        decision_id: str | None = None,
+        reservation_batch_id: str | None = None,
+        causation_id: str,
+        details: Mapping[str, object],
+    ) -> dict[str, object]:
+        event = _order_commitment_event_record(
+            evaluation=evaluation,
+            event_type=event_type,
+            actor_id=actor_id,
+            occurred_at=occurred_at,
+            decision_id=decision_id,
+            reservation_batch_id=reservation_batch_id,
+            causation_id=causation_id,
+            details=details,
+        )
         existing = next(
             (
                 row
@@ -2589,6 +2611,26 @@ def create_app(
                 "Order commitment event identity/content conflict."
             )
         return event
+
+    def _assert_order_commitment_acceptance_event_replay_matches(
+        expected_event: Mapping[str, object],
+    ) -> None:
+        related_events = [
+            event
+            for event in order_commitment_events
+            if isinstance(event, Mapping)
+            and (
+                event.get("EventID") == expected_event["EventID"]
+                or event.get("DecisionID") == expected_event["DecisionID"]
+                or event.get("ReservationBatchID")
+                == expected_event["ReservationBatchID"]
+                or event.get("CausationID") == expected_event["CausationID"]
+            )
+        ]
+        if len(related_events) != 1 or related_events[0] != expected_event:
+            raise OrderCommitmentConflict(
+                "Persisted acceptance event does not match canonical evidence."
+            )
 
     @app.post("/planner/workbench/order-commitments/intake")
     def planner_workbench_order_commitment_intake(
@@ -2859,34 +2901,59 @@ def create_app(
                     status="OrderCommitmentDecisionEvidenceMissing",
                     message="Persisted decision evidence is missing.",
                 )
-            if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
-                return _order_commitment_error(
-                    endpoint=endpoint,
-                    status_code=409,
-                    status="OrderCommitmentDecisionReplayConflict",
-                    message="Decision replay content differs from persisted content.",
-                )
             replay_write_set = None
             if evaluation["Status"] == "AcceptedPendingFormalSchedule":
-                original = deepcopy(evaluation)
-                original["Status"] = "AwaitingPlannerDecision"
-                original["RecordVersion"] = int(evaluation["RecordVersion"]) - 1
-                original.pop("Decision", None)
                 try:
+                    text_fields = (
+                        "DecisionID",
+                        "DecisionFingerprint",
+                        "Decision",
+                        "DecidedBy",
+                        "DecidedAt",
+                        "Reason",
+                        "AcceptedPromiseAt",
+                        "DemandCommitmentID",
+                        "ReservationBatchID",
+                        "ExternalOrderAcceptance",
+                        "PlanningRunCreation",
+                        "ProductionMutation",
+                    )
+                    for field in text_fields:
+                        value = persisted_decision.get(field)
+                        if not isinstance(value, str) or not value.strip():
+                            raise OrderCommitmentConflict(
+                                f"Persisted accepted decision {field} is invalid."
+                            )
+                    for field in (
+                        "CcrRiskAcknowledged",
+                        "MaterialRiskAcknowledged",
+                    ):
+                        if type(persisted_decision.get(field)) is not bool:
+                            raise OrderCommitmentConflict(
+                                f"Persisted accepted decision {field} is invalid."
+                            )
+                    decided_at = _parse_aware(persisted_decision["DecidedAt"])
+                    _parse_aware(persisted_decision["AcceptedPromiseAt"])
+                    original = deepcopy(evaluation)
+                    original["Status"] = "AwaitingPlannerDecision"
+                    original["RecordVersion"] = (
+                        int(evaluation["RecordVersion"]) - 1
+                    )
+                    original.pop("Decision", None)
                     replay_write_set = prepare_mto_acceptance(
                         evaluation=original,
                         existing_commitments={},
-                        decision_id=str(persisted_decision["DecisionID"]),
-                        decision=str(persisted_decision["Decision"]),
-                        decided_by=str(persisted_decision["DecidedBy"]),
-                        decided_at=_parse_aware(persisted_decision["DecidedAt"]),
-                        reason=str(persisted_decision["Reason"]),
-                        ccr_risk_acknowledged=bool(
-                            persisted_decision["CcrRiskAcknowledged"]
-                        ),
-                        material_risk_acknowledged=bool(
-                            persisted_decision["MaterialRiskAcknowledged"]
-                        ),
+                        decision_id=persisted_decision["DecisionID"],
+                        decision=persisted_decision["Decision"],
+                        decided_by=persisted_decision["DecidedBy"],
+                        decided_at=decided_at,
+                        reason=persisted_decision["Reason"],
+                        ccr_risk_acknowledged=persisted_decision[
+                            "CcrRiskAcknowledged"
+                        ],
+                        material_risk_acknowledged=persisted_decision[
+                            "MaterialRiskAcknowledged"
+                        ],
                     )
                     assert_reservation_write_set_replay_matches(
                         write_set=replay_write_set,
@@ -2897,14 +2964,70 @@ def create_app(
                         events=deepcopy(planning_reservation_events),
                         processed_event_keys=deepcopy(processed_planning_event_keys),
                     )
-                except ReservationConflict:
+                    expected_accepted = accepted_evaluation_record(
+                        evaluation=original,
+                        write_set=replay_write_set,
+                        decision_id=persisted_decision["DecisionID"],
+                        decision=persisted_decision["Decision"],
+                        decided_by=persisted_decision["DecidedBy"],
+                        decided_at=decided_at,
+                        reason=persisted_decision["Reason"],
+                        ccr_risk_acknowledged=persisted_decision[
+                            "CcrRiskAcknowledged"
+                        ],
+                        material_risk_acknowledged=persisted_decision[
+                            "MaterialRiskAcknowledged"
+                        ],
+                    )
+                    if expected_accepted != evaluation:
+                        raise OrderCommitmentConflict(
+                            "Persisted accepted decision immutable content drifted."
+                        )
+                    expected_event = _order_commitment_event_record(
+                        evaluation=expected_accepted,
+                        event_type="OrderCommitmentAccepted",
+                        actor_id=persisted_decision["DecidedBy"],
+                        occurred_at=decided_at,
+                        decision_id=persisted_decision["DecisionID"],
+                        reservation_batch_id=replay_write_set.batch[
+                            "ReservationBatchID"
+                        ],
+                        causation_id=persisted_decision["DecisionID"],
+                        details={
+                            "FromStatus": "AwaitingPlannerDecision",
+                            "ToStatus": "AcceptedPendingFormalSchedule",
+                            "DecisionCode": persisted_decision["Decision"],
+                            "AcceptedPromiseAt": expected_accepted["Decision"][
+                                "AcceptedPromiseAt"
+                            ],
+                            "CcrRiskAcknowledged": persisted_decision[
+                                "CcrRiskAcknowledged"
+                            ],
+                            "MaterialRiskAcknowledged": persisted_decision[
+                                "MaterialRiskAcknowledged"
+                            ],
+                        },
+                    )
+                    _assert_order_commitment_acceptance_event_replay_matches(
+                        expected_event
+                    )
+                except (KeyError, TypeError, ValueError):
                     return _order_commitment_error(
                         endpoint=endpoint,
                         status_code=409,
                         status="OrderCommitmentDecisionReplayEvidenceMismatch",
                         message=(
                             "Persisted acceptance does not match its canonical "
-                            "Phase 0 write set."
+                            "decision, Phase 0, or event evidence."
+                        ),
+                    )
+                if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
+                    return _order_commitment_error(
+                        endpoint=endpoint,
+                        status_code=409,
+                        status="OrderCommitmentDecisionReplayConflict",
+                        message=(
+                            "Decision replay content differs from persisted content."
                         ),
                     )
             elif evaluation["Status"] != "Rejected":
@@ -2914,16 +3037,28 @@ def create_app(
                     status="OrderCommitmentEvaluationNotDecisionEligible",
                     message="Evaluation cannot receive a decision.",
                 )
+            elif persisted_decision.get("DecisionFingerprint") != incoming_fingerprint:
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentDecisionReplayConflict",
+                    message="Decision replay content differs from persisted content.",
+                )
             request.state.skip_workbench_persistence = True
+            demand_commitment_id = persisted_decision.get("DemandCommitmentID")
+            reservation_batch_id = persisted_decision.get("ReservationBatchID")
+            if replay_write_set is not None:
+                demand_commitment_id = replay_write_set.demand_commitment[
+                    "DemandCommitmentID"
+                ]
+                reservation_batch_id = replay_write_set.batch[
+                    "ReservationBatchID"
+                ]
             replay_data = {
                 "Evaluation": _order_commitment_row(evaluation),
                 "Status": evaluation["Status"],
-                "DemandCommitmentID": persisted_decision.get(
-                    "DemandCommitmentID"
-                ),
-                "ReservationBatchID": persisted_decision.get(
-                    "ReservationBatchID"
-                ),
+                "DemandCommitmentID": demand_commitment_id,
+                "ReservationBatchID": reservation_batch_id,
                 "ExternalOrderAcceptance": "NotPerformed",
                 "PlanningRunCreation": "NotPerformed",
                 "ProductionMutation": "NotPerformed",

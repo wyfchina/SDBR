@@ -620,6 +620,38 @@ def assert_reservation_write_set_replay_matches(
         str(record["MaterialAllocationID"]): record
         for record in write_set.material_allocations
     }
+    expected_capacity_ids = {
+        str(record_id) for record_id in expected_result["CapacityReservationIDs"]
+    }
+    expected_material_ids = {
+        str(record_id) for record_id in expected_result["MaterialAllocationIDs"]
+    }
+    linked_capacity_ids = {
+        str(record_id)
+        for record_id, record in capacity_reservations.items()
+        if isinstance(record, Mapping)
+        and (
+            record.get("ReservationBatchID") == batch_id
+            or record.get("DemandCommitmentID") == demand_id
+        )
+    }
+    linked_material_ids = {
+        str(record_id)
+        for record_id, record in material_allocations.items()
+        if isinstance(record, Mapping)
+        and (
+            record.get("ReservationBatchID") == batch_id
+            or record.get("DemandCommitmentID") == demand_id
+        )
+    }
+    if linked_capacity_ids - expected_capacity_ids:
+        raise ReservationConflict(
+            "Persisted capacity reservations do not match the canonical child set."
+        )
+    if linked_material_ids - expected_material_ids:
+        raise ReservationConflict(
+            "Persisted material allocations do not match the canonical child set."
+        )
     for capacity_id in expected_result["CapacityReservationIDs"]:
         persisted_capacity = _replay_record(
             records=capacity_reservations,

@@ -321,6 +321,48 @@ def test_public_replay_verifier_accepts_evolved_ledger_without_mutation():
 
 
 @pytest.mark.parametrize(
+    ("collection_index", "identity_field", "orphan_id"),
+    (
+        (2, "CapacityReservationID", "CCR-ORPHAN"),
+        (3, "MaterialAllocationID", "MAT-ORPHAN"),
+    ),
+)
+def test_public_replay_verifier_rejects_orphan_linked_child(
+    collection_index: int,
+    identity_field: str,
+    orphan_id: str,
+):
+    write_set = _prepare(
+        capacity_requests=[_capacity_request()],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    orphan = deepcopy(next(iter(collections[collection_index].values())))
+    orphan[identity_field] = orphan_id
+    collections[collection_index][orphan_id] = orphan
+    before = deepcopy(collections)
+
+    with pytest.raises(ReservationConflict, match="canonical child set"):
+        assert_reservation_write_set_replay_matches(
+            write_set=write_set,
+            commitments=collections[0],
+            batches=collections[1],
+            capacity_reservations=collections[2],
+            material_allocations=collections[3],
+            events=collections[4],
+            processed_event_keys=collections[5],
+        )
+
+    assert collections == before
+
+
+@pytest.mark.parametrize(
     "lifecycle_status",
     ["ActivePlanReservation", "HeldForPlanningError"],
 )

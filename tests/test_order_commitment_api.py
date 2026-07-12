@@ -17,12 +17,9 @@ from sdbr import api
 from sdbr.operational_state import OperationalStateSnapshot
 from sdbr.order_commitment_evaluation import (
     OrderCommitmentConflict,
-    accepted_evaluation_record,
     normalize_mto_order,
-    prepare_mto_acceptance,
     rejected_evaluation_record,
 )
-from sdbr.planning_reservations import apply_reservation_write_set
 from sdbr.order_commitment_view import DETAIL_FIELDS, ORDER_COMMITMENT_ROW_FIELDS
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import seed_mto_order_commitment_fixture
@@ -1181,26 +1178,12 @@ class TestOrderCommitmentApiDecisionReplay:
             reason="Planner accepted the requested MTO commitment.",
             ccr_risk_acknowledged=True,
         )
-        write_set = prepare_mto_acceptance(
-            evaluation=evaluation,
-            existing_commitments={},
-            decision_id=str(payload["DecisionID"]),
-            decision=str(payload["Decision"]),
-            decided_by="planner-task17",
-            decided_at=MTO_FIXTURE_TIME,
-            reason=str(payload["Reason"]),
-            ccr_risk_acknowledged=True,
-            material_risk_acknowledged=False,
+        acceptance = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
         )
-        apply_reservation_write_set(
-            write_set=write_set,
-            commitments=store.planning_demand_commitments,
-            batches=store.planning_reservation_batches,
-            capacity_reservations=store.ccr_capacity_reservations,
-            material_allocations=store.material_planning_allocations,
-            events=store.planning_reservation_events,
-            processed_event_keys=store.processed_planning_event_keys,
-        )
+        assert acceptance.status_code == 200
         demand = next(iter(store.planning_demand_commitments.values()))
         batch = next(iter(store.planning_reservation_batches.values()))
         capacity = next(iter(store.ccr_capacity_reservations.values()))
@@ -1220,17 +1203,6 @@ class TestOrderCommitmentApiDecisionReplay:
             "ExternalAllocationRef": "ERP-ALLOC-TST-MTO-1",
             "MaterialSnapshotID": "OPS-AUTHORITY-TST-MTO-1",
         })
-        store.order_commitment_evaluations[evaluation_id] = accepted_evaluation_record(
-            evaluation=evaluation,
-            write_set=write_set,
-            decision_id=str(payload["DecisionID"]),
-            decision=str(payload["Decision"]),
-            decided_by="planner-task17",
-            decided_at=MTO_FIXTURE_TIME,
-            reason=str(payload["Reason"]),
-            ccr_risk_acknowledged=True,
-            material_risk_acknowledged=False,
-        )
         return client, store, evaluation_id, payload
 
     def test_decision_requires_if_match_and_exact_evaluation_fingerprint(self):
@@ -1930,6 +1902,240 @@ class TestOrderCommitmentApiAcceptance:
             material_risk_acknowledged=True,
         )
         return client, store, evaluation_id, payload
+
+    def _accepted_replay_fixture(
+        self,
+    ) -> tuple[TestClient, WorkbenchStateStore, str, dict[str, object]]:
+        client, store, _, evaluation_id = self._open_evaluation()
+        payload = self._acceptance_payload(
+            store.order_commitment_evaluations[evaluation_id]
+        )
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._headers(client),
+        )
+        assert response.status_code == 200
+        return client, store, evaluation_id, payload
+
+    def _assert_replay_evidence_mismatch(
+        self,
+        *,
+        client: TestClient,
+        store: WorkbenchStateStore,
+        evaluation_id: str,
+        payload: dict[str, object],
+    ) -> None:
+        before = _public_store_snapshot(store)
+        revision = store.revision
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._headers(client),
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == (
+            "OrderCommitmentDecisionReplayEvidenceMismatch"
+        )
+        assert store.revision == revision
+        assert _public_store_snapshot(store) == before
+
+    @pytest.mark.parametrize(
+        ("field", "drifted_value"),
+        (
+            ("DecisionID", "DEC-TST-MTO-DRIFTED"),
+            ("DecisionFingerprint", "sha256:" + "0" * 64),
+            ("Decision", "AcceptRecommendedDate"),
+            ("DecidedBy", "planner-drifted"),
+            ("DecidedAt", "2026-07-12T09:00:00+00:00"),
+            ("Reason", "A different persisted acceptance reason."),
+            ("CcrRiskAcknowledged", False),
+            ("MaterialRiskAcknowledged", True),
+            ("AcceptedPromiseAt", "2026-07-19T08:00:00+00:00"),
+            ("DemandCommitmentID", "DC-TST-MTO-DRIFTED"),
+            ("ReservationBatchID", "PRB-TST-MTO-DRIFTED"),
+            ("ExternalOrderAcceptance", "Performed"),
+            ("PlanningRunCreation", "Performed"),
+            ("ProductionMutation", "Performed"),
+        ),
+    )
+    def test_accepted_replay_rejects_each_drifted_persisted_decision_field(
+        self,
+        field: str,
+        drifted_value: object,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        store.order_commitment_evaluations[evaluation_id]["Decision"][field] = (
+            drifted_value
+        )
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "drifted_value"),
+        (
+            ("EventID", "OCEV-TST-MTO-DRIFTED"),
+            ("EventType", "OrderCommitmentRejected"),
+            ("EvaluationID", "OCE-TST-MTO-DRIFTED"),
+            ("OccurredAt", "2026-07-12T09:00:00+00:00"),
+            ("ActorID", "planner-drifted"),
+            ("TraceID", "TRACE-TST-MTO-DRIFTED"),
+            ("CausationID", "DEC-TST-MTO-DRIFTED"),
+            ("CorrelationID", "MTO-TST-DRIFTED"),
+            ("DecisionID", "DEC-TST-MTO-DRIFTED"),
+            ("ReservationBatchID", "PRB-TST-MTO-DRIFTED"),
+        ),
+    )
+    def test_accepted_replay_rejects_each_drifted_mto_event_field(
+        self,
+        field: str,
+        drifted_value: object,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        event = next(
+            row
+            for row in store.order_commitment_events
+            if row["EventType"] == "OrderCommitmentAccepted"
+        )
+        event[field] = drifted_value
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "drifted_value"),
+        (
+            ("FromStatus", "Superseded"),
+            ("ToStatus", "Rejected"),
+            ("DecisionCode", "AcceptRecommendedDate"),
+            ("AcceptedPromiseAt", "2026-07-19T08:00:00+00:00"),
+            ("CcrRiskAcknowledged", False),
+            ("MaterialRiskAcknowledged", True),
+        ),
+    )
+    def test_accepted_replay_rejects_each_drifted_mto_event_detail(
+        self,
+        field: str,
+        drifted_value: object,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        event = next(
+            row
+            for row in store.order_commitment_events
+            if row["EventType"] == "OrderCommitmentAccepted"
+        )
+        event["Details"][field] = drifted_value
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
+
+    @pytest.mark.parametrize("event_mutation", ("missing", "duplicate"))
+    def test_accepted_replay_requires_one_unique_canonical_mto_event(
+        self,
+        event_mutation: str,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        event_index = next(
+            index
+            for index, row in enumerate(store.order_commitment_events)
+            if row["EventType"] == "OrderCommitmentAccepted"
+        )
+        if event_mutation == "missing":
+            store.order_commitment_events.pop(event_index)
+        else:
+            store.order_commitment_events.append(
+                deepcopy(store.order_commitment_events[event_index])
+            )
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
+
+    @pytest.mark.parametrize(
+        ("collection_name", "identity_field", "orphan_id"),
+        (
+            (
+                "ccr_capacity_reservations",
+                "CapacityReservationID",
+                "CCR-TST-MTO-ORPHAN",
+            ),
+            (
+                "material_planning_allocations",
+                "MaterialAllocationID",
+                "MAT-TST-MTO-ORPHAN",
+            ),
+        ),
+    )
+    def test_accepted_replay_rejects_orphan_phase0_child(
+        self,
+        collection_name: str,
+        identity_field: str,
+        orphan_id: str,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        collection = getattr(store, collection_name)
+        orphan = deepcopy(next(iter(collection.values())))
+        orphan[identity_field] = orphan_id
+        collection[orphan_id] = orphan
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "missing_key",
+            "invalid_timestamp",
+            "naive_timestamp",
+            "non_string_identity",
+            "invalid_acknowledgement_type",
+        ),
+    )
+    def test_accepted_replay_maps_malformed_persisted_decision_to_domain_conflict(
+        self,
+        mutation: str,
+    ):
+        client, store, evaluation_id, payload = self._accepted_replay_fixture()
+        decision = store.order_commitment_evaluations[evaluation_id]["Decision"]
+        if mutation == "missing_key":
+            decision.pop("Reason")
+        elif mutation == "invalid_timestamp":
+            decision["DecidedAt"] = "not-a-timestamp"
+        elif mutation == "naive_timestamp":
+            decision["DecidedAt"] = "2026-07-12T08:00:00"
+        elif mutation == "non_string_identity":
+            decision["DecisionID"] = 42
+        else:
+            decision["CcrRiskAcknowledged"] = "true"
+
+        self._assert_replay_evidence_mismatch(
+            client=client,
+            store=store,
+            evaluation_id=evaluation_id,
+            payload=payload,
+        )
 
     def test_acceptance_atomically_creates_only_mto_phase0_rows(self):
         client, store, _, evaluation_id = self._open_evaluation()

@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import pytest
 
-from test_ddmrp_replenishment import (
+from tests.test_ddmrp_replenishment import (
     EVALUATED_AT,
     _active_graph,
     _confirmation_events,

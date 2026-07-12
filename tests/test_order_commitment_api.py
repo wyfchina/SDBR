@@ -161,10 +161,45 @@ PUBLIC_STORE_FIELDS = tuple(
     for item in fields(WorkbenchStateStore)
     if not item.name.startswith("_")
 )
+MTO_FIELDS = {
+    "order_commitment_evaluations",
+    "order_commitment_events",
+    "revision",
+}
+PHASE0_FIELDS = {
+    "planning_demand_commitments",
+    "planning_reservation_batches",
+    "ccr_capacity_reservations",
+    "material_planning_allocations",
+    "planning_reservation_events",
+    "processed_planning_event_keys",
+}
+ALLOWED_STORE_CHANGES = {
+    "intake": MTO_FIELDS,
+    "reevaluate": MTO_FIELDS,
+    "reject": MTO_FIELDS,
+    "accept": MTO_FIELDS | PHASE0_FIELDS,
+}
 
 
-def _public_store_snapshot(store: WorkbenchStateStore) -> dict[str, object]:
-    return {name: deepcopy(getattr(store, name)) for name in PUBLIC_STORE_FIELDS}
+def _public_store_snapshot(store: WorkbenchStateStore):
+    return {
+        name: deepcopy(getattr(store, name))
+        for name in PUBLIC_STORE_FIELDS
+    }
+
+
+def _assert_only_operation_fields_changed(
+    *,
+    before: dict[str, object],
+    after: dict[str, object],
+    operation: str,
+) -> None:
+    assert set(before) == set(PUBLIC_STORE_FIELDS) == set(after)
+    allowed = ALLOWED_STORE_CHANGES[operation]
+    for name in PUBLIC_STORE_FIELDS:
+        if name not in allowed:
+            assert after[name] == before[name], name
 
 
 class TestOrderCommitmentApiContracts:
@@ -1533,6 +1568,7 @@ class TestOrderCommitmentApiStaleness:
         store: WorkbenchStateStore,
         evaluation_id: str,
     ) -> None:
+        snapshot = store.snapshot_state()
         response = client.post(
             f"/planner/workbench/order-commitments/{evaluation_id}/decision",
             json=self._acceptance_payload(
@@ -1540,10 +1576,11 @@ class TestOrderCommitmentApiStaleness:
             ),
             headers=self._decision_headers(client),
         )
-        assert response.status_code == 409
+        assert response.status_code == 200
         assert response.json()["Data"]["Status"] == (
-            "OrderCommitmentDecisionNotImplemented"
+            "AcceptedPendingFormalSchedule"
         )
+        store.restore_state(snapshot)
 
     def _rechecked_without_material(
         self,
@@ -1780,3 +1817,480 @@ class TestOrderCommitmentApiStaleness:
         self._assert_currently_eligible(
             client=client, store=store, evaluation_id=evaluation_id
         )
+
+
+class TestOrderCommitmentApiAcceptance:
+    """BE-SDBR-006 through BE-SDBR-010: atomic Phase 0 acceptance."""
+
+    @staticmethod
+    def _open_evaluation(
+        *,
+        actor_id: str = "planner-task21",
+    ) -> tuple[TestClient, WorkbenchStateStore, dict[str, object], str]:
+        store, fixture = _order_commitment_store()
+        client = TestClient(api.create_app(
+            state_store=store,
+            require_auth=True,
+            utc_now=lambda: MTO_FIXTURE_TIME,
+        ))
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers={"X-Actor-ID": actor_id, "X-Actor-Role": "Planner"},
+        )
+        assert intake.status_code == 200
+        return (
+            client,
+            store,
+            fixture,
+            intake.json()["Data"]["Evaluation"]["EvaluationID"],
+        )
+
+    @staticmethod
+    def _headers(
+        client: TestClient,
+        *,
+        actor_id: str = "planner-task21",
+        actor_role: str = "Planner",
+        revision: str | None = None,
+    ) -> dict[str, str]:
+        if revision is None:
+            revision = client.get(
+                "/planner/workbench/order-commitments/workbench",
+                headers={
+                    "X-Actor-ID": actor_id,
+                    "X-Actor-Role": actor_role,
+                },
+            ).headers["X-Workbench-Revision"]
+        return {
+            "X-Actor-ID": actor_id,
+            "X-Actor-Role": actor_role,
+            "If-Match": revision,
+        }
+
+    @staticmethod
+    def _acceptance_payload(
+        evaluation: dict[str, object],
+        *,
+        decision_id: str = "DEC-TST-MTO-TASK21",
+    ) -> dict[str, object]:
+        return _decision_payload(
+            evaluation,
+            decision_id=decision_id,
+            decision="AcceptRequestedDate",
+            reason="Planner accepted the requested MTO commitment.",
+            ccr_risk_acknowledged=True,
+        )
+
+    def _conditional_recommended_fixture(
+        self,
+    ) -> tuple[TestClient, WorkbenchStateStore, str, dict[str, object]]:
+        client, store, _, source_id = self._open_evaluation()
+        source = store.order_commitment_evaluations[source_id]
+        request = deepcopy(
+            source["DecisionFacts"]["CapacityReservationRequests"][0]
+        )
+        request.update({
+            "CapacityReservationID": "CCR-TST-MTO-TASK21-EXISTING",
+            "ReservationBatchID": "PRB-TST-MTO-TASK21-EXISTING",
+            "DemandCommitmentID": "DC-TST-MTO-TASK21-EXISTING",
+            "DemandClass": "MTO",
+            "Status": "ActivePlanReservation",
+            "RecordVersion": 1,
+            "ReservedMinutes": 300.0,
+        })
+        store.ccr_capacity_reservations[
+            "CCR-TST-MTO-TASK21-EXISTING"
+        ] = request
+        reevaluation = client.post(
+            f"/planner/workbench/order-commitments/{source_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-task21",
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": (
+                    "Planner requested capacity-only conditional acceptance."
+                ),
+            },
+            headers=_planner_headers(),
+        )
+        assert reevaluation.status_code == 200
+        evaluation_id = reevaluation.json()["Data"]["Evaluation"]["EvaluationID"]
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        assert evaluation["Recommendation"]["AllowedActions"] == [
+            "ConditionallyAcceptRecommendedDate",
+            "Reevaluate",
+            "Reject",
+        ]
+        payload = _decision_payload(
+            evaluation,
+            decision_id="DEC-TST-MTO-TASK21-CONDITIONAL",
+            decision="ConditionallyAcceptRecommendedDate",
+            reason="Planner accepted the later promise pending material confirmation.",
+            ccr_risk_acknowledged=True,
+            material_risk_acknowledged=True,
+        )
+        return client, store, evaluation_id, payload
+
+    def test_acceptance_atomically_creates_only_mto_phase0_rows(self):
+        client, store, _, evaluation_id = self._open_evaluation()
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=self._acceptance_payload(evaluation),
+            headers=self._headers(client),
+        )
+
+        assert response.status_code == 200
+        _assert_only_operation_fields_changed(
+            before=before,
+            after=_public_store_snapshot(store),
+            operation="accept",
+        )
+        data = response.json()["Data"]
+        assert len(store.planning_demand_commitments) == 1
+        assert len(store.planning_reservation_batches) == 1
+        assert len(store.ccr_capacity_reservations) == 1
+        assert len(store.material_planning_allocations) == 1
+        assert len(store.planning_reservation_events) == 1
+        assert len(store.processed_planning_event_keys) == 1
+        assert data["DemandCommitmentID"] in store.planning_demand_commitments
+        assert data["ReservationBatchID"] in store.planning_reservation_batches
+        assert data["CapacityReservationIDs"] == list(
+            store.ccr_capacity_reservations
+        )
+        assert data["MaterialAllocationIDs"] == list(
+            store.material_planning_allocations
+        )
+
+    def test_conditional_recommended_date_creates_pending_material_and_zero_allocations(self):
+        client, store, evaluation_id, payload = (
+            self._conditional_recommended_fixture()
+        )
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._headers(client),
+        )
+
+        assert response.status_code == 200
+        data = response.json()["Data"]
+        demand = store.planning_demand_commitments[data["DemandCommitmentID"]]
+        assert demand["AcceptedPromiseAt"] == evaluation["ShadowSchedule"][
+            "EarliestSafeAssessment"
+        ]["PromiseAt"]
+        assert demand["MaterialCommitmentStatus"] == "PendingConfirmation"
+        assert demand["PendingMaterialRequirements"] == evaluation[
+            "MaterialAssessment"
+        ]["PendingRequirements"]
+        assert data["MaterialAllocationIDs"] == []
+        assert store.material_planning_allocations == {}
+
+    def test_decision_record_phase0_event_and_mto_event_share_server_actor_and_time(self):
+        client, store, _, evaluation_id = self._open_evaluation()
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=self._acceptance_payload(evaluation),
+            headers=self._headers(client),
+        )
+
+        assert response.status_code == 200
+        decision = store.order_commitment_evaluations[evaluation_id]["Decision"]
+        batch = next(iter(store.planning_reservation_batches.values()))
+        phase0_event = store.planning_reservation_events[-1]
+        mto_event = store.order_commitment_events[-1]
+        assert (
+            decision["DecidedBy"]
+            == batch["ConfirmedBy"]
+            == phase0_event["ActorID"]
+            == mto_event["ActorID"]
+            == "planner-task21"
+        )
+        assert (
+            decision["DecidedAt"]
+            == batch["ConfirmedAt"]
+            == phase0_event["OccurredAt"]
+            == mto_event["OccurredAt"]
+            == MTO_FIXTURE_TIME.isoformat()
+        )
+
+    def test_acceptance_response_is_accepted_pending_formal_schedule_and_not_performed_boundaries(self):
+        client, store, _, evaluation_id = self._open_evaluation()
+        payload = self._acceptance_payload(
+            store.order_commitment_evaluations[evaluation_id]
+        )
+
+        first = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._headers(client),
+        )
+        after_first = _public_store_snapshot(store)
+        first_revision = first.headers["X-Workbench-Revision"]
+        replay = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._headers(client),
+        )
+
+        assert first.status_code == replay.status_code == 200
+        data = first.json()["Data"]
+        assert data["Status"] == "AcceptedPendingFormalSchedule"
+        assert data["Evaluation"]["Status"] == "AcceptedPendingFormalSchedule"
+        assert data["ExternalOrderAcceptance"] == "NotPerformed"
+        assert data["PlanningRunCreation"] == "NotPerformed"
+        assert data["ProductionMutation"] == "NotPerformed"
+        assert replay.json()["Data"] == data
+        assert replay.headers["X-Workbench-Revision"] == first_revision
+        assert _public_store_snapshot(store) == after_first
+
+    def test_acceptance_creates_no_planning_run_and_does_not_change_existing_publication(self):
+        client, store, fixture, evaluation_id = self._open_evaluation()
+        before_runs = deepcopy(store.planning_runs)
+        before_publication = deepcopy(
+            store.planning_runs[fixture["BaselinePlanningRunID"]][
+                "PublicationHistory"
+            ]
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=self._acceptance_payload(
+                store.order_commitment_evaluations[evaluation_id]
+            ),
+            headers=self._headers(client),
+        )
+
+        assert response.status_code == 200
+        assert store.planning_runs == before_runs
+        assert store.planning_runs[fixture["BaselinePlanningRunID"]][
+            "PublicationHistory"
+        ] == before_publication
+
+    def test_intake_reevaluation_rejection_and_acceptance_deep_preserve_authority_state(self):
+        store, fixture = _order_commitment_store()
+        client = TestClient(api.create_app(
+            state_store=store,
+            require_auth=True,
+            utc_now=lambda: MTO_FIXTURE_TIME,
+        ))
+        before = _public_store_snapshot(store)
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        assert intake.status_code == 200
+        _assert_only_operation_fields_changed(
+            before=before,
+            after=_public_store_snapshot(store),
+            operation="intake",
+        )
+
+        evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+        before = _public_store_snapshot(store)
+        reevaluation = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
+            json={"RequestedBy": "planner-task21"},
+            headers=_planner_headers(),
+        )
+        assert reevaluation.status_code == 200
+        _assert_only_operation_fields_changed(
+            before=before,
+            after=_public_store_snapshot(store),
+            operation="reevaluate",
+        )
+
+        reject_client, reject_store, _, reject_id = self._open_evaluation()
+        before = _public_store_snapshot(reject_store)
+        rejection = reject_client.post(
+            f"/planner/workbench/order-commitments/{reject_id}/decision",
+            json=_decision_payload(
+                reject_store.order_commitment_evaluations[reject_id]
+            ),
+            headers=self._headers(reject_client),
+        )
+        assert rejection.status_code == 200
+        _assert_only_operation_fields_changed(
+            before=before,
+            after=_public_store_snapshot(reject_store),
+            operation="reject",
+        )
+
+        accept_client, accept_store, _, accept_id = self._open_evaluation()
+        before = _public_store_snapshot(accept_store)
+        acceptance = accept_client.post(
+            f"/planner/workbench/order-commitments/{accept_id}/decision",
+            json=self._acceptance_payload(
+                accept_store.order_commitment_evaluations[accept_id]
+            ),
+            headers=self._headers(accept_client),
+        )
+        assert acceptance.status_code == 200
+        _assert_only_operation_fields_changed(
+            before=before,
+            after=_public_store_snapshot(accept_store),
+            operation="accept",
+        )
+
+    def test_two_clients_one_revision_yield_one_success_one_revision_conflict(self):
+        store, fixture = _order_commitment_store()
+        app = api.create_app(
+            state_store=store,
+            require_auth=True,
+            utc_now=lambda: MTO_FIXTURE_TIME,
+        )
+        with TestClient(app) as first_client, TestClient(app) as second_client:
+            intake = first_client.post(
+                "/planner/workbench/order-commitments/intake",
+                json=fixture["IntakePayloadTemplate"],
+                headers=_planner_headers(),
+            )
+            evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+            payload = self._acceptance_payload(
+                store.order_commitment_evaluations[evaluation_id]
+            )
+            revision = first_client.get(
+                "/planner/workbench/order-commitments/workbench",
+                headers=_planner_headers(),
+            ).headers["X-Workbench-Revision"]
+            headers = self._headers(first_client, revision=revision)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                responses = list(executor.map(
+                    lambda client: client.post(
+                        f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+                        json=payload,
+                        headers=headers,
+                    ),
+                    (first_client, second_client),
+                ))
+
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        conflict = next(response for response in responses if response.status_code == 409)
+        assert conflict.json()["Data"]["Status"] == "StateStoreRevisionConflict"
+        assert store.revision == int(revision) + 1
+        assert store.order_commitment_evaluations[evaluation_id]["Status"] == (
+            "AcceptedPendingFormalSchedule"
+        )
+        assert len(store.planning_reservation_batches) == 1
+        assert sum(
+            event["EventType"] == "OrderCommitmentAccepted"
+            for event in store.order_commitment_events
+        ) == 1
+
+    def test_forced_save_failure_restores_all_mto_phase0_event_key_and_revision_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        client, store, _, evaluation_id = self._open_evaluation()
+        before = _public_store_snapshot(store)
+
+        def fail_save(_store: WorkbenchStateStore):
+            raise RuntimeError("forced Task 21 save failure")
+
+        monkeypatch.setattr(WorkbenchStateStore, "save", fail_save)
+
+        with pytest.raises(RuntimeError, match="forced Task 21 save failure"):
+            client.post(
+                f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+                json=self._acceptance_payload(
+                    store.order_commitment_evaluations[evaluation_id]
+                ),
+                headers=self._headers(client),
+            )
+
+        assert _public_store_snapshot(store) == before
+
+    def test_phase0_shared_read_row_exposes_only_evaluation_promise_and_material_status(self):
+        client, store, _, evaluation_id = self._open_evaluation()
+        acceptance = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=self._acceptance_payload(
+                store.order_commitment_evaluations[evaluation_id]
+            ),
+            headers=self._headers(client),
+        )
+        assert acceptance.status_code == 200
+
+        response = client.get(
+            "/planner/workbench/planning-reservations/workbench",
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 200
+        row = response.json()["Data"]["Rows"][0]
+        demand = next(iter(store.planning_demand_commitments.values()))
+        shared_base_fields = {
+            "ReservationBatchID",
+            "DemandCommitmentID",
+            "DemandClass",
+            "Status",
+            "ConfirmationID",
+            "ConfirmedBy",
+            "ConfirmedAt",
+            "CapacityReservationIDs",
+            "MaterialAllocationIDs",
+            "PlanningRunID",
+            "LastTransitionAt",
+            "EventType",
+            "DemandSourceType",
+        }
+        mto_context_fields = {
+            "OrderCommitmentEvaluationID",
+            "AcceptedPromiseAt",
+            "MaterialCommitmentStatus",
+        }
+        assert set(row) - shared_base_fields == mto_context_fields
+        assert row["OrderCommitmentEvaluationID"] == evaluation_id
+        assert row["AcceptedPromiseAt"] == demand["AcceptedPromiseAt"]
+        assert row["MaterialCommitmentStatus"] == "PlannedAllocationPrepared"
+        assert not {
+            "PendingMaterialRequirements",
+            "Order",
+            "Basis",
+            "DecisionFacts",
+            "EvaluationFingerprint",
+        } & set(row)
+
+    def test_viewer_worker_forbidden_and_planner_admin_allowed_to_accept(self):
+        for role in ("Viewer", "Worker"):
+            client, store, _, evaluation_id = self._open_evaluation()
+            before = _public_store_snapshot(store)
+            response = client.post(
+                f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+                json=self._acceptance_payload(
+                    store.order_commitment_evaluations[evaluation_id]
+                ),
+                headers=self._headers(
+                    client,
+                    actor_id=f"task21-{role.lower()}",
+                    actor_role=role,
+                ),
+            )
+            assert response.status_code == 403
+            assert _public_store_snapshot(store) == before
+
+        for role in ("Planner", "Admin"):
+            client, store, _, evaluation_id = self._open_evaluation()
+            actor_id = f"task21-{role.lower()}"
+            response = client.post(
+                f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+                json=self._acceptance_payload(
+                    store.order_commitment_evaluations[evaluation_id]
+                ),
+                headers=self._headers(
+                    client,
+                    actor_id=actor_id,
+                    actor_role=role,
+                ),
+            )
+            assert response.status_code == 200
+            assert store.order_commitment_evaluations[evaluation_id]["Decision"][
+                "DecidedBy"
+            ] == actor_id

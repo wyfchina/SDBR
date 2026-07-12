@@ -2866,13 +2866,14 @@ def create_app(
                     status="OrderCommitmentDecisionReplayConflict",
                     message="Decision replay content differs from persisted content.",
                 )
+            replay_write_set = None
             if evaluation["Status"] == "AcceptedPendingFormalSchedule":
                 original = deepcopy(evaluation)
                 original["Status"] = "AwaitingPlannerDecision"
                 original["RecordVersion"] = int(evaluation["RecordVersion"]) - 1
                 original.pop("Decision", None)
                 try:
-                    original_write_set = prepare_mto_acceptance(
+                    replay_write_set = prepare_mto_acceptance(
                         evaluation=original,
                         existing_commitments={},
                         decision_id=str(persisted_decision["DecisionID"]),
@@ -2888,7 +2889,7 @@ def create_app(
                         ),
                     )
                     assert_reservation_write_set_replay_matches(
-                        write_set=original_write_set,
+                        write_set=replay_write_set,
                         commitments=deepcopy(planning_demand_commitments),
                         batches=deepcopy(planning_reservation_batches),
                         capacity_reservations=deepcopy(ccr_capacity_reservations),
@@ -2914,22 +2915,32 @@ def create_app(
                     message="Evaluation cannot receive a decision.",
                 )
             request.state.skip_workbench_persistence = True
+            replay_data = {
+                "Evaluation": _order_commitment_row(evaluation),
+                "Status": evaluation["Status"],
+                "DemandCommitmentID": persisted_decision.get(
+                    "DemandCommitmentID"
+                ),
+                "ReservationBatchID": persisted_decision.get(
+                    "ReservationBatchID"
+                ),
+                "ExternalOrderAcceptance": "NotPerformed",
+                "PlanningRunCreation": "NotPerformed",
+                "ProductionMutation": "NotPerformed",
+            }
+            if replay_write_set is not None:
+                replay_data.update({
+                    "CapacityReservationIDs": list(
+                        replay_write_set.batch["CapacityReservationIDs"]
+                    ),
+                    "MaterialAllocationIDs": list(
+                        replay_write_set.batch["MaterialAllocationIDs"]
+                    ),
+                })
             return {
                 "Endpoint": endpoint,
                 "StatusCode": 200,
-                "Data": {
-                    "Evaluation": _order_commitment_row(evaluation),
-                    "Status": evaluation["Status"],
-                    "DemandCommitmentID": persisted_decision.get(
-                        "DemandCommitmentID"
-                    ),
-                    "ReservationBatchID": persisted_decision.get(
-                        "ReservationBatchID"
-                    ),
-                    "ExternalOrderAcceptance": "NotPerformed",
-                    "PlanningRunCreation": "NotPerformed",
-                    "ProductionMutation": "NotPerformed",
-                },
+                "Data": replay_data,
             }
         if payload.Decision != "Reject":
             material = evaluation["MaterialAssessment"]
@@ -2981,12 +2992,84 @@ def create_app(
                         },
                     },
                 )
-            return _order_commitment_error(
-                endpoint=endpoint,
-                status_code=409,
-                status="OrderCommitmentDecisionNotImplemented",
-                message="Acceptance mutation is not available in this endpoint slice.",
+            try:
+                write_set = prepare_mto_acceptance(
+                    evaluation=evaluation,
+                    existing_commitments=planning_demand_commitments,
+                    decision_id=payload.DecisionID,
+                    decision=payload.Decision,
+                    decided_by=actor_id,
+                    decided_at=decision_at,
+                    reason=payload.Reason,
+                    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+                )
+                apply_reservation_write_set(
+                    write_set=write_set,
+                    commitments=planning_demand_commitments,
+                    batches=planning_reservation_batches,
+                    capacity_reservations=ccr_capacity_reservations,
+                    material_allocations=material_planning_allocations,
+                    events=planning_reservation_events,
+                    processed_event_keys=processed_planning_event_keys,
+                )
+                updated = accepted_evaluation_record(
+                    evaluation=evaluation,
+                    write_set=write_set,
+                    decision_id=payload.DecisionID,
+                    decision=payload.Decision,
+                    decided_by=actor_id,
+                    decided_at=decision_at,
+                    reason=payload.Reason,
+                    ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                    material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+                )
+            except (OrderCommitmentConflict, ReservationConflict) as error:
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status=error.status,
+                    message=str(error),
+                )
+            order_commitment_evaluations[evaluation_id] = updated
+            _append_order_commitment_event(
+                evaluation=updated,
+                event_type="OrderCommitmentAccepted",
+                actor_id=actor_id,
+                occurred_at=decision_at,
+                decision_id=payload.DecisionID.strip(),
+                reservation_batch_id=write_set.batch["ReservationBatchID"],
+                causation_id=payload.DecisionID.strip(),
+                details={
+                    "FromStatus": "AwaitingPlannerDecision",
+                    "ToStatus": "AcceptedPendingFormalSchedule",
+                    "DecisionCode": payload.Decision,
+                    "AcceptedPromiseAt": updated["Decision"]["AcceptedPromiseAt"],
+                    "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+                    "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+                },
             )
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "Evaluation": _order_commitment_row(updated),
+                    "DemandCommitmentID": write_set.demand_commitment[
+                        "DemandCommitmentID"
+                    ],
+                    "ReservationBatchID": write_set.batch["ReservationBatchID"],
+                    "CapacityReservationIDs": list(
+                        write_set.batch["CapacityReservationIDs"]
+                    ),
+                    "MaterialAllocationIDs": list(
+                        write_set.batch["MaterialAllocationIDs"]
+                    ),
+                    "Status": "AcceptedPendingFormalSchedule",
+                    "ExternalOrderAcceptance": "NotPerformed",
+                    "PlanningRunCreation": "NotPerformed",
+                    "ProductionMutation": "NotPerformed",
+                },
+            }
         try:
             updated = rejected_evaluation_record(
                 evaluation=evaluation,
@@ -6000,6 +6083,18 @@ def create_app(
                     demand_source_type = commitment.get("DemandSourceType")
                     if demand_source_type in DEMAND_SOURCE_TYPES:
                         row["DemandSourceType"] = demand_source_type
+                    if commitment.get("OrderCommitmentEvaluationID") is not None:
+                        row.update({
+                            "OrderCommitmentEvaluationID": commitment.get(
+                                "OrderCommitmentEvaluationID"
+                            ),
+                            "AcceptedPromiseAt": commitment.get(
+                                "AcceptedPromiseAt"
+                            ),
+                            "MaterialCommitmentStatus": commitment.get(
+                                "MaterialCommitmentStatus"
+                            ),
+                        })
                 rows.append(row)
             rows.sort(
                 key=lambda item: (

@@ -520,7 +520,7 @@ def _assert_replay_record_content(
         )
 
 
-def _assert_idempotent_replay_matches(
+def assert_reservation_write_set_replay_matches(
     *,
     write_set: PlanningReservationWriteSet,
     commitments: Mapping[str, dict[str, object]],
@@ -528,9 +528,15 @@ def _assert_idempotent_replay_matches(
     capacity_reservations: Mapping[str, dict[str, object]],
     material_allocations: Mapping[str, dict[str, object]],
     events: MutableSequence[dict[str, object]],
-    current_fingerprint: str,
-    expected_result: dict[str, object],
+    processed_event_keys: MutableSet[str],
 ) -> None:
+    if write_set.idempotency_key not in processed_event_keys:
+        raise ReservationLegacyMigrationRequired(
+            "Reservation idempotency key is not recorded as processed."
+        )
+    current_fingerprint, expected_result = _assert_write_set_fingerprint_and_result(
+        write_set
+    )
     matching_events = [
         event
         for event in events
@@ -559,6 +565,10 @@ def _assert_idempotent_replay_matches(
     ):
         raise ReservationConflict(
             "Reservation idempotency key was already used with different content."
+        )
+    if persisted_event != write_set.events[0]:
+        raise ReservationConflict(
+            "Persisted reservation replay event immutable content drifted."
         )
     demand_id = str(expected_result["DemandCommitmentID"])
     batch_id = str(expected_result["ReservationBatchID"])
@@ -686,19 +696,15 @@ def apply_reservation_write_set(
     )
     _assert_no_duplicate_ids(write_set.material_allocations, "MaterialAllocationID")
     _assert_no_duplicate_ids(write_set.events, "EventID")
-    current_fingerprint, expected_result = _assert_write_set_fingerprint_and_result(
-        write_set
-    )
     if write_set.idempotency_key in processed_event_keys:
-        _assert_idempotent_replay_matches(
+        assert_reservation_write_set_replay_matches(
             write_set=write_set,
             commitments=commitments,
             batches=batches,
             capacity_reservations=capacity_reservations,
             material_allocations=material_allocations,
             events=events,
-            current_fingerprint=current_fingerprint,
-            expected_result=expected_result,
+            processed_event_keys=processed_event_keys,
         )
         return
 

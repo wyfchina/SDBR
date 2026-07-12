@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 import json
 import sys
@@ -16,9 +17,12 @@ from sdbr import api
 from sdbr.operational_state import OperationalStateSnapshot
 from sdbr.order_commitment_evaluation import (
     OrderCommitmentConflict,
+    accepted_evaluation_record,
     normalize_mto_order,
+    prepare_mto_acceptance,
     rejected_evaluation_record,
 )
+from sdbr.planning_reservations import apply_reservation_write_set
 from sdbr.order_commitment_view import DETAIL_FIELDS, ORDER_COMMITMENT_ROW_FIELDS
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import seed_mto_order_commitment_fixture
@@ -59,6 +63,26 @@ def _order_commitment_client(
 
 def _planner_headers() -> dict[str, str]:
     return {"X-Actor-ID": "planner-task17", "X-Actor-Role": "Planner"}
+
+
+def _decision_payload(
+    evaluation: dict[str, object],
+    *,
+    decision_id: str = "DEC-TST-MTO-TASK19",
+    decision: str = "Reject",
+    reason: str = "Planner rejected the requested MTO commitment.",
+    ccr_risk_acknowledged: bool = False,
+    material_risk_acknowledged: bool = False,
+) -> dict[str, object]:
+    return {
+        "DecisionID": decision_id,
+        "Decision": decision,
+        "DecidedBy": "client-spoofed-planner",
+        "Reason": reason,
+        "ExpectedEvaluationFingerprint": evaluation["EvaluationFingerprint"],
+        "CcrRiskAcknowledged": ccr_risk_acknowledged,
+        "MaterialRiskAcknowledged": material_risk_acknowledged,
+    }
 
 
 def _auth_request(method: str, role: str) -> Request:
@@ -130,6 +154,17 @@ def _error_data(result: dict[str, object] | JSONResponse) -> dict[str, object]:
 def _evaluation_data(result: dict[str, object] | JSONResponse) -> dict[str, object]:
     assert isinstance(result, dict)
     return result
+
+
+PUBLIC_STORE_FIELDS = tuple(
+    item.name
+    for item in fields(WorkbenchStateStore)
+    if not item.name.startswith("_")
+)
+
+
+def _public_store_snapshot(store: WorkbenchStateStore) -> dict[str, object]:
+    return {name: deepcopy(getattr(store, name)) for name in PUBLIC_STORE_FIELDS}
 
 
 class TestOrderCommitmentApiContracts:
@@ -660,6 +695,7 @@ class TestOrderCommitmentApiIntakeAndReads:
             "PlanningReservationEvents"
         ]
 
+
     def test_v1_to_v2_intake_atomically_supersedes_v1_and_old_row_has_no_actions(self):
         client, store, fixture = _order_commitment_client()
         v1 = client.post(
@@ -1059,3 +1095,314 @@ class TestOrderCommitmentApiReevaluation:
         assert store.planning_reservation_events == before[
             "PlanningReservationEvents"
         ]
+
+class TestOrderCommitmentApiDecisionReplay:
+    """BE-SDBR-010: revision-guarded decisions and immutable terminal replay."""
+
+    @staticmethod
+    def _open_evaluation(
+        client: TestClient,
+        fixture: dict[str, object],
+    ) -> str:
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        assert response.status_code == 200
+        return response.json()["Data"]["Evaluation"]["EvaluationID"]
+
+    @staticmethod
+    def _decision_headers(
+        client: TestClient,
+        *,
+        actor_id: str = "planner-task17",
+    ) -> dict[str, str]:
+        revision = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        ).headers["X-Workbench-Revision"]
+        return {
+            "X-Actor-ID": actor_id,
+            "X-Actor-Role": "Planner",
+            "If-Match": revision,
+        }
+
+    def _rejected_fixture(self):
+        client, store, fixture = _order_commitment_client()
+        evaluation_id = self._open_evaluation(client, fixture)
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        return client, store, evaluation_id, _decision_payload(evaluation)
+
+    def _accepted_fixture(self):
+        client, store, fixture = _order_commitment_client()
+        evaluation_id = self._open_evaluation(client, fixture)
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        assert "AcceptRequestedDate" in evaluation["Recommendation"]["AllowedActions"]
+        payload = _decision_payload(
+            evaluation,
+            decision_id="DEC-TST-MTO-ACCEPTED-REPLAY",
+            decision="AcceptRequestedDate",
+            reason="Planner accepted the requested MTO commitment.",
+            ccr_risk_acknowledged=True,
+        )
+        write_set = prepare_mto_acceptance(
+            evaluation=evaluation,
+            existing_commitments={},
+            decision_id=str(payload["DecisionID"]),
+            decision=str(payload["Decision"]),
+            decided_by="planner-task17",
+            decided_at=MTO_FIXTURE_TIME,
+            reason=str(payload["Reason"]),
+            ccr_risk_acknowledged=True,
+            material_risk_acknowledged=False,
+        )
+        apply_reservation_write_set(
+            write_set=write_set,
+            commitments=store.planning_demand_commitments,
+            batches=store.planning_reservation_batches,
+            capacity_reservations=store.ccr_capacity_reservations,
+            material_allocations=store.material_planning_allocations,
+            events=store.planning_reservation_events,
+            processed_event_keys=store.processed_planning_event_keys,
+        )
+        demand = next(iter(store.planning_demand_commitments.values()))
+        batch = next(iter(store.planning_reservation_batches.values()))
+        capacity = next(iter(store.ccr_capacity_reservations.values()))
+        material = next(iter(store.material_planning_allocations.values()))
+        demand.update({"Status": "LinkedToFormalOrder", "RecordVersion": 2})
+        for record in (batch, capacity):
+            record.update({
+                "Status": "ConvertedToScheduledOccupancy",
+                "RecordVersion": 2,
+                "PlanningRunID": "RUN-TST-MTO-1",
+                "LastTransitionAt": "2026-07-20T12:00:00+00:00",
+                "EventType": "PlanningRunCompleted",
+            })
+        material.update({
+            "Status": "Externalized",
+            "RecordVersion": 2,
+            "ExternalAllocationRef": "ERP-ALLOC-TST-MTO-1",
+            "MaterialSnapshotID": "OPS-AUTHORITY-TST-MTO-1",
+        })
+        store.order_commitment_evaluations[evaluation_id] = accepted_evaluation_record(
+            evaluation=evaluation,
+            write_set=write_set,
+            decision_id=str(payload["DecisionID"]),
+            decision=str(payload["Decision"]),
+            decided_by="planner-task17",
+            decided_at=MTO_FIXTURE_TIME,
+            reason=str(payload["Reason"]),
+            ccr_risk_acknowledged=True,
+            material_risk_acknowledged=False,
+        )
+        return client, store, evaluation_id, payload
+
+    def test_decision_requires_if_match_and_exact_evaluation_fingerprint(self):
+        client, store, evaluation_id, payload = self._rejected_fixture()
+        missing = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=_planner_headers(),
+        )
+        mismatched = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json={**payload, "ExpectedEvaluationFingerprint": "0" * 64},
+            headers=self._decision_headers(client),
+        )
+
+        assert missing.status_code == 428
+        assert missing.json()["Data"]["Status"] == "OrderCommitmentPreconditionRequired"
+        assert mismatched.status_code == 409
+        assert mismatched.json()["Data"]["Status"] == (
+            "OrderCommitmentEvaluationFingerprintMismatch"
+        )
+        assert store.order_commitment_evaluations[evaluation_id]["Status"] == "AwaitingPlannerDecision"
+
+    def test_reject_records_server_actor_and_time_without_phase0_rows(self):
+        client, store, evaluation_id, payload = self._rejected_fixture()
+        before_phase0 = (
+            deepcopy(store.planning_demand_commitments),
+            deepcopy(store.planning_reservation_batches),
+            deepcopy(store.ccr_capacity_reservations),
+            deepcopy(store.material_planning_allocations),
+            deepcopy(store.planning_reservation_events),
+            deepcopy(store.processed_planning_event_keys),
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 200
+        rejected = store.order_commitment_evaluations[evaluation_id]
+        assert rejected["Status"] == "Rejected"
+        assert rejected["Decision"]["DecidedBy"] == "planner-task17"
+        assert rejected["Decision"]["DecidedAt"] == MTO_FIXTURE_TIME.isoformat()
+        assert (
+            store.planning_demand_commitments,
+            store.planning_reservation_batches,
+            store.ccr_capacity_reservations,
+            store.material_planning_allocations,
+            store.planning_reservation_events,
+            store.processed_planning_event_keys,
+        ) == before_phase0
+
+    def test_exact_reject_replay_returns_same_record_without_duplicate_event(self):
+        client, store, evaluation_id, payload = self._rejected_fixture()
+        first = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+        event_count = len(store.order_commitment_events)
+        second = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert first.status_code == second.status_code == 200
+        assert first.json()["Data"] == second.json()["Data"]
+        assert len(store.order_commitment_events) == event_count
+
+    def test_exact_accepted_replay_returns_same_verified_phase0_result(self):
+        client, store, evaluation_id, payload = self._accepted_fixture()
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 200
+        data = response.json()["Data"]
+        assert data["Status"] == "AcceptedPendingFormalSchedule"
+        assert data["DemandCommitmentID"] == store.order_commitment_evaluations[
+            evaluation_id
+        ]["Decision"]["DemandCommitmentID"]
+        assert data["ReservationBatchID"] == store.order_commitment_evaluations[
+            evaluation_id
+        ]["Decision"]["ReservationBatchID"]
+        assert next(iter(store.planning_reservation_batches.values()))["Status"] == (
+            "ConvertedToScheduledOccupancy"
+        )
+        assert next(iter(store.material_planning_allocations.values()))["Status"] == (
+            "Externalized"
+        )
+        assert _public_store_snapshot(store) == before
+
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            "demand_quantity", "batch_confirmed_by", "capacity_reserved_minutes",
+            "material_allocated_qty", "event_payload_fingerprint",
+            "event_result_batch_id", "event_actor_id", "event_occurred_at",
+            "event_demand_id", "batch_demand_id", "batch_capacity_id",
+            "batch_material_id",
+        ),
+    )
+    def test_exact_accepted_replay_rejects_one_field_phase0_corruption(self, mutation: str):
+        client, store, evaluation_id, payload = self._accepted_fixture()
+        demand = next(iter(store.planning_demand_commitments.values()))
+        batch = next(iter(store.planning_reservation_batches.values()))
+        capacity = next(iter(store.ccr_capacity_reservations.values()))
+        material = next(iter(store.material_planning_allocations.values()))
+        event = store.planning_reservation_events[0]
+        if mutation == "demand_quantity": demand["Quantity"] = 999
+        elif mutation == "batch_confirmed_by": batch["ConfirmedBy"] = "planner-corrupted"
+        elif mutation == "capacity_reserved_minutes": capacity["ReservedMinutes"] = 999
+        elif mutation == "material_allocated_qty": material["AllocatedQty"] = 999
+        elif mutation == "event_payload_fingerprint": event["PayloadFingerprint"] = "corrupted"
+        elif mutation == "event_result_batch_id": event["Result"]["ReservationBatchID"] = "PRB-corrupted"
+        elif mutation == "event_actor_id": event["ActorID"] = "planner-corrupted"
+        elif mutation == "event_occurred_at": event["OccurredAt"] = "2026-07-13T08:00:00+00:00"
+        elif mutation == "event_demand_id": event["DemandCommitmentID"] = "DC-corrupted"
+        elif mutation == "batch_demand_id": batch["DemandCommitmentID"] = "DC-corrupted"
+        elif mutation == "batch_capacity_id": batch["CapacityReservationIDs"][0] = "CCR-corrupted"
+        else: batch["MaterialAllocationIDs"][0] = "MAT-corrupted"
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == (
+            "OrderCommitmentDecisionReplayEvidenceMismatch"
+        )
+        assert _public_store_snapshot(store) == before
+
+    @pytest.mark.parametrize(
+        ("payload_change", "headers_change", "expected_status"),
+        (
+            ({"Decision": "AcceptRequestedDate"}, {}, "OrderCommitmentDecisionReplayConflict"),
+            ({"ExpectedEvaluationFingerprint": "0" * 64}, {}, "OrderCommitmentEvaluationFingerprintMismatch"),
+            ({}, {"X-Actor-ID": "planner-other"}, "OrderCommitmentDecisionReplayConflict"),
+            ({"Reason": "A different trimmed rejection reason."}, {}, "OrderCommitmentDecisionReplayConflict"),
+            ({"CcrRiskAcknowledged": True}, {}, "OrderCommitmentDecisionReplayConflict"),
+            ({"MaterialRiskAcknowledged": True}, {}, "OrderCommitmentDecisionReplayConflict"),
+        ),
+    )
+    def test_same_decision_id_one_field_at_a_time_change_conflicts(
+        self,
+        payload_change: dict[str, object],
+        headers_change: dict[str, str],
+        expected_status: str,
+    ):
+        client, _, evaluation_id, payload = self._rejected_fixture()
+        first = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+        assert first.status_code == 200
+        headers = self._decision_headers(client)
+        headers.update(headers_change)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json={**payload, **payload_change},
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == expected_status
+
+    def test_terminal_row_rejects_new_decision_id(self):
+        client, _, evaluation_id, payload = self._rejected_fixture()
+        first = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+        assert first.status_code == 200
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json={**payload, "DecisionID": "DEC-TST-MTO-NEW"},
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 409
+        assert response.json()["Data"]["Status"] == "OrderCommitmentDecisionReplayConflict"
+
+    def test_decision_event_and_record_share_one_server_time_and_actor(self):
+        client, store, evaluation_id, payload = self._rejected_fixture()
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 200
+        decision = store.order_commitment_evaluations[evaluation_id]["Decision"]
+        event = store.order_commitment_events[-1]
+        assert decision["DecidedBy"] == event["ActorID"] == "planner-task17"
+        assert decision["DecidedAt"] == event["OccurredAt"] == MTO_FIXTURE_TIME.isoformat()

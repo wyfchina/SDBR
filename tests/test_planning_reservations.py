@@ -16,6 +16,7 @@ from sdbr.planning_commitments import (
 from sdbr.planning_reservations import (
     ReservationConflict,
     apply_reservation_write_set,
+    assert_reservation_write_set_replay_matches,
     prepare_reservation_confirmation,
 )
 
@@ -264,6 +265,59 @@ def test_idempotent_replay_allows_documented_lifecycle_changes():
 
     assert len(collections[1]) == 1
     assert len(collections[4]) == 1
+
+
+def test_public_replay_verifier_accepts_evolved_ledger_without_mutation():
+    write_set = _prepare(
+        capacity_requests=[_capacity_request()],
+        material_requests=[{
+            "RequirementLineID": "REQ-1",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 20,
+            "MaterialSnapshotID": "OPS-1",
+        }],
+    )
+    collections = ({}, {}, {}, {}, [], set())
+    _apply(write_set, collections)
+    demand = collections[0][str(write_set.demand_commitment["DemandCommitmentID"])]
+    batch = collections[1][str(write_set.batch["ReservationBatchID"])]
+    capacity = collections[2][
+        str(write_set.capacity_reservations[0]["CapacityReservationID"])
+    ]
+    material = collections[3][
+        str(write_set.material_allocations[0]["MaterialAllocationID"])
+    ]
+    demand.update({"Status": "LinkedToFormalOrder", "RecordVersion": 2})
+    for record in (batch, capacity):
+        record.update(
+            {
+                "Status": "ConvertedToScheduledOccupancy",
+                "RecordVersion": 2,
+                "PlanningRunID": "RUN-1",
+                "LastTransitionAt": "2026-07-20T12:00:00+00:00",
+                "EventType": "PlanningRunCompleted",
+            }
+        )
+    material.update({
+        "Status": "Externalized",
+        "RecordVersion": 2,
+        "ExternalAllocationRef": "ERP-ALLOC-1",
+        "MaterialSnapshotID": "OPS-AUTHORITY-2",
+    })
+    before = deepcopy(collections)
+
+    assert_reservation_write_set_replay_matches(
+        write_set=write_set,
+        commitments=collections[0],
+        batches=collections[1],
+        capacity_reservations=collections[2],
+        material_allocations=collections[3],
+        events=collections[4],
+        processed_event_keys=collections[5],
+    )
+
+    assert collections == before
 
 
 @pytest.mark.parametrize(

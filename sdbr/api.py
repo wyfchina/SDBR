@@ -146,6 +146,7 @@ from sdbr.planning_reservations import (
     ReservationConflict,
     ReservationLegacyMigrationRequired,
     apply_reservation_write_set,
+    assert_reservation_write_set_replay_matches,
 )
 from sdbr.public_demo_golden_loop import (
     get_public_demo_golden_loop_status,
@@ -2792,6 +2793,196 @@ def create_app(
                 "RegistrationStatus": registration,
                 "Evaluation": _order_commitment_row(persisted),
                 "Boundary": _order_commitment_boundary(),
+            },
+        }
+
+    @app.post("/planner/workbench/order-commitments/{evaluation_id}/decision")
+    def planner_workbench_order_commitment_decide(
+        evaluation_id: str,
+        payload: MtoOrderCommitmentDecisionPayload,
+        request: Request,
+    ):
+        endpoint = (
+            "/planner/workbench/order-commitments/"
+            f"{evaluation_id}/decision"
+        )
+        if request.headers.get("if-match") is None:
+            return JSONResponse(
+                status_code=428,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 428,
+                    "Data": {"Status": "OrderCommitmentPreconditionRequired"},
+                },
+            )
+        evaluation = order_commitment_evaluations.get(evaluation_id)
+        if evaluation is None:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=404,
+                status="OrderCommitmentEvaluationNotFound",
+                message="Order commitment evaluation was not found.",
+            )
+        if payload.ExpectedEvaluationFingerprint != evaluation[
+            "EvaluationFingerprint"
+        ]:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentEvaluationFingerprintMismatch",
+                message="Expected evaluation fingerprint does not match.",
+            )
+        decision_at = server_utc_now()
+        actor_id = _effective_actor_id(request, payload.DecidedBy)
+        incoming_fingerprint = canonical_decision_fingerprint(
+            evaluation=evaluation,
+            decision_id=payload.DecisionID,
+            decision=payload.Decision,
+            actor_id=actor_id,
+            reason=payload.Reason,
+            ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+            material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+        )
+        if evaluation["Status"] == "Superseded":
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentEvaluationNotDecisionEligible",
+                message="Superseded evaluation cannot receive a decision.",
+            )
+        if evaluation["Status"] != "AwaitingPlannerDecision":
+            persisted_decision = evaluation.get("Decision")
+            if not isinstance(persisted_decision, dict):
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentDecisionEvidenceMissing",
+                    message="Persisted decision evidence is missing.",
+                )
+            if persisted_decision["DecisionFingerprint"] != incoming_fingerprint:
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentDecisionReplayConflict",
+                    message="Decision replay content differs from persisted content.",
+                )
+            if evaluation["Status"] == "AcceptedPendingFormalSchedule":
+                original = deepcopy(evaluation)
+                original["Status"] = "AwaitingPlannerDecision"
+                original["RecordVersion"] = int(evaluation["RecordVersion"]) - 1
+                original.pop("Decision", None)
+                try:
+                    original_write_set = prepare_mto_acceptance(
+                        evaluation=original,
+                        existing_commitments={},
+                        decision_id=str(persisted_decision["DecisionID"]),
+                        decision=str(persisted_decision["Decision"]),
+                        decided_by=str(persisted_decision["DecidedBy"]),
+                        decided_at=_parse_aware(persisted_decision["DecidedAt"]),
+                        reason=str(persisted_decision["Reason"]),
+                        ccr_risk_acknowledged=bool(
+                            persisted_decision["CcrRiskAcknowledged"]
+                        ),
+                        material_risk_acknowledged=bool(
+                            persisted_decision["MaterialRiskAcknowledged"]
+                        ),
+                    )
+                    assert_reservation_write_set_replay_matches(
+                        write_set=original_write_set,
+                        commitments=deepcopy(planning_demand_commitments),
+                        batches=deepcopy(planning_reservation_batches),
+                        capacity_reservations=deepcopy(ccr_capacity_reservations),
+                        material_allocations=deepcopy(material_planning_allocations),
+                        events=deepcopy(planning_reservation_events),
+                        processed_event_keys=deepcopy(processed_planning_event_keys),
+                    )
+                except ReservationConflict:
+                    return _order_commitment_error(
+                        endpoint=endpoint,
+                        status_code=409,
+                        status="OrderCommitmentDecisionReplayEvidenceMismatch",
+                        message=(
+                            "Persisted acceptance does not match its canonical "
+                            "Phase 0 write set."
+                        ),
+                    )
+            elif evaluation["Status"] != "Rejected":
+                return _order_commitment_error(
+                    endpoint=endpoint,
+                    status_code=409,
+                    status="OrderCommitmentEvaluationNotDecisionEligible",
+                    message="Evaluation cannot receive a decision.",
+                )
+            request.state.skip_workbench_persistence = True
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    "Evaluation": _order_commitment_row(evaluation),
+                    "Status": evaluation["Status"],
+                    "DemandCommitmentID": persisted_decision.get(
+                        "DemandCommitmentID"
+                    ),
+                    "ReservationBatchID": persisted_decision.get(
+                        "ReservationBatchID"
+                    ),
+                    "ExternalOrderAcceptance": "NotPerformed",
+                    "PlanningRunCreation": "NotPerformed",
+                    "ProductionMutation": "NotPerformed",
+                },
+            }
+        if payload.Decision != "Reject":
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentDecisionNotImplemented",
+                message="Acceptance mutation is not available in this endpoint slice.",
+            )
+        try:
+            updated = rejected_evaluation_record(
+                evaluation=evaluation,
+                decision_id=payload.DecisionID,
+                decision="Reject",
+                decided_by=actor_id,
+                decided_at=decision_at,
+                reason=payload.Reason,
+                ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
+                material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+            )
+        except OrderCommitmentConflict as error:
+            return _order_commitment_error(
+                endpoint=endpoint,
+                status_code=409,
+                status="OrderCommitmentDecisionNotAllowed",
+                message=str(error),
+            )
+        order_commitment_evaluations[evaluation_id] = updated
+        _append_order_commitment_event(
+            evaluation=updated,
+            event_type="OrderCommitmentRejected",
+            actor_id=actor_id,
+            occurred_at=decision_at,
+            decision_id=payload.DecisionID.strip(),
+            causation_id=payload.DecisionID.strip(),
+            details={
+                "FromStatus": "AwaitingPlannerDecision",
+                "ToStatus": "Rejected",
+                "DecisionCode": "Reject",
+                "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
+                "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+            },
+        )
+        return {
+            "Endpoint": endpoint,
+            "StatusCode": 200,
+            "Data": {
+                "Evaluation": _order_commitment_row(updated),
+                "Status": updated["Status"],
+                "DemandCommitmentID": None,
+                "ReservationBatchID": None,
+                "ExternalOrderAcceptance": "NotPerformed",
+                "PlanningRunCreation": "NotPerformed",
+                "ProductionMutation": "NotPerformed",
             },
         }
 

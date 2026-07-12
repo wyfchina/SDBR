@@ -8,6 +8,14 @@ from pathlib import Path
 import shutil
 
 from sdbr.inventory_import import InventoryBufferImportRow, import_inventory_buffers_from_rows
+from sdbr.ddmrp_replenishment import (
+    apply_staged_ddmrp_evaluation,
+    build_read_only_authority_signature,
+    build_relevant_planning_ledger_identity,
+    prepare_ddmrp_evaluation,
+    stage_ddmrp_evaluation,
+)
+from sdbr.ddsop_contracts import canonical_operating_model_fingerprint
 from sdbr.master_data_validation import MaterialRequirement, validate_master_data
 from sdbr.material_state import (
     MaterialAvailabilityImportRow,
@@ -31,6 +39,16 @@ WIP_LIMIT_OPERATIONAL_STATE_ID = "TST-OPS-WIP-LIMIT-20260619"
 DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID = "TST-DDMRP-MDV-NET-FLOW-20260625"
 P1_MARKET_CONTROL_MASTER_DATA_VERSION_ID = "TST-P1-MDV-MARKET-CONTROL-20260709"
 P1_MARKET_CONTROL_RUN_ID = "TST-P1-RUN-MARKET-CONTROL-20260709"
+DDMRP_READ_ONLY_REPLENISHMENT_CASE_ID = "TST-DDMRP-REPLENISHMENT-READONLY-20260711"
+DDMRP_READ_ONLY_REPLENISHMENT_EVALUATED_AT = datetime(
+    2026, 7, 11, 1, tzinfo=timezone.utc
+)
+DDMRP_READ_ONLY_REPLENISHMENT_ITEM_IDS = (
+    "TST-DDMRP-RO-ABOVE-GREEN",
+    "TST-DDMRP-RO-GREEN",
+    "TST-DDMRP-RO-RED",
+    "TST-DDMRP-RO-YELLOW",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,7 +416,26 @@ def test_case_catalog_payload() -> dict[str, object]:
                     "BE-DDMRP-006",
                     "UI-DDMRP-001",
                 ],
-            }
+            },
+            {
+                "CaseID": DDMRP_READ_ONLY_REPLENISHMENT_CASE_ID,
+                "CaseGroup": "DDMRPRuntimeCases",
+                "NameZh": "DDMRP 只读补货受控夹具",
+                "MasterDataVersionID": None,
+                "PurposeZh": "验证受控测试夹具可重复展示受门控的只读补货评估，且不授权任何操作写入。",
+                "TestFixtureOnly": True,
+                "ExpectedSummary": {
+                    "RedCount": 1,
+                    "YellowCount": 1,
+                    "GreenCount": 1,
+                    "AboveGreenCount": 1,
+                    "BlockedRecommendationCount": 2,
+                    "PendingReviewCount": 0,
+                    "AdjustmentRequiredCount": 0,
+                    "ActiveGraphCount": 0,
+                },
+                "CoveredSpecIDs": ["BE-DDMRP-007", "UI-DDMRP-003"],
+            },
         ],
         "Cases": [case.to_dict() for case in test_case_catalog()],
     }
@@ -519,6 +556,7 @@ def seed_baseline_test_data(store: WorkbenchStateStore) -> TestDataResetSummary:
         captured_at=captured_at + timedelta(days=5),
     )
     _seed_ddmrp_net_flow_case(store=store, captured_at=captured_at + timedelta(days=6))
+    _seed_ddmrp_read_only_replenishment_case(store=store)
 
     store.audit_events.append(
         {
@@ -915,6 +953,198 @@ def _seed_ddmrp_net_flow_case(
             },
         }
     )
+
+
+def _seed_ddmrp_read_only_replenishment_case(*, store: WorkbenchStateStore) -> None:
+    evaluated_at = DDMRP_READ_ONLY_REPLENISHMENT_EVALUATED_AT
+    operating_model_configuration = {
+        "OperatingModelConfigurationID": "TST-DDMRP-RO-OMC-20260711",
+        "Status": "Approved",
+        "DDMRPConfiguration": {
+            "DDMRPConfigurationID": "TST-DDMRP-RO-CONFIG-20260711",
+        },
+    }
+    operating_model_configuration["Fingerprint"] = canonical_operating_model_fingerprint(
+        operating_model_configuration
+    )
+    package_record = {
+        "RuntimePlanningInputPackageID": "TST-DDMRP-RO-RPI-20260711",
+        "PackageVersion": "1.0.0",
+        "PackageStatus": "Reviewed",
+        "OperatingModelConfigurationID": operating_model_configuration[
+            "OperatingModelConfigurationID"
+        ],
+        "OperatingModelFingerprint": operating_model_configuration["Fingerprint"],
+        "DDMRPConfigurationID": operating_model_configuration["DDMRPConfiguration"][
+            "DDMRPConfigurationID"
+        ],
+        "Payload": {
+            "PackageIdentity": {
+                "RuntimePlanningInputPackageID": "TST-DDMRP-RO-RPI-20260711",
+                "PackageVersion": "1.0.0",
+                "PackageStatus": "Reviewed",
+                "ScenarioLabel": "DemoFixture",
+                "MappingConfidence": "PublicDemoOnly",
+            },
+            "FrozenDdsopConfiguration": {
+                "OperatingModelConfigurationID": operating_model_configuration[
+                    "OperatingModelConfigurationID"
+                ],
+                "OperatingModelFingerprint": operating_model_configuration[
+                    "Fingerprint"
+                ],
+                "DDMRPConfigurationID": operating_model_configuration[
+                    "DDMRPConfiguration"
+                ]["DDMRPConfigurationID"],
+            },
+            "ParameterAuthorityEvidence": {
+                "ApprovalEvidenceID": "TST-DDMRP-RO-TEST-FIXTURE-ONLY",
+                "ParameterEvidenceRefs": [
+                    {
+                        "FieldGroup": field_group,
+                        "EvidenceID": f"TST-DDMRP-RO-{field_group}",
+                        "ProductionAuthorityStatus": "PublicDemoOnly",
+                        "Applicability": "Applicable",
+                    }
+                    for field_group in ("ADU", "DLT", "BufferZones", "BufferProfile")
+                ],
+            },
+            "RuntimeEvidenceSnapshot": {
+                "OperationalStateSnapshotID": "TST-DDMRP-RO-SNAPSHOT-20260711",
+                "SnapshotAt": evaluated_at.isoformat(),
+                "InventoryPositions": [
+                    {
+                        "ItemID": item_id,
+                        "LocationID": "TST-MAIN",
+                        "AvailableQty": quantity,
+                    }
+                    for item_id, quantity in (
+                        ("TST-DDMRP-RO-ABOVE-GREEN", 150.0),
+                        ("TST-DDMRP-RO-GREEN", 75.0),
+                        ("TST-DDMRP-RO-RED", 10.0),
+                        ("TST-DDMRP-RO-YELLOW", 35.0),
+                    )
+                ],
+                "DemandSignals": [],
+                "OpenSupplySignals": [],
+            },
+        },
+    }
+    ledger_identity = build_relevant_planning_ledger_identity(
+        scope_item_locations=[
+            (item_id, "TST-MAIN")
+            for item_id in DDMRP_READ_ONLY_REPLENISHMENT_ITEM_IDS
+        ],
+        planning_demand_commitments=store.planning_demand_commitments,
+        planning_reservation_batches=store.planning_reservation_batches,
+        ccr_capacity_reservations=store.ccr_capacity_reservations,
+        material_planning_allocations=store.material_planning_allocations,
+        active_replenishment_graphs=store.ddmrp_active_replenishment_graphs,
+    )
+    signature, gates = build_read_only_authority_signature(
+        package_record=package_record,
+        operating_model_configuration={"Payload": operating_model_configuration},
+        relevant_planning_ledger=ledger_identity,
+        evaluated_at=evaluated_at,
+    )
+    write_set = prepare_ddmrp_evaluation(
+        evaluation_request_id=DDMRP_READ_ONLY_REPLENISHMENT_CASE_ID,
+        recorded_at=evaluated_at,
+        actor_id="sdbr-test-data",
+        runtime_result={
+            "EvaluationMode": "DDMRPNetFlowV1",
+            "Boundary": "read-only",
+            "EvaluatedAt": evaluated_at.isoformat(),
+            "Summary": {},
+            "Lines": [
+                _ddmrp_read_only_replenishment_runtime_line(
+                    item_id="TST-DDMRP-RO-ABOVE-GREEN",
+                    planning_status="AboveGreen",
+                    net_flow_position=150.0,
+                    suggested_replenishment_qty=0.0,
+                ),
+                _ddmrp_read_only_replenishment_runtime_line(
+                    item_id="TST-DDMRP-RO-GREEN",
+                    planning_status="Green",
+                    net_flow_position=75.0,
+                    suggested_replenishment_qty=0.0,
+                ),
+                _ddmrp_read_only_replenishment_runtime_line(
+                    item_id="TST-DDMRP-RO-RED",
+                    planning_status="Red",
+                    net_flow_position=10.0,
+                    suggested_replenishment_qty=90.0,
+                ),
+                _ddmrp_read_only_replenishment_runtime_line(
+                    item_id="TST-DDMRP-RO-YELLOW",
+                    planning_status="Yellow",
+                    net_flow_position=35.0,
+                    suggested_replenishment_qty=65.0,
+                ),
+            ],
+            "Issues": [],
+        },
+        authority_signature=signature,
+        gates=gates,
+        existing_chains=store.ddmrp_replenishment_chains,
+        existing_recommendations=store.ddmrp_replenishment_recommendations,
+        existing_events=tuple(store.ddmrp_replenishment_events),
+        active_replenishment_graphs=store.ddmrp_active_replenishment_graphs,
+    )
+    staged = stage_ddmrp_evaluation(
+        write_set=write_set,
+        evaluation_runs=store.ddmrp_evaluation_runs,
+        evaluation_rows=store.ddmrp_evaluation_rows,
+        chains=store.ddmrp_replenishment_chains,
+        recommendations=store.ddmrp_replenishment_recommendations,
+        events=store.ddmrp_replenishment_events,
+        request_results=store.ddmrp_evaluation_request_results,
+    )
+    apply_staged_ddmrp_evaluation(
+        staged=staged,
+        evaluation_runs=store.ddmrp_evaluation_runs,
+        evaluation_rows=store.ddmrp_evaluation_rows,
+        chains=store.ddmrp_replenishment_chains,
+        recommendations=store.ddmrp_replenishment_recommendations,
+        events=store.ddmrp_replenishment_events,
+        request_results=store.ddmrp_evaluation_request_results,
+    )
+
+
+def _ddmrp_read_only_replenishment_runtime_line(
+    *,
+    item_id: str,
+    planning_status: str,
+    net_flow_position: float,
+    suggested_replenishment_qty: float,
+) -> dict[str, object]:
+    return {
+        "ItemID": item_id,
+        "LocationID": "TST-MAIN",
+        "BufferProfileID": "TST-DDMRP-RO-BUFFER-PROFILE",
+        "DLTMinutes": 1440,
+        "OnHandQty": net_flow_position,
+        "QualifiedOnHandQty": net_flow_position,
+        "QualifiedOpenSupplyQty": 0.0,
+        "QualifiedDemandQty": 0.0,
+        "NetFlowPosition": net_flow_position,
+        "TopOfRed": 20.0,
+        "TopOfYellow": 50.0,
+        "TopOfGreen": 100.0,
+        "PlanningStatus": planning_status,
+        "ExecutionStatus": planning_status,
+        "SuggestedReplenishmentQty": suggested_replenishment_qty,
+        "RecommendedAction": (
+            "Replenish" if suggested_replenishment_qty else "Monitor"
+        ),
+        "DemandComponents": [],
+        "SupplyComponents": [],
+        "PhysicalOnHandQty": net_flow_position,
+        "AuthorityAllocatedQty": 0.0,
+        "AuthorityAvailableQty": net_flow_position,
+        "QualityState": "Unrestricted",
+        "Uom": "EA",
+    }
 
 
 def _remove_case_runtime_state(

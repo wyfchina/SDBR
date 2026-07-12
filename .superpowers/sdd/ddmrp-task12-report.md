@@ -77,3 +77,19 @@ Resolving item 1 requires an explicitly approved follow-up to make the Task 11 f
 - The deterministic acceptance database was rebuilt through `python -m sdbr.test_data --database-path .tmp/ddmrp-ui-acceptance/workbench-state.db`. The bounded fixture lifecycle started on port 8011, passed its health check, found exactly one `TST-DDMRP-REPLENISHMENT-READONLY-20260711` catalog case, and verified the exact seeded summary and four-row set.
 - Browser evidence completed for seeded 1280x720, 1920x1080, and 390x844 plus empty/error/403/409 at 1280x720. Explicit HTTP observations were seeded 200, empty 200, error 500, 403 403, and 409 409. The report and seven fixed screenshot paths exist under `.tmp/ddmrp-ui-acceptance/`.
 - The server was stopped and port 8011 was independently confirmed free. `BE-DDMRP-007` is now `[VERIFIED]`; `UI-DDMRP-003` is `已验证待用户确认`. `BE-DDMRP-008`, `BE-DDMRP-009`, `UI-DDMRP-004`, Activation A1-A8, and `CONTRACT-GATE-DDMRP-ACTIVATION-001` remain unchanged and closed. No user confirmation was recorded.
+
+## Final Review Fix Wave (2026-07-12)
+
+- Addressed the complete four-finding list from `.superpowers/sdd/ddmrp-final-review.md` together under `BE-DDMRP-007` and `UI-DDMRP-003`.
+- Frozen provenance: GET/read-model validation now shares the replay validator's exact run-to-authority signature check for evaluation time, package ID/version, snapshot ID, operating-model ID/fingerprint, DDMRP configuration ID, and relevant-ledger identity/fingerprint.
+- Exact replay: an immutable validated duplicate bypasses `save()`. The SQLite regression proves save count, revision, `LastSavedAt`, all six DDMRP ledger counts, complete snapshot, response IDs, and restart state remain unchanged.
+- Immutable lifecycle: all non-terminal chains remain visible. Red-to-Green and Yellow-to-AboveGreen retain their current blocked recommendation in `History` and `BlockedRecommendationCount` while the latest row remains a zero-quantity monitor row.
+- UI quantity: the table now renders `QualifiedOnHandQty` with the explicit `权威可用在手量` / `Authority-available on hand` label. The seeded API and browser DOM both prove exact values `10/35/75/150`, not `-`.
+- TDD RED: exact selection produced `15 failed, 1 passed, 1 warning`; the one passing parameter was snapshot-time drift already rejected indirectly by canonical evaluation identity. The remaining cases reproduced all four findings.
+- TDD GREEN: identical selection produced `16 passed, 1 warning in 4.96s`.
+- Compile/Node: `python -m compileall -q sdbr tests` and local `node.exe --check sdbr/web/planner-workbench.js` exited 0.
+- Focused suite: `412 passed, 1 warning in 73.72s`.
+- Full suite: `862 passed, 1 warning in 106.70s`.
+- Browser: refreshed all seven named screenshots. Observed HTTP statuses were seeded 200, empty 200, error 500, 403, and 409. Seeded 1280/1920/390 DOM had four rows, no confirmation control, no page-level overflow, and exact on-hand values. Server shutdown completed and port 8011 was free.
+- The only pytest warning remains the existing FastAPI/Starlette `TestClient` deprecation warning.
+- No raw authority/evidence payload was added to the safe projection. Activation A1-A8 remains absent; `BE-DDMRP-008/009` stay `[NOT-STARTED]`, `UI-DDMRP-004` stays `未开始`, `UI-DDMRP-003` stays `已验证待用户确认`, and no `用户已确认` claim was added.

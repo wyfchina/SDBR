@@ -64,6 +64,38 @@ def test_be_ddmrp_007_view_returns_latest_rows_plus_older_active_or_adjustment_c
     assert result["Summary"]["AdjustmentRequiredCount"] == 1
 
 
+@pytest.mark.parametrize(
+    ("initial_status", "initial_qty", "monitor_status"),
+    (
+        ("Red", 70, "Green"),
+        ("Yellow", 55, "AboveGreen"),
+    ),
+)
+def test_be_ddmrp_007_view_retains_open_recommendation_after_monitor_evaluation(
+    initial_status: str,
+    initial_qty: float,
+    monitor_status: str,
+) -> None:
+    first = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-LIFECYCLE", "LOC", initial_status, initial_qty)]
+    )
+    existing = _existing_from(first)
+    second = _prepare_distinct_evaluation(
+        request_id="REQ-MONITOR",
+        lines=[_runtime_line("ITEM-LIFECYCLE", "LOC", monitor_status, 0)],
+        existing=existing,
+    )
+
+    result = _build(**_ledgers(first, second, existing=existing))
+
+    assert result["Rows"][0]["PlanningStatus"] == monitor_status
+    assert result["Rows"][0]["RecommendationID"] is None
+    assert result["Summary"]["BlockedRecommendationCount"] == 1
+    assert len(result["History"]) == 1
+    assert result["History"][0]["CurrentStatus"] == "Blocked"
+    assert result["History"][0]["RecommendationVersion"] == 1
+
+
 def test_be_ddmrp_007_view_exposes_null_target_and_business_gate_codes() -> None:
     write_set = _prepare_evaluation(
         lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]

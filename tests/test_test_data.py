@@ -76,6 +76,18 @@ def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
         ("TST-DDMRP-RO-RED", "TST-MAIN"),
         ("TST-DDMRP-RO-YELLOW", "TST-MAIN"),
     ]
+    expected_authority_on_hand = {
+        "TST-DDMRP-RO-ABOVE-GREEN": 150.0,
+        "TST-DDMRP-RO-GREEN": 75.0,
+        "TST-DDMRP-RO-RED": 10.0,
+        "TST-DDMRP-RO-YELLOW": 35.0,
+    }
+    assert {
+        row["ItemID"]: row["QualifiedOnHandQty"] for row in workbench["Rows"]
+    } == expected_authority_on_hand
+    assert {
+        row["ItemID"]: row["AuthorityAvailableQty"] for row in workbench["Rows"]
+    } == expected_authority_on_hand
     assert all(
         row["StandardTargetReceiptAt"] is None
         and [gate["Code"] for gate in row["GateCodes"]]

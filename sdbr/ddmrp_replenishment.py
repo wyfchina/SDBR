@@ -1891,31 +1891,7 @@ def _validate_persisted_evaluation_result_graph(
         recommendation_rows[recommendation_id]
         for recommendation_id in recommendation_ids
     ]
-    signature = evaluation["AuthoritySignature"]
-    expected_run_provenance = {
-        "EvaluationAt": signature["runtime_snapshot_at"],
-        "RuntimePlanningInputPackageID": signature["runtime_package_id"],
-        "RuntimePlanningInputPackageVersion": signature["runtime_package_version"],
-        "RuntimeSnapshotID": signature["runtime_snapshot_id"],
-        "OperatingModelConfigurationID": signature[
-            "operating_model_configuration_id"
-        ],
-        "OperatingModelFingerprint": signature["operating_model_fingerprint"],
-        "DDMRPConfigurationID": signature["ddmrp_configuration_id"],
-        "RelevantPlanningLedgerIdentity": signature[
-            "local_planning_ledger_identity"
-        ],
-        "RelevantPlanningLedgerFingerprint": signature[
-            "local_planning_ledger_fingerprint"
-        ],
-    }
-    if any(
-        evaluation[field] != expected
-        for field, expected in expected_run_provenance.items()
-    ):
-        raise DdmrpReplenishmentConflict(
-            "DDMRP evaluation run provenance differs."
-        )
+    _validate_evaluation_run_authority_provenance(evaluation)
 
     expected_gates = sorted(
         (
@@ -2143,6 +2119,7 @@ def _validate_evaluation_run_contract(run: Mapping[str, object]) -> None:
     _validate_authority_signature_contract(
         run["AuthoritySignature"], run["AuthoritySignatureFingerprint"]
     )
+    _validate_evaluation_run_authority_provenance(run)
     expected_id = canonical_stable_id("DDE", {
         "AuthoritySignatureFingerprint": run["AuthoritySignatureFingerprint"],
         "EvaluationAt": run["EvaluationAt"],
@@ -2153,6 +2130,33 @@ def _validate_evaluation_run_contract(run: Mapping[str, object]) -> None:
         key: value for key, value in run.items() if key != "EvaluationFingerprint"
     }):
         raise DdmrpReplenishmentConflict("DDMRP evaluation fingerprint mismatch.")
+
+
+def _validate_evaluation_run_authority_provenance(
+    run: Mapping[str, object],
+) -> None:
+    signature = run["AuthoritySignature"]
+    expected = {
+        "EvaluationAt": signature["runtime_snapshot_at"],
+        "RuntimePlanningInputPackageID": signature["runtime_package_id"],
+        "RuntimePlanningInputPackageVersion": signature["runtime_package_version"],
+        "RuntimeSnapshotID": signature["runtime_snapshot_id"],
+        "OperatingModelConfigurationID": signature[
+            "operating_model_configuration_id"
+        ],
+        "OperatingModelFingerprint": signature["operating_model_fingerprint"],
+        "DDMRPConfigurationID": signature["ddmrp_configuration_id"],
+        "RelevantPlanningLedgerIdentity": signature[
+            "local_planning_ledger_identity"
+        ],
+        "RelevantPlanningLedgerFingerprint": signature[
+            "local_planning_ledger_fingerprint"
+        ],
+    }
+    if any(run[field] != value for field, value in expected.items()):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation run provenance differs."
+        )
 
 
 def _validate_evaluation_row_contract(row: Mapping[str, object]) -> None:

@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Iterable, Mapping
 
 from sdbr.ddmrp_replenishment import (
+    CHAIN_ACTIVE_STATUSES,
     CHAIN_TERMINAL_STATUSES,
     DEMAND_COMPONENT_FIELDS,
     GATE_FIELDS,
@@ -165,7 +166,7 @@ def build_ddmrp_replenishment_workbench(
     visible_chain_ids.update(str(key) for key in active_replenishment_graphs)
     visible_chain_ids.update(
         logical_id for logical_id, status in chain_statuses.items()
-        if status == "AdjustmentRequired"
+        if status in CHAIN_ACTIVE_STATUSES
     )
     visible_recommendations = [
         recommendation for recommendation in recommendation_rows.values()
@@ -217,7 +218,7 @@ def build_ddmrp_replenishment_workbench(
         str(issue["ItemID"] or ""), str(issue["LocationID"] or ""),
     ))
 
-    summary = _summary(projected_rows, projected_graphs)
+    summary = _summary(projected_rows, projected_graphs, projected_history)
     signature = latest["AuthoritySignature"]
     technical = {
         "EvaluationID": latest["EvaluationID"],
@@ -667,10 +668,11 @@ def _project_history(
 def _summary(
     rows: Iterable[Mapping[str, object]],
     active_graphs: Iterable[Mapping[str, object]],
+    history: Iterable[Mapping[str, object]],
 ) -> dict[str, int]:
     row_list = list(rows)
     graph_list = list(active_graphs)
-    statuses = [row["RecommendationStatus"] for row in row_list]
+    statuses = [row["CurrentStatus"] for row in history]
     return {
         "RedCount": sum(row["PlanningStatus"] == "Red" for row in row_list),
         "YellowCount": sum(row["PlanningStatus"] == "Yellow" for row in row_list),

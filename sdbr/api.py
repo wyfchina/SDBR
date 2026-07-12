@@ -1344,9 +1344,13 @@ def create_app(
             persistence_snapshot = active_store.snapshot_state()
             try:
                 response = await call_next_after_downstream_completion()
-                if response.status_code < 400 or getattr(
+                should_persist = response.status_code < 400 or getattr(
                     request.state, "persist_workbench_write", False
-                ):
+                )
+                skip_persistence = getattr(
+                    request.state, "skip_workbench_save", False
+                )
+                if should_persist and not skip_persistence:
                     try:
                         active_store.save()
                     except StateStoreRevisionConflict as error:
@@ -1677,7 +1681,7 @@ def create_app(
                 events=tuple(ddmrp_replenishment_events),
             )
             if replayed is not None:
-                return {
+                response_data = {
                     "Endpoint": endpoint,
                     "StatusCode": 200,
                     "Data": {
@@ -1694,6 +1698,8 @@ def create_app(
                         ),
                     },
                 }
+                request.state.skip_workbench_save = True
+                return response_data
 
             expected_revision = _client_revision_from_if_match(
                 request.headers.get("if-match")

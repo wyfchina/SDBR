@@ -6023,6 +6023,17 @@ def test_ui_ddmrp_003_renders_versioned_gated_workbench_without_operational_acti
     assert "notify(" not in script
 
 
+def test_ui_ddmrp_003_renders_authority_safe_on_hand_quantity() -> None:
+    # UI-DDMRP-003 / BE-DDMRP-007
+    client = TestClient(create_app())
+    html = client.get("/planner/workbench").text
+    script = client.get("/planner/assets/planner-workbench.js").text
+
+    assert 'data-i18n="qualifiedOnHand"' in html
+    assert "textCell(formatNumber(rowData.QualifiedOnHandQty))" in script
+    assert "textCell(formatNumber(rowData.OnHandQty))" not in script
+
+
 def test_planning_run_workbench_endpoint_returns_safe_rows_and_capabilities():
     store = WorkbenchStateStore()
     store.planning_runs["RUN-PENDING"] = {
@@ -9028,19 +9039,29 @@ def test_be_ddmrp_007_evaluation_api_uses_server_actor_and_server_time():
 
 
 # BE-DDMRP-007
-def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save():
-    class CountingStore(WorkbenchStateStore):
-        save_count = 0
+def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after_save(
+    tmp_path,
+):
+    from sdbr.state_store import SQLiteWorkbenchStateStore
+
+    class CountingSQLiteStore(SQLiteWorkbenchStateStore):
+        def __init__(self, database_path):
+            self.save_count = 0
+            super().__init__(database_path)
 
         def save(self):
             self.save_count += 1
             return super().save()
 
-    store = _ddmrp_api_store(store=CountingStore())
+    database_path = tmp_path / "ddmrp-exact-replay.db"
+    store = _ddmrp_api_store(store=CountingSQLiteStore(database_path))
     client = TestClient(create_app(state_store=store))
 
     first = _post_ddmrp_evaluation(client)
     first_data = first.json()["Data"]
+    first_revision = store.current_revision()
+    first_saved_at = store.health()["LastSavedAt"]
+    first_snapshot = store.snapshot_state()
     first_counts = (
         len(store.ddmrp_evaluation_runs),
         len(store.ddmrp_evaluation_rows),
@@ -9051,6 +9072,9 @@ def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after
     )
     assert first.status_code == 200
     assert store.save_count == 1
+    assert first_revision == 1
+    assert first.headers["X-Workbench-Revision"] == "1"
+    assert first_saved_at is not None
 
     replay = _post_ddmrp_evaluation(client)
 
@@ -9060,7 +9084,11 @@ def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after
     assert replay.json()["Data"]["RecommendationIDs"] == first_data[
         "RecommendationIDs"
     ]
-    assert store.save_count == 2
+    assert replay.headers["X-Workbench-Revision"] == "1"
+    assert store.save_count == 1
+    assert store.current_revision() == first_revision
+    assert store.health()["LastSavedAt"] == first_saved_at
+    assert store.snapshot_state() == first_snapshot
     assert first_counts == (
         len(store.ddmrp_evaluation_runs),
         len(store.ddmrp_evaluation_rows),
@@ -9069,6 +9097,95 @@ def test_be_ddmrp_007_evaluation_api_lost_response_retry_returns_duplicate_after
         len(store.ddmrp_replenishment_events),
         len(store.ddmrp_evaluation_request_results),
     )
+    restored = SQLiteWorkbenchStateStore(database_path)
+    assert restored.current_revision() == first_revision
+    assert restored.health()["LastSavedAt"] == first_saved_at
+    assert restored.snapshot_state() == first_snapshot
+
+
+@pytest.mark.parametrize(
+    ("run_field", "drifted_value"),
+    (
+        ("EvaluationAt", "2026-06-30T02:00:00+00:00"),
+        ("RuntimePlanningInputPackageID", "RPI-DRIFTED"),
+        ("RuntimePlanningInputPackageVersion", "9.9.9"),
+        ("RuntimeSnapshotID", "OPS-DRIFTED"),
+        ("OperatingModelConfigurationID", "OMC-DRIFTED"),
+        ("OperatingModelFingerprint", f"sha256:{'0' * 64}"),
+        ("DDMRPConfigurationID", "DDMRP-DRIFTED"),
+        ("RelevantPlanningLedgerIdentity", "DPL-DRIFTED"),
+        ("RelevantPlanningLedgerFingerprint", f"sha256:{'1' * 64}"),
+    ),
+)
+# BE-DDMRP-007
+def test_be_ddmrp_007_workbench_get_rejects_each_frozen_authority_source_link_drift(
+    run_field,
+    drifted_value,
+):
+    from sdbr.ddmrp_replenishment import canonical_fingerprint
+
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    assert _post_ddmrp_evaluation(client).status_code == 200
+    run = next(iter(store.ddmrp_evaluation_runs.values()))
+    run[run_field] = drifted_value
+    run["EvaluationFingerprint"] = canonical_fingerprint({
+        key: value
+        for key, value in run.items()
+        if key != "EvaluationFingerprint"
+    })
+
+    response = client.get("/planner/workbench/ddmrp/workbench")
+
+    assert response.status_code == 409
+    assert response.json()["Data"]["Status"] == "DdmrpReplenishmentConflict"
+    assert "DDMRP evaluation run provenance differs" in response.json()["Data"][
+        "Message"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("initial_qty", "initial_status", "monitor_qty", "monitor_status"),
+    (
+        (10, "Red", 75, "Green"),
+        (35, "Yellow", 150, "AboveGreen"),
+    ),
+)
+# UI-DDMRP-003 / BE-DDMRP-007
+def test_be_ddmrp_007_workbench_api_retains_open_recommendation_after_monitor_evaluation(
+    initial_qty,
+    initial_status,
+    monitor_qty,
+    monitor_status,
+):
+    store = _ddmrp_api_store()
+    client = TestClient(create_app(state_store=store))
+    snapshot = store.ddsop_runtime_planning_input_packages["RPI-API-001"][
+        "Payload"
+    ]["RuntimeEvidenceSnapshot"]
+    inventory = snapshot["InventoryPositions"][0]
+    inventory["OnHandQty"] = initial_qty
+    inventory["AvailableQty"] = initial_qty
+
+    first = _post_ddmrp_evaluation(client, request_id="DDMRP-LIFECYCLE-1")
+    assert first.status_code == 200
+    assert first.json()["Data"]["Workbench"]["Rows"][0]["PlanningStatus"] == (
+        initial_status
+    )
+
+    snapshot["SnapshotAt"] = "2026-07-01T01:00:00Z"
+    inventory["OnHandQty"] = monitor_qty
+    inventory["AvailableQty"] = monitor_qty
+    second = _post_ddmrp_evaluation(client, request_id="DDMRP-LIFECYCLE-2")
+
+    assert second.status_code == 200
+    workbench = second.json()["Data"]["Workbench"]
+    assert workbench["Rows"][0]["PlanningStatus"] == monitor_status
+    assert workbench["Rows"][0]["RecommendationID"] is None
+    assert workbench["Summary"]["BlockedRecommendationCount"] == 1
+    assert len(workbench["History"]) == 1
+    assert workbench["History"][0]["CurrentStatus"] == "Blocked"
+    assert workbench["History"][0]["RecommendationVersion"] == 1
 
 
 # BE-DDMRP-007

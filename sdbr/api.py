@@ -16,7 +16,14 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+)
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
 from sdbr.adventureworks_product_demo_profile import (
@@ -53,6 +60,17 @@ from sdbr.ddmrp import (
     OpenSupply,
     evaluate_ddmrp_net_flow,
 )
+from sdbr.ddmrp_replenishment import (
+    DdmrpReplenishmentConflict,
+    apply_staged_ddmrp_evaluation,
+    build_read_only_authority_signature,
+    build_relevant_planning_ledger_identity,
+    canonical_fingerprint,
+    lookup_ddmrp_evaluation_request_result,
+    prepare_ddmrp_evaluation,
+    stage_ddmrp_evaluation,
+)
+from sdbr.ddmrp_replenishment_view import build_ddmrp_replenishment_workbench
 from sdbr.ddsop_contracts import (
     build_planning_run_feedback_message,
     build_variance_analysis_feedback_message,
@@ -60,6 +78,10 @@ from sdbr.ddsop_contracts import (
     validate_required_master_data_references,
 )
 from sdbr.ddsop_delivery import deliver_ddsop_feedback_message
+from sdbr.ddsop_runtime_planning_input import (
+    DdmrpRuntimeAuthorityError,
+    evaluate_ddmrp_runtime_signals_from_package,
+)
 from sdbr.buffer_execution_view import (
     build_buffer_execution_workbench,
     build_buffer_order_detail,
@@ -386,6 +408,16 @@ class DdmrpNetFlowEvaluationPayload(BaseModel):
     StockBuffers: list[InventoryBufferPayload]
     DemandSignals: list[DdmrpDemandSignalPayload] = []
     OpenSupply: list[DdmrpOpenSupplyPayload] = []
+
+
+_AWARE_DATETIME_ADAPTER = TypeAdapter(AwareDatetime)
+
+
+class DdmrpEvaluationCreatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    EvaluationRequestID: str = Field(min_length=1)
+    RuntimePlanningInputPackageID: str = Field(min_length=1)
 
 
 class PlannerWorkbenchCalculatePayload(BaseModel):
@@ -917,11 +949,14 @@ def _planning_run_authorization_error(request: Request) -> JSONResponse | None:
         )
     path = request.url.path
     if request.method == "GET":
-        allowed_roles = (
-            {"Planner", "Admin"}
-            if path.endswith("/audit-events")
-            else {"Viewer", "Planner", "Worker", "Admin"}
-        )
+        if path.startswith("/planner/workbench/ddmrp"):
+            allowed_roles = {"Viewer", "Planner", "Admin"}
+        else:
+            allowed_roles = (
+                {"Planner", "Admin"}
+                if path.endswith("/audit-events")
+                else {"Viewer", "Planner", "Worker", "Admin"}
+            )
     elif path.endswith("/jobs/claim-next") or path.endswith("/renew-lease"):
         allowed_roles = {"Worker", "Admin"}
     elif path.endswith("/execute"):
@@ -976,6 +1011,60 @@ def _operating_model_configuration_summary(
         "PendingReferences": configuration.get("PendingReferences", []),
         "ReceivedAt": configuration.get("ReceivedAt"),
     }
+
+
+def _ddmrp_evaluation_scope_item_locations(
+    *,
+    package_record: Mapping[str, object],
+    operating_model_configuration: Mapping[str, object],
+) -> tuple[tuple[str, str], ...]:
+    package_payload = package_record.get("Payload")
+    configuration_payload = operating_model_configuration.get("Payload")
+    if not isinstance(package_payload, Mapping) or not isinstance(
+        configuration_payload, Mapping
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP stored package and configuration payloads are required."
+        )
+    runtime_snapshot = package_payload.get("RuntimeEvidenceSnapshot")
+    ddmrp_configuration = configuration_payload.get("DDMRPConfiguration")
+    if not isinstance(runtime_snapshot, Mapping) or not isinstance(
+        ddmrp_configuration, Mapping
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP runtime snapshot and frozen configuration are required."
+        )
+    inventory_positions = runtime_snapshot.get("InventoryPositions")
+    decoupling_points = ddmrp_configuration.get("DecouplingPoints")
+    if not isinstance(inventory_positions, list) or not isinstance(
+        decoupling_points, list
+    ):
+        raise DdmrpReplenishmentConflict(
+            "DDMRP inventory positions and decoupling points must be lists."
+        )
+
+    inventory_scope = {
+        (str(row.get("ItemID", "")).strip(), str(row.get("LocationID", "")).strip())
+        for row in inventory_positions
+        if isinstance(row, Mapping)
+    }
+    configured_scope = {
+        (str(row.get("ItemID", "")).strip(), str(row.get("LocationID", "")).strip())
+        for row in decoupling_points
+        if isinstance(row, Mapping)
+    }
+    scope = tuple(
+        sorted(
+            pair
+            for pair in configured_scope & inventory_scope
+            if pair[0] and pair[1]
+        )
+    )
+    if not scope:
+        raise DdmrpReplenishmentConflict(
+            "DDMRP evaluation scope has no configured item/location runtime evidence."
+        )
+    return scope
 
 
 def _lease_token_hash(lease_token: str) -> str:
@@ -1122,6 +1211,9 @@ def create_app(
     scheduling_strategy_versions = active_store.scheduling_strategy_versions
     ddsop_config_inbound_messages = active_store.ddsop_config_inbound_messages
     operating_model_configurations = active_store.operating_model_configurations
+    ddsop_runtime_planning_input_packages = (
+        active_store.ddsop_runtime_planning_input_packages
+    )
     ddsop_feedback_outbound_messages = active_store.ddsop_feedback_outbound_messages
     integration_messages = active_store.integration_messages
     test_case_acceptance_decisions = active_store.test_case_acceptance_decisions
@@ -1130,6 +1222,15 @@ def create_app(
     ddmrp_decoupling_points = active_store.ddmrp_decoupling_points
     ddmrp_demand_signals = active_store.ddmrp_demand_signals
     ddmrp_open_supply = active_store.ddmrp_open_supply
+    ddmrp_evaluation_runs = active_store.ddmrp_evaluation_runs
+    ddmrp_evaluation_rows = active_store.ddmrp_evaluation_rows
+    ddmrp_replenishment_chains = active_store.ddmrp_replenishment_chains
+    ddmrp_replenishment_recommendations = (
+        active_store.ddmrp_replenishment_recommendations
+    )
+    ddmrp_replenishment_events = active_store.ddmrp_replenishment_events
+    ddmrp_active_replenishment_graphs = active_store.ddmrp_active_replenishment_graphs
+    ddmrp_evaluation_request_results = active_store.ddmrp_evaluation_request_results
     master_data_versions = active_store.master_data_versions
     planning_runs = active_store.planning_runs
     planning_demand_commitments = active_store.planning_demand_commitments
@@ -1180,10 +1281,17 @@ def create_app(
             (
                 "/planner/workbench/planning-runs",
                 "/planner/workbench/planning-reservations",
+                "/planner/workbench/ddmrp",
             )
         ):
             auth_error = _planning_run_authorization_error(request)
             if auth_error is not None:
+                auth_error.headers["X-Workbench-Revision"] = str(
+                    active_store.current_revision()
+                )
+                auth_error.headers["X-SDBR-Environment"] = (
+                    active_environment.environment_id
+                )
                 return auth_error
         is_write = request.method in {"POST", "PUT", "PATCH", "DELETE"}
         if not is_write:
@@ -1534,6 +1642,258 @@ def create_app(
                 },
             )
         data["Source"] = source
+        return {"Endpoint": endpoint, "StatusCode": 200, "Data": data}
+
+    @app.post("/planner/workbench/ddmrp/evaluations")
+    def planner_workbench_ddmrp_evaluations_create(
+        payload: DdmrpEvaluationCreatePayload,
+        request: Request,
+    ):
+        endpoint = "/planner/workbench/ddmrp/evaluations"
+        try:
+            request_fingerprint = canonical_fingerprint(
+                {
+                    "EvaluationRequestID": payload.EvaluationRequestID,
+                    "RuntimePlanningInputPackageID": (
+                        payload.RuntimePlanningInputPackageID
+                    ),
+                }
+            )
+            replayed = lookup_ddmrp_evaluation_request_result(
+                evaluation_request_id=payload.EvaluationRequestID,
+                request_fingerprint=request_fingerprint,
+                request_results=ddmrp_evaluation_request_results,
+                evaluation_runs=ddmrp_evaluation_runs,
+                evaluation_rows=ddmrp_evaluation_rows,
+                chains=ddmrp_replenishment_chains,
+                recommendations=ddmrp_replenishment_recommendations,
+                events=tuple(ddmrp_replenishment_events),
+            )
+            if replayed is not None:
+                return {
+                    "Endpoint": endpoint,
+                    "StatusCode": 200,
+                    "Data": {
+                        **replayed,
+                        "Workbench": build_ddmrp_replenishment_workbench(
+                            evaluation_runs=ddmrp_evaluation_runs,
+                            evaluation_rows=ddmrp_evaluation_rows,
+                            chains=ddmrp_replenishment_chains,
+                            recommendations=ddmrp_replenishment_recommendations,
+                            events=tuple(ddmrp_replenishment_events),
+                            active_replenishment_graphs=(
+                                ddmrp_active_replenishment_graphs
+                            ),
+                        ),
+                    },
+                }
+
+            package_record = ddsop_runtime_planning_input_packages.get(
+                payload.RuntimePlanningInputPackageID
+            )
+            if (
+                not isinstance(package_record, Mapping)
+                or package_record.get("ProcessingStatus") != "Accepted"
+            ):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 404,
+                        "Data": {
+                            "Status": "DdmrpAuthorityNotFound",
+                            "Message": (
+                                "Accepted stored runtime planning input package "
+                                "was not found."
+                            ),
+                        },
+                    },
+                )
+            configuration_id = package_record.get("OperatingModelConfigurationID")
+            operating_model_configuration = operating_model_configurations.get(
+                str(configuration_id)
+            )
+            configuration_payload = (
+                operating_model_configuration.get("Payload")
+                if isinstance(operating_model_configuration, Mapping)
+                else None
+            )
+            if (
+                not isinstance(operating_model_configuration, Mapping)
+                or operating_model_configuration.get("ProcessingStatus") != "Accepted"
+                or not isinstance(configuration_payload, Mapping)
+                or configuration_payload.get("Status") not in {"Approved", "Active"}
+            ):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "Endpoint": endpoint,
+                        "StatusCode": 404,
+                        "Data": {
+                            "Status": "DdmrpAuthorityNotFound",
+                            "Message": (
+                                "Accepted stored operating model configuration "
+                                "was not found."
+                            ),
+                        },
+                    },
+                )
+
+            package_payload = package_record.get("Payload")
+            runtime_snapshot = (
+                package_payload.get("RuntimeEvidenceSnapshot")
+                if isinstance(package_payload, Mapping)
+                else None
+            )
+            try:
+                parsed_snapshot_at = _AWARE_DATETIME_ADAPTER.validate_python(
+                    runtime_snapshot["SnapshotAt"]
+                )
+            except (KeyError, TypeError, ValidationError) as error:
+                raise DdmrpReplenishmentConflict(
+                    "RUNTIME_SNAPSHOT_AT_INVALID: stored SnapshotAt must be "
+                    "timezone-aware."
+                ) from error
+            evaluated_at = parsed_snapshot_at.astimezone(timezone.utc)
+            canonical_snapshot_at = evaluated_at.isoformat()
+            if not canonical_snapshot_at.endswith("+00:00"):
+                raise DdmrpReplenishmentConflict(
+                    "RUNTIME_SNAPSHOT_AT_NOT_CANONICAL_UTC"
+                )
+
+            scope_item_locations = _ddmrp_evaluation_scope_item_locations(
+                package_record=package_record,
+                operating_model_configuration=operating_model_configuration,
+            )
+            relevant_ledger = build_relevant_planning_ledger_identity(
+                scope_item_locations=scope_item_locations,
+                planning_demand_commitments=planning_demand_commitments,
+                planning_reservation_batches=planning_reservation_batches,
+                ccr_capacity_reservations=ccr_capacity_reservations,
+                material_planning_allocations=material_planning_allocations,
+                active_replenishment_graphs=ddmrp_active_replenishment_graphs,
+            )
+            runtime_result = evaluate_ddmrp_runtime_signals_from_package(
+                package_record,
+                operating_model_configuration,
+                evaluated_at=evaluated_at,
+            )
+            runtime_result.pop("RuntimePlanningInputPackageID", None)
+            authority_signature, gates = build_read_only_authority_signature(
+                package_record=package_record,
+                operating_model_configuration=operating_model_configuration,
+                relevant_planning_ledger=relevant_ledger,
+                evaluated_at=evaluated_at,
+            )
+            if (
+                runtime_result.get("EvaluatedAt") != canonical_snapshot_at
+                or authority_signature.runtime_snapshot_at != canonical_snapshot_at
+            ):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP evaluation and authority snapshot times differ."
+                )
+            write_set = prepare_ddmrp_evaluation(
+                evaluation_request_id=payload.EvaluationRequestID,
+                recorded_at=server_utc_now(),
+                actor_id=_effective_actor_id(request, "local-planner"),
+                runtime_result=runtime_result,
+                authority_signature=authority_signature,
+                gates=gates,
+                existing_chains=ddmrp_replenishment_chains,
+                existing_recommendations=ddmrp_replenishment_recommendations,
+                existing_events=tuple(ddmrp_replenishment_events),
+                active_replenishment_graphs=ddmrp_active_replenishment_graphs,
+            )
+            if (
+                write_set.evaluation_run.get("EvaluationAt")
+                != canonical_snapshot_at
+                or any(
+                    row.get("EvaluationAt") != canonical_snapshot_at
+                    for row in write_set.evaluation_rows
+                )
+            ):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP persisted evaluation times differ from SnapshotAt."
+                )
+            staged = stage_ddmrp_evaluation(
+                write_set=write_set,
+                evaluation_runs=ddmrp_evaluation_runs,
+                evaluation_rows=ddmrp_evaluation_rows,
+                chains=ddmrp_replenishment_chains,
+                recommendations=ddmrp_replenishment_recommendations,
+                events=tuple(ddmrp_replenishment_events),
+                request_results=ddmrp_evaluation_request_results,
+            )
+            status, response_data = apply_staged_ddmrp_evaluation(
+                staged=staged,
+                evaluation_runs=ddmrp_evaluation_runs,
+                evaluation_rows=ddmrp_evaluation_rows,
+                chains=ddmrp_replenishment_chains,
+                recommendations=ddmrp_replenishment_recommendations,
+                events=ddmrp_replenishment_events,
+                request_results=ddmrp_evaluation_request_results,
+            )
+            if (
+                response_data.get("Status") != status
+                or response_data.get("OperationalActionAllowed") is not False
+            ):
+                raise DdmrpReplenishmentConflict(
+                    "DDMRP evaluation endpoint is read-only."
+                )
+            return {
+                "Endpoint": endpoint,
+                "StatusCode": 200,
+                "Data": {
+                    **response_data,
+                    "Workbench": build_ddmrp_replenishment_workbench(
+                        evaluation_runs=ddmrp_evaluation_runs,
+                        evaluation_rows=ddmrp_evaluation_rows,
+                        chains=ddmrp_replenishment_chains,
+                        recommendations=ddmrp_replenishment_recommendations,
+                        events=tuple(ddmrp_replenishment_events),
+                        active_replenishment_graphs=(
+                            ddmrp_active_replenishment_graphs
+                        ),
+                    ),
+                },
+            }
+        except (DdmrpReplenishmentConflict, DdmrpRuntimeAuthorityError) as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "Status": "DdmrpReplenishmentConflict",
+                        "Message": str(error),
+                    },
+                },
+            )
+
+    @app.get("/planner/workbench/ddmrp/workbench")
+    def planner_workbench_ddmrp_replenishment_workbench():
+        endpoint = "/planner/workbench/ddmrp/workbench"
+        try:
+            data = build_ddmrp_replenishment_workbench(
+                evaluation_runs=ddmrp_evaluation_runs,
+                evaluation_rows=ddmrp_evaluation_rows,
+                chains=ddmrp_replenishment_chains,
+                recommendations=ddmrp_replenishment_recommendations,
+                events=tuple(ddmrp_replenishment_events),
+                active_replenishment_graphs=ddmrp_active_replenishment_graphs,
+            )
+        except DdmrpReplenishmentConflict as error:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "Endpoint": endpoint,
+                    "StatusCode": 409,
+                    "Data": {
+                        "Status": "DdmrpReplenishmentConflict",
+                        "Message": str(error),
+                    },
+                },
+            )
         return {"Endpoint": endpoint, "StatusCode": 200, "Data": data}
 
     @app.post("/planner/workbench/wip-limits/import")

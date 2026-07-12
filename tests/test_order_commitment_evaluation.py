@@ -1042,3 +1042,415 @@ class TestOrderCommitmentRecommendationMatrix:
         )
 
         assert result["RequiresMaterialAcknowledgement"] is True
+
+
+class TestOrderCommitmentEvaluationIdentity:
+    """BE-SDBR-006, BE-SDBR-010: frozen relevant-state evaluation identity."""
+
+    evaluated_at = datetime(2026, 7, 12, 8, tzinfo=timezone.utc)
+
+    @classmethod
+    def _order(cls, *, version: str = "2") -> dict[str, object]:
+        source = _mto_order()
+        source["OrderVersion"] = version
+        source["ReceivedAt"] = cls.evaluated_at + timedelta(
+            minutes=int(version)
+        )
+        return normalize_mto_order(source)
+
+    @classmethod
+    def _selection(
+        cls,
+        *,
+        freshness: str = "Fresh",
+        age_minutes: int = 5,
+        snapshot_id: str = "OPS-1",
+    ) -> dict[str, object]:
+        captured_at = cls.evaluated_at - timedelta(minutes=age_minutes)
+        return {
+            "OperationalStateSnapshotID": snapshot_id,
+            "OperationalStateCapturedAt": captured_at.isoformat(),
+            "OperationalStateFreshnessStatus": freshness,
+            "OperationalStateAgeMinutes": age_minutes,
+            "OperationalStateValidThroughAt": (
+                captured_at + timedelta(minutes=60)
+            ).isoformat(),
+        }
+
+    @classmethod
+    def _capacity_row(cls, **changes: object) -> dict[str, object]:
+        row = {
+            "CapacityReservationID": "CR-1",
+            "ReservationBatchID": "RB-1",
+            "DemandCommitmentID": "DC-OTHER",
+            "DemandClass": "MTO",
+            "ResourceID": "CCR-1",
+            "WindowStartAt": cls.evaluated_at.isoformat(),
+            "WindowEndAt": (cls.evaluated_at + timedelta(hours=2)).isoformat(),
+            "ReservedMinutes": 15.0,
+            "LatestAllowedCompletionAt": (
+                cls.evaluated_at + timedelta(hours=1)
+            ).isoformat(),
+            "Status": "ActivePlanReservation",
+            "RecordVersion": 1,
+        }
+        return {**row, **changes}
+
+    @classmethod
+    def _material_row(cls, **changes: object) -> dict[str, object]:
+        row = {
+            "MaterialAllocationID": "MA-1",
+            "ReservationBatchID": "RB-1",
+            "DemandCommitmentID": "DC-OTHER",
+            "DemandClass": "MTO",
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+            "AllocatedQty": 2.0,
+            "MaterialSnapshotID": "OPS-1",
+            "Status": "ActivePlanReservation",
+            "RecordVersion": 1,
+        }
+        return {**row, **changes}
+
+    @classmethod
+    def _basis(cls, **changes: object) -> dict[str, object]:
+        values: dict[str, object] = {
+            "baseline_planning_run_id": "RUN-1",
+            "baseline_operational_state_snapshot_id": "OPS-BASELINE",
+            "baseline_schedule_fingerprint": "sha256:schedule",
+            "master_data_version_id": "MDV-1",
+            "operating_model_configuration_id": "OMC-1",
+            "operating_model_fingerprint": "sha256:operating-model",
+            "scheduling_configuration_id": "SC-1",
+            "ddmrp_configuration_id": "DDMRP-1",
+            "release_policy_version_id": "RP-1",
+            "frozen_release_policy_fingerprint": "sha256:release-policy",
+            "routing_fingerprint": "sha256:routing",
+            "calendar_fingerprint": "sha256:calendar",
+            "time_buffer_minutes": 30,
+            "material_check_window_minutes": 60,
+            "capacity_assessment_cutoff_at": cls.evaluated_at + timedelta(hours=1),
+            "material_eligibility_cutoff_at": cls.evaluated_at + timedelta(hours=1),
+            "check_material_availability": True,
+            "material_skip_reason": None,
+            "snapshot_selection": cls._selection(),
+            "relevant_capacity_window_keys": [
+                (
+                    "CCR-1",
+                    cls.evaluated_at.isoformat(),
+                    (cls.evaluated_at + timedelta(hours=2)).isoformat(),
+                )
+            ],
+            "capacity_ledger_rows": [cls._capacity_row()],
+            "relevant_material_keys": [("RM-1", "MAIN")],
+            "inventory_buffer_rows": [
+                InventoryBufferPolicy("RM-1", "MAIN", 10.0, 1.0, 2.0, 3.0)
+            ],
+            "material_availability_rows": [
+                MaterialAvailability(
+                    "RM-1",
+                    "MAIN",
+                    allocated_qty=1.0,
+                    inbound_qty=2.0,
+                    inbound_available_at=cls.evaluated_at + timedelta(minutes=30),
+                )
+            ],
+            "material_ledger_rows": [cls._material_row()],
+        }
+        values.update(changes)
+        return order_commitment_evaluation.build_order_commitment_basis(**values)
+
+    @classmethod
+    def _shadow(cls, **changes: object) -> dict[str, object]:
+        candidate = {
+            "PromiseAt": (cls.evaluated_at + timedelta(hours=1)).isoformat(),
+            "WindowAssessments": [{
+                "RouteSequence": 1,
+                "OperationID": "OP-1",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": cls.evaluated_at.isoformat(),
+                "WindowEndAt": (cls.evaluated_at + timedelta(hours=2)).isoformat(),
+                "UsableWindowStartAt": cls.evaluated_at.isoformat(),
+                "UsableWindowEndAt": (cls.evaluated_at + timedelta(hours=1)).isoformat(),
+                "LatestAllowedCompletionAt": (cls.evaluated_at + timedelta(hours=1)).isoformat(),
+                "CapacityMinutes": 120.0,
+                "UsableTemporalCapacityMinutes": 60.0,
+                "ScheduledLoadMinutes": 15.0,
+                "ScheduledLoadBeforeDeadlineMinutes": 15.0,
+                "ExistingReservationMinutes": 0.0,
+                "CandidateLoadMinutes": 10.0,
+                "LoadBeforeMinutes": 15.0,
+                "LoadAfterMinutes": 25.0,
+                "LoadAfterPercent": 20.0,
+                "AggregateRemainingMinutes": 105.0,
+                "TemporalRemainingMinutes": 45.0,
+                "LoadStatus": "WithinCapacity",
+                "ThresholdExceeded": False,
+            }],
+            "ReservationRequests": [{
+                "ReservationLineID": "CRR-1",
+                "OrderID": "SO-100",
+                "OperationID": "OP-1",
+                "ResourceID": "CCR-1",
+                "WindowStartAt": cls.evaluated_at.isoformat(),
+                "WindowEndAt": (cls.evaluated_at + timedelta(hours=2)).isoformat(),
+                "ReservedMinutes": 10.0,
+                "LatestAllowedCompletionAt": (cls.evaluated_at + timedelta(hours=1)).isoformat(),
+            }],
+        }
+        shadow = {
+            "Status": "OnTime",
+            "Algorithm": {"Name": "CcrShadow", "Version": "1"},
+            "SelectedAssessment": {"ThresholdExceeded": False},
+            "RequestedDateAssessment": candidate,
+        }
+        return {**shadow, **changes}
+
+    @classmethod
+    def _material(cls, **changes: object) -> dict[str, object]:
+        material = {
+            "Status": "Feasible",
+            "CheckEnabled": True,
+            "SkipReason": None,
+            "MaterialCheckWindowMinutes": 60,
+            "SnapshotSelectionMode": "Explicit",
+            "RequestedOperationalStateSnapshotID": "OPS-1",
+            "OperationalStateAgeMinutes": 5,
+            "AllocationRequests": [{
+                "RequirementLineID": "10",
+                "ItemID": "RM-1",
+                "LocationID": "MAIN",
+                "Uom": "EA",
+                "AllocatedQty": 2.0,
+                "SupplySourceType": "OnHand",
+                "MaterialSnapshotID": "OPS-1",
+            }],
+        }
+        return {**material, **changes}
+
+    @classmethod
+    def _evaluation(cls, **changes: object) -> dict[str, object]:
+        values: dict[str, object] = {
+            "order": cls._order(),
+            "shadow_schedule": cls._shadow(),
+            "material_assessment": cls._material(),
+            "basis": cls._basis(),
+            "protection_policy": CcrProtectionPolicy(
+                75.0, "ApprovedOperatingModel", True, "OMC-1"
+            ),
+            "evaluated_at": cls.evaluated_at,
+        }
+        values.update(changes)
+        return order_commitment_evaluation.create_order_commitment_evaluation(
+            **values
+        )
+
+    def test_exact_replay_returns_existing_evaluation(self):
+        candidate = self._evaluation()
+        status, stored = order_commitment_evaluation.register_order_commitment_evaluation(
+            {candidate["EvaluationID"]: candidate}, candidate
+        )
+
+        assert status == "Duplicate"
+        assert stored == candidate
+
+    def test_protection_policy_change_creates_new_evaluation(self):
+        original = self._evaluation()
+        changed = self._evaluation(
+            protection_policy=REFERENCE_CCR_PROTECTION_POLICY
+        )
+
+        assert changed["EvaluationID"] != original["EvaluationID"]
+
+    def test_each_frozen_configuration_reference_changes_identity(self):
+        original = self._evaluation()
+        fields = (
+            "operating_model_configuration_id",
+            "operating_model_fingerprint",
+            "scheduling_configuration_id",
+            "ddmrp_configuration_id",
+            "release_policy_version_id",
+            "frozen_release_policy_fingerprint",
+            "routing_fingerprint",
+            "calendar_fingerprint",
+        )
+
+        for field in fields:
+            changed_basis = self._basis(**{field: "changed"})
+            changed = self._evaluation(basis=changed_basis)
+            assert changed["EvaluationID"] != original["EvaluationID"]
+
+    def test_shadow_algorithm_capacity_semantics_changes_identity(self):
+        original = self._evaluation()
+        changed = self._evaluation(
+            shadow_schedule=self._shadow(
+                Algorithm={"Name": "CcrShadow", "Version": "2"}
+            )
+        )
+
+        assert changed["EvaluationID"] != original["EvaluationID"]
+
+    def test_relevant_capacity_change_in_exact_assessed_window_changes_basis(self):
+        original = self._basis()
+        changed = self._basis(
+            capacity_ledger_rows=[self._capacity_row(ReservedMinutes=16.0)]
+        )
+
+        assert changed["AuditBasisFingerprint"] != original["AuditBasisFingerprint"]
+
+    def test_unrelated_capacity_resource_or_window_does_not_change_basis(self):
+        original = self._basis()
+        changed = self._basis(capacity_ledger_rows=[
+            self._capacity_row(),
+            self._capacity_row(
+                CapacityReservationID="CR-OTHER",
+                ResourceID="OTHER",
+                ReservedMinutes="not-a-number",
+            ),
+        ])
+
+        assert changed == original
+
+    def test_relevant_material_item_location_change_changes_basis(self):
+        original = self._basis()
+        changed = self._basis(
+            material_ledger_rows=[self._material_row(AllocatedQty=3.0)]
+        )
+
+        assert changed["AuditBasisFingerprint"] != original["AuditBasisFingerprint"]
+
+    def test_unrelated_material_item_location_does_not_change_basis(self):
+        original = self._basis()
+        changed = self._basis(material_ledger_rows=[
+            self._material_row(),
+            self._material_row(
+                MaterialAllocationID="MA-OTHER",
+                ItemID="OTHER",
+                LocationID="ELSEWHERE",
+                AllocatedQty="not-a-number",
+            ),
+        ])
+
+        assert changed == original
+
+    def test_fresh_age_observation_change_keeps_identity_but_fresh_to_stale_changes_it(self):
+        original = self._evaluation()
+        same_snapshot_new_age = self._selection()
+        same_snapshot_new_age["OperationalStateAgeMinutes"] = 6
+        same_snapshot_stale = self._selection()
+        same_snapshot_stale.update({
+            "OperationalStateFreshnessStatus": "Stale",
+            "OperationalStateAgeMinutes": 61,
+        })
+        age_changed = self._evaluation(
+            basis=self._basis(snapshot_selection=same_snapshot_new_age),
+            material_assessment=self._material(OperationalStateAgeMinutes=6),
+        )
+        stale = self._evaluation(
+            basis=self._basis(snapshot_selection=same_snapshot_stale),
+            material_assessment=self._material(OperationalStateAgeMinutes=61),
+        )
+
+        assert age_changed["EvaluationID"] == original["EvaluationID"]
+        assert stale["EvaluationID"] != original["EvaluationID"]
+
+    def test_capacity_cutoff_change_creates_deterministic_new_identity_not_content_conflict(self):
+        original = self._evaluation()
+        changed = self._evaluation(
+            basis=self._basis(
+                capacity_assessment_cutoff_at=self.evaluated_at + timedelta(hours=2)
+            )
+        )
+        status, stored = order_commitment_evaluation.register_order_commitment_evaluation(
+            {original["EvaluationID"]: original}, changed
+        )
+
+        assert changed["EvaluationID"] != original["EvaluationID"]
+        assert status == "Created"
+        assert stored == changed
+
+    def test_material_cutoff_crossing_inbound_creates_deterministic_new_identity(self):
+        original = self._evaluation()
+        changed = self._evaluation(
+            basis=self._basis(
+                material_eligibility_cutoff_at=self.evaluated_at + timedelta(minutes=15)
+            ),
+            material_assessment=self._material(MaterialCheckWindowMinutes=15),
+        )
+
+        assert changed["EvaluationID"] != original["EvaluationID"]
+
+    def test_skipped_material_decision_basis_excludes_snapshot_and_material_rows(self):
+        skipped = self._basis(
+            check_material_availability=False,
+            material_skip_reason="Planner requested capacity-only assessment.",
+        )
+        changed_material = self._basis(
+            check_material_availability=False,
+            material_skip_reason="Planner requested capacity-only assessment.",
+            snapshot_selection=self._selection(snapshot_id="OPS-2"),
+            material_ledger_rows=[self._material_row(AllocatedQty=9.0)],
+            material_availability_rows=[MaterialAvailability("RM-1", "MAIN", 9.0)],
+        )
+
+        assert skipped["AuditBasisFingerprint"] != changed_material["AuditBasisFingerprint"]
+        assert skipped["DecisionStalenessBasisFingerprint"] == changed_material[
+            "DecisionStalenessBasisFingerprint"
+        ]
+        assert "SelectedOperationalStateSnapshotID" not in skipped[
+            "DecisionStalenessBasis"
+        ]
+        assert "RelevantMaterialLedger" not in skipped["DecisionStalenessBasis"]
+
+    def test_malformed_unrelated_rows_are_ignored_after_exact_prefilter(self):
+        basis = self._basis(
+            capacity_ledger_rows=[self._capacity_row(), {
+                "Status": "ActivePlanReservation",
+                "ResourceID": "OTHER",
+                "WindowStartAt": "not-a-date",
+                "WindowEndAt": "still-not-a-date",
+                "ReservedMinutes": "not-a-number",
+            }],
+            material_ledger_rows=[self._material_row(), {
+                "Status": "ActivePlanReservation",
+                "ItemID": "OTHER",
+                "LocationID": "ELSEWHERE",
+                "AllocatedQty": "not-a-number",
+            }],
+        )
+
+        assert basis["RelevantCapacityLedger"] == [
+            self._capacity_row()
+        ]
+        assert basis["RelevantMaterialLedger"] == [self._material_row()]
+
+    def test_only_open_same_logical_order_is_superseded(self):
+        prior = self._evaluation()
+        candidate = self._evaluation(order=self._order(version="3"))
+        updates = order_commitment_evaluation.supersede_open_order_commitment_evaluations(
+            evaluations={prior["EvaluationID"]: prior},
+            candidate=candidate,
+            superseded_at=self.evaluated_at,
+        )
+
+        updated = updates[prior["EvaluationID"]]
+        assert updated["Status"] == "Superseded"
+        assert updated["SupersededByEvaluationID"] == candidate["EvaluationID"]
+        assert updated["RecordVersion"] == 2
+
+    def test_accepted_or_rejected_evidence_cannot_be_superseded(self):
+        prior = self._evaluation()
+        candidate = self._evaluation(order=self._order(version="3"))
+        accepted = {**prior, "Status": "AcceptedPendingFormalSchedule"}
+        rejected = {**prior, "Status": "Rejected"}
+
+        with pytest.raises(OrderCommitmentConflict, match="ExplicitAmendment"):
+            order_commitment_evaluation.exact_order_commitment_intake_replay(
+                evaluations={accepted["EvaluationID"]: accepted},
+                order=candidate["Order"],
+            )
+        assert order_commitment_evaluation.supersede_open_order_commitment_evaluations(
+            evaluations={rejected["EvaluationID"]: rejected},
+            candidate=candidate,
+            superseded_at=self.evaluated_at,
+        ) == {}

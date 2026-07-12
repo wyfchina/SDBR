@@ -16,6 +16,7 @@ from sdbr.operational_state import (
 )
 from sdbr.planning_commitments import create_demand_commitment
 from sdbr.planning_reservation_view import (
+    ACTIVE_PLANNING_STATUSES,
     planning_allocated_qty_for_other_demands,
 )
 
@@ -741,3 +742,551 @@ def build_order_commitment_recommendation(
             for action in actions
         },
     }
+
+
+CAPACITY_BASIS_FIELDS = (
+    "CapacityReservationID", "ReservationBatchID", "DemandCommitmentID",
+    "DemandClass", "ResourceID", "WindowStartAt", "WindowEndAt",
+    "ReservedMinutes", "LatestAllowedCompletionAt", "Status",
+    "RecordVersion",
+)
+MATERIAL_BASIS_FIELDS = (
+    "MaterialAllocationID", "ReservationBatchID", "DemandCommitmentID",
+    "DemandClass", "ItemID", "LocationID", "AllocatedQty",
+    "MaterialSnapshotID", "Status", "RecordVersion",
+)
+CAPACITY_DECISION_WINDOW_FIELDS = (
+    "RouteSequence", "OperationID", "ResourceID", "WindowStartAt",
+    "WindowEndAt", "UsableWindowStartAt", "UsableWindowEndAt",
+    "LatestAllowedCompletionAt", "CapacityMinutes",
+    "UsableTemporalCapacityMinutes", "ScheduledLoadMinutes",
+    "ScheduledLoadBeforeDeadlineMinutes", "ExistingReservationMinutes",
+    "CandidateLoadMinutes", "LoadBeforeMinutes", "LoadAfterMinutes",
+    "LoadAfterPercent", "AggregateRemainingMinutes",
+    "TemporalRemainingMinutes", "LoadStatus", "ThresholdExceeded",
+)
+CAPACITY_DECISION_REQUEST_FIELDS = (
+    "ReservationLineID", "OrderID", "OperationID", "ResourceID",
+    "WindowStartAt", "WindowEndAt", "ReservedMinutes",
+    "LatestAllowedCompletionAt",
+)
+MATERIAL_DECISION_REQUEST_FIELDS = (
+    "RequirementLineID", "ItemID", "LocationID", "Uom",
+    "AllocatedQty", "SupplySourceType", "MaterialSnapshotID",
+)
+
+
+def _basis_nonnegative(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise OrderCommitmentConflict(f"{field} must be finite and non-negative.")
+    normalized = float(value)
+    if not isfinite(normalized) or normalized < 0:
+        raise OrderCommitmentConflict(f"{field} must be finite and non-negative.")
+    return normalized
+
+
+def _basis_record_version(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise OrderCommitmentConflict(f"{field} must be a positive integer.")
+    return value
+
+
+def build_order_commitment_basis(
+    *,
+    baseline_planning_run_id: str,
+    baseline_operational_state_snapshot_id: str | None,
+    baseline_schedule_fingerprint: str,
+    master_data_version_id: str,
+    operating_model_configuration_id: str | None,
+    operating_model_fingerprint: str | None,
+    scheduling_configuration_id: str | None,
+    ddmrp_configuration_id: str | None,
+    release_policy_version_id: str | None,
+    frozen_release_policy_fingerprint: str,
+    routing_fingerprint: str,
+    calendar_fingerprint: str,
+    time_buffer_minutes: int,
+    material_check_window_minutes: int,
+    capacity_assessment_cutoff_at: datetime,
+    material_eligibility_cutoff_at: datetime | None,
+    check_material_availability: bool,
+    material_skip_reason: str | None,
+    snapshot_selection: Mapping[str, object],
+    relevant_capacity_window_keys: list[tuple[str, str, str]],
+    capacity_ledger_rows: list[dict[str, object]],
+    relevant_material_keys: list[tuple[str, str]],
+    inventory_buffer_rows: list[InventoryBufferPolicy],
+    material_availability_rows: list[MaterialAvailability],
+    material_ledger_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    selection = snapshot_selection
+    capacity_keys = sorted({
+        (
+            str(resource_id),
+            _parse_aware(start).isoformat(),
+            _parse_aware(end).isoformat(),
+        )
+        for resource_id, start, end in relevant_capacity_window_keys
+    })
+    material_keys = sorted({
+        (str(item_id), str(location_id))
+        for item_id, location_id in relevant_material_keys
+    })
+    capacity_key_set = set(capacity_keys)
+    material_key_set = set(material_keys)
+
+    capacity_projection: list[dict[str, object]] = []
+    seen_capacity_ids: set[str] = set()
+    for raw in capacity_ledger_rows:
+        if raw.get("Status") not in ACTIVE_PLANNING_STATUSES:
+            continue
+        raw_key = (
+            str(raw.get("ResourceID") or ""),
+            str(raw.get("WindowStartAt") or ""),
+            str(raw.get("WindowEndAt") or ""),
+        )
+        if raw_key not in capacity_key_set:
+            continue
+        capacity_id = _required_text(raw, "CapacityReservationID")
+        if capacity_id in seen_capacity_ids:
+            raise OrderCommitmentConflict(
+                "Relevant capacity reservation ID is duplicated."
+            )
+        start = _parse_aware(raw["WindowStartAt"])
+        end = _parse_aware(raw["WindowEndAt"])
+        latest = _parse_aware(raw["LatestAllowedCompletionAt"])
+        if end <= start or not start < latest <= end:
+            raise OrderCommitmentConflict(
+                "Relevant capacity reservation window is invalid."
+            )
+        projected = {field: deepcopy(raw.get(field)) for field in CAPACITY_BASIS_FIELDS}
+        projected.update({
+            "CapacityReservationID": capacity_id,
+            "ReservationBatchID": _required_text(raw, "ReservationBatchID"),
+            "DemandCommitmentID": _required_text(raw, "DemandCommitmentID"),
+            "DemandClass": _required_text(raw, "DemandClass"),
+            "ResourceID": raw_key[0],
+            "WindowStartAt": start.isoformat(),
+            "WindowEndAt": end.isoformat(),
+            "ReservedMinutes": _positive_number(
+                raw.get("ReservedMinutes"), "ReservedMinutes"
+            ),
+            "LatestAllowedCompletionAt": latest.isoformat(),
+            "Status": _required_text(raw, "Status"),
+            "RecordVersion": _basis_record_version(
+                raw.get("RecordVersion"), "Capacity RecordVersion"
+            ),
+        })
+        seen_capacity_ids.add(capacity_id)
+        capacity_projection.append(projected)
+    capacity_projection.sort(key=lambda row: str(row["CapacityReservationID"]))
+
+    inventory_projection: list[dict[str, object]] = []
+    seen_inventory_keys: set[tuple[str, str]] = set()
+    for row in inventory_buffer_rows:
+        key = (row.item_id, row.location_id)
+        if key not in material_key_set:
+            continue
+        if key in seen_inventory_keys:
+            raise OrderCommitmentConflict(
+                "Relevant inventory-buffer evidence is duplicated."
+            )
+        seen_inventory_keys.add(key)
+        inventory_projection.append({
+            "ItemID": row.item_id,
+            "LocationID": row.location_id,
+            "OnHandQty": _basis_nonnegative(row.on_hand_qty, "OnHandQty"),
+            "RedZoneQty": _basis_nonnegative(row.red_zone_qty, "RedZoneQty"),
+            "YellowZoneQty": _basis_nonnegative(
+                row.yellow_zone_qty, "YellowZoneQty"
+            ),
+            "GreenZoneQty": _basis_nonnegative(
+                row.green_zone_qty, "GreenZoneQty"
+            ),
+        })
+    inventory_projection.sort(
+        key=lambda row: (str(row["ItemID"]), str(row["LocationID"]))
+    )
+
+    availability_projection: list[dict[str, object]] = []
+    seen_availability_keys: set[tuple[str, str]] = set()
+    for row in material_availability_rows:
+        key = (row.item_id, row.location_id)
+        if key not in material_key_set:
+            continue
+        if key in seen_availability_keys:
+            raise OrderCommitmentConflict(
+                "Relevant material-availability evidence is duplicated."
+            )
+        seen_availability_keys.add(key)
+        availability_projection.append({
+            "ItemID": row.item_id,
+            "LocationID": row.location_id,
+            "AllocatedQty": _basis_nonnegative(
+                row.allocated_qty, "Authority AllocatedQty"
+            ),
+            "InboundQty": _basis_nonnegative(row.inbound_qty, "InboundQty"),
+            "InboundAvailableAt": (
+                _utc(row.inbound_available_at).isoformat()
+                if row.inbound_available_at is not None
+                else None
+            ),
+        })
+    availability_projection.sort(
+        key=lambda row: (str(row["ItemID"]), str(row["LocationID"]))
+    )
+
+    material_projection: list[dict[str, object]] = []
+    seen_material_ids: set[str] = set()
+    for raw in material_ledger_rows:
+        if raw.get("Status") not in ACTIVE_PLANNING_STATUSES:
+            continue
+        raw_key = (
+            str(raw.get("ItemID") or ""),
+            str(raw.get("LocationID") or ""),
+        )
+        if raw_key not in material_key_set:
+            continue
+        allocation_id = _required_text(raw, "MaterialAllocationID")
+        if allocation_id in seen_material_ids:
+            raise OrderCommitmentConflict(
+                "Relevant material allocation ID is duplicated."
+            )
+        projected = {field: deepcopy(raw.get(field)) for field in MATERIAL_BASIS_FIELDS}
+        projected.update({
+            "MaterialAllocationID": allocation_id,
+            "ReservationBatchID": _required_text(raw, "ReservationBatchID"),
+            "DemandCommitmentID": _required_text(raw, "DemandCommitmentID"),
+            "DemandClass": _required_text(raw, "DemandClass"),
+            "ItemID": raw_key[0],
+            "LocationID": raw_key[1],
+            "AllocatedQty": _basis_nonnegative(
+                raw.get("AllocatedQty"), "AllocatedQty"
+            ),
+            "MaterialSnapshotID": _required_text(raw, "MaterialSnapshotID"),
+            "Status": _required_text(raw, "Status"),
+            "RecordVersion": _basis_record_version(
+                raw.get("RecordVersion"), "Material RecordVersion"
+            ),
+        })
+        seen_material_ids.add(allocation_id)
+        material_projection.append(projected)
+    material_projection.sort(key=lambda row: str(row["MaterialAllocationID"]))
+
+    audit_basis = {
+        "BaselinePlanningRunID": baseline_planning_run_id,
+        "BaselineOperationalStateSnapshotID": baseline_operational_state_snapshot_id,
+        "BaselineScheduleFingerprint": baseline_schedule_fingerprint,
+        "MasterDataVersionID": master_data_version_id,
+        "OperatingModelConfigurationID": operating_model_configuration_id,
+        "OperatingModelFingerprint": operating_model_fingerprint,
+        "SchedulingConfigurationID": scheduling_configuration_id,
+        "DDMRPConfigurationID": ddmrp_configuration_id,
+        "ReleasePolicyVersionID": release_policy_version_id,
+        "FrozenReleasePolicyFingerprint": frozen_release_policy_fingerprint,
+        "RoutingFingerprint": routing_fingerprint,
+        "CalendarFingerprint": calendar_fingerprint,
+        "TimeBufferMinutes": time_buffer_minutes,
+        "MaterialCheckWindowMinutes": material_check_window_minutes,
+        "CapacityAssessmentCutoffAt": _utc_iso(capacity_assessment_cutoff_at),
+        "MaterialEligibilityCutoffAt": (
+            _utc_iso(material_eligibility_cutoff_at)
+            if material_eligibility_cutoff_at is not None
+            else None
+        ),
+        "SelectedOperationalStateSnapshotID": selection[
+            "OperationalStateSnapshotID"
+        ],
+        "SelectedOperationalStateCapturedAt": selection[
+            "OperationalStateCapturedAt"
+        ],
+        "OperationalStateFreshnessStatus": selection[
+            "OperationalStateFreshnessStatus"
+        ],
+        "OperationalStateAgeMinutes": selection["OperationalStateAgeMinutes"],
+        "OperationalStateMaxAgeMinutes": 60,
+        "OperationalStateValidThroughAt": selection[
+            "OperationalStateValidThroughAt"
+        ],
+        "RelevantCapacityWindowKeys": capacity_keys,
+        "RelevantCapacityLedger": capacity_projection,
+        "RelevantMaterialKeys": material_keys,
+        "RelevantInventoryBuffers": inventory_projection,
+        "RelevantMaterialAvailability": availability_projection,
+        "RelevantMaterialLedger": material_projection,
+    }
+    audit_fingerprint_projection = deepcopy(audit_basis)
+    audit_fingerprint_projection.pop("OperationalStateAgeMinutes", None)
+    capacity_decision_basis = {
+        key: deepcopy(audit_basis[key])
+        for key in (
+            "BaselinePlanningRunID",
+            "BaselineScheduleFingerprint",
+            "MasterDataVersionID",
+            "OperatingModelConfigurationID",
+            "OperatingModelFingerprint",
+            "SchedulingConfigurationID",
+            "DDMRPConfigurationID",
+            "ReleasePolicyVersionID",
+            "FrozenReleasePolicyFingerprint",
+            "RoutingFingerprint",
+            "CalendarFingerprint",
+            "TimeBufferMinutes",
+            "RelevantCapacityWindowKeys",
+            "RelevantCapacityLedger",
+        )
+    }
+    decision_staleness_basis = {
+        **capacity_decision_basis,
+        "MaterialPolicy": {
+            "CheckEnabled": bool(check_material_availability),
+            "SkipReason": material_skip_reason,
+            "MaterialCheckWindowMinutes": material_check_window_minutes,
+        },
+    }
+    if check_material_availability:
+        decision_staleness_basis.update({
+            "SelectedOperationalStateSnapshotID": audit_basis[
+                "SelectedOperationalStateSnapshotID"
+            ],
+            "SelectedOperationalStateCapturedAt": audit_basis[
+                "SelectedOperationalStateCapturedAt"
+            ],
+            "OperationalStateFreshnessStatus": audit_basis[
+                "OperationalStateFreshnessStatus"
+            ],
+            "OperationalStateValidThroughAt": audit_basis[
+                "OperationalStateValidThroughAt"
+            ],
+            "RelevantMaterialKeys": material_keys,
+            "RelevantInventoryBuffers": inventory_projection,
+            "RelevantMaterialAvailability": availability_projection,
+            "RelevantMaterialLedger": material_projection,
+        })
+    return {
+        **audit_basis,
+        "AuditBasisFingerprint": canonical_fingerprint(audit_fingerprint_projection),
+        "DecisionStalenessBasis": decision_staleness_basis,
+        "DecisionStalenessBasisFingerprint": canonical_fingerprint(
+            decision_staleness_basis
+        ),
+    }
+
+
+def canonical_order_commitment_decision_facts(
+    evaluation: Mapping[str, object],
+) -> dict[str, object]:
+    shadow = dict(evaluation["ShadowSchedule"])
+    material = dict(evaluation["MaterialAssessment"])
+    recommendation = dict(evaluation["Recommendation"])
+    candidate_key = {
+        "OnTime": "RequestedDateAssessment",
+        "LaterSafeDate": "EarliestSafeAssessment",
+    }.get(str(shadow["Status"]))
+    candidate = (
+        dict(shadow[candidate_key])
+        if candidate_key is not None
+        and isinstance(shadow.get(candidate_key), Mapping)
+        else {}
+    )
+    actions = list(recommendation["AllowedActions"])
+    return {
+        "CapacityStatus": shadow["Status"],
+        "SelectedCandidateKey": candidate_key,
+        "SelectedPromiseAt": candidate.get("PromiseAt"),
+        "CapacityWindowAssessments": sorted(
+            [
+                {field: row.get(field) for field in CAPACITY_DECISION_WINDOW_FIELDS}
+                for row in candidate.get("WindowAssessments", [])
+            ],
+            key=lambda row: (
+                int(row["RouteSequence"]),
+                str(row["OperationID"]),
+                str(row["WindowStartAt"]),
+            ),
+        ),
+        "CapacityReservationRequests": sorted(
+            [
+                {field: row.get(field) for field in CAPACITY_DECISION_REQUEST_FIELDS}
+                for row in candidate.get("ReservationRequests", [])
+            ],
+            key=lambda row: str(row["ReservationLineID"]),
+        ),
+        "MaterialStatus": material["Status"],
+        "MaterialAllocationRequests": sorted(
+            [
+                {field: row.get(field) for field in MATERIAL_DECISION_REQUEST_FIELDS}
+                for row in material.get("AllocationRequests", [])
+            ],
+            key=lambda row: str(row["RequirementLineID"]),
+        ),
+        "Recommendation": recommendation["Decision"],
+        "ThresholdState": recommendation["ThresholdState"],
+        "AllowedActions": actions,
+        "ActionAcknowledgementRequirements": {
+            action: action_acknowledgement_requirements(
+                action=action,
+                requires_ccr_acknowledgement=bool(
+                    recommendation["RequiresCcrAcknowledgement"]
+                ),
+                requires_material_acknowledgement=bool(
+                    recommendation["RequiresMaterialAcknowledgement"]
+                ),
+            )
+            for action in actions
+        },
+    }
+
+
+def create_order_commitment_evaluation(
+    *,
+    order: Mapping[str, object],
+    shadow_schedule: Mapping[str, object],
+    material_assessment: Mapping[str, object],
+    basis: Mapping[str, object],
+    protection_policy: CcrProtectionPolicy,
+    evaluated_at: datetime,
+) -> dict[str, object]:
+    evaluated_at = _utc(require_aware(evaluated_at, "evaluated_at"))
+    policy = normalized_policy_dict(protection_policy)
+    identity = {
+        "OrderContentFingerprint": order["OrderContentFingerprint"],
+        "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
+        "DecisionStalenessBasisFingerprint": basis[
+            "DecisionStalenessBasisFingerprint"
+        ],
+        "CapacityAssessmentCutoffAt": basis["CapacityAssessmentCutoffAt"],
+        "MaterialEligibilityCutoffAt": basis["MaterialEligibilityCutoffAt"],
+        "MaterialPolicy": {
+            "CheckEnabled": material_assessment["CheckEnabled"],
+            "SkipReason": material_assessment.get("SkipReason"),
+            "MaterialCheckWindowMinutes": material_assessment[
+                "MaterialCheckWindowMinutes"
+            ],
+            "SnapshotSelectionMode": material_assessment["SnapshotSelectionMode"],
+            "RequestedOperationalStateSnapshotID": material_assessment.get(
+                "RequestedOperationalStateSnapshotID"
+            ),
+        },
+        "ProtectionPolicy": policy,
+        "ShadowAlgorithm": deepcopy(shadow_schedule["Algorithm"]),
+    }
+    evaluation_id = "OCE-" + sha256(
+        canonical_json(identity).encode("utf-8")
+    ).hexdigest()[:20]
+    immutable = {
+        "EvaluationID": evaluation_id,
+        "Order": deepcopy(order),
+        "LogicalOrderKey": order["LogicalOrderKey"],
+        "OrderContentFingerprint": order["OrderContentFingerprint"],
+        "Basis": deepcopy(basis),
+        "AuditBasisFingerprint": basis["AuditBasisFingerprint"],
+        "DecisionStalenessBasisFingerprint": basis[
+            "DecisionStalenessBasisFingerprint"
+        ],
+        "ProtectionPolicy": policy,
+        "ShadowSchedule": deepcopy(shadow_schedule),
+        "MaterialAssessment": deepcopy(material_assessment),
+        "Recommendation": build_order_commitment_recommendation(
+            shadow_schedule=shadow_schedule,
+            material_assessment=material_assessment,
+            protection_policy=protection_policy,
+        ),
+    }
+    immutable["DecisionFacts"] = canonical_order_commitment_decision_facts(immutable)
+    immutable["DecisionFactsFingerprint"] = canonical_fingerprint(
+        immutable["DecisionFacts"]
+    )
+    fingerprint_projection = deepcopy(immutable)
+    fingerprint_projection["Basis"].pop("OperationalStateAgeMinutes", None)
+    fingerprint_projection["MaterialAssessment"].pop(
+        "OperationalStateAgeMinutes", None
+    )
+    evaluation_fingerprint = canonical_fingerprint(fingerprint_projection)
+    return {
+        **immutable,
+        "EvaluationFingerprint": evaluation_fingerprint,
+        "EvaluatedAt": _utc_iso(evaluated_at),
+        "CreatedAt": _utc_iso(evaluated_at),
+        "Status": "AwaitingPlannerDecision",
+        "RecordVersion": 1,
+    }
+
+
+def register_order_commitment_evaluation(
+    evaluations: Mapping[str, dict[str, object]],
+    candidate: dict[str, object],
+) -> tuple[Literal["Created", "Duplicate"], dict[str, object]]:
+    evaluation_id = _required_text(candidate, "EvaluationID")
+    fingerprint = _required_text(candidate, "EvaluationFingerprint")
+    existing = evaluations.get(evaluation_id)
+    if existing is None:
+        return "Created", deepcopy(candidate)
+    if existing.get("EvaluationFingerprint") == fingerprint:
+        return "Duplicate", deepcopy(existing)
+    raise OrderCommitmentConflict(
+        "Evaluation ID already exists with different canonical content."
+    )
+
+
+def exact_order_commitment_intake_replay(
+    *,
+    evaluations: Mapping[str, dict[str, object]],
+    order: Mapping[str, object],
+) -> dict[str, object] | None:
+    logical_rows = [
+        row for row in evaluations.values()
+        if row.get("LogicalOrderKey") == order["LogicalOrderKey"]
+    ]
+    exact = next(
+        (
+            row for row in logical_rows
+            if row.get("OrderContentFingerprint") == order["OrderContentFingerprint"]
+        ),
+        None,
+    )
+    if exact is not None:
+        return deepcopy(exact)
+    if any(
+        row.get("Order", {}).get("OrderKey") == order["OrderKey"]
+        for row in logical_rows
+    ):
+        raise OrderCommitmentConflict("OrderVersionContentConflict")
+    if any(
+        row.get("Status") == "AcceptedPendingFormalSchedule"
+        for row in logical_rows
+    ):
+        raise OrderCommitmentConflict(
+            "AcceptedOrderVersionChangeRequiresExplicitAmendment"
+        )
+    if logical_rows:
+        greatest_rank = max(
+            tuple(row["Order"]["OrderVersionRank"])
+            for row in logical_rows
+        )
+        if tuple(order["OrderVersionRank"]) < greatest_rank:
+            raise OrderCommitmentConflict("OrderVersionSuperseded")
+    return None
+
+
+def supersede_open_order_commitment_evaluations(
+    *,
+    evaluations: Mapping[str, dict[str, object]],
+    candidate: Mapping[str, object],
+    superseded_at: datetime,
+) -> dict[str, dict[str, object]]:
+    updates: dict[str, dict[str, object]] = {}
+    for evaluation_id, row in evaluations.items():
+        if (
+            row.get("LogicalOrderKey") != candidate["LogicalOrderKey"]
+            or row.get("Status") != "AwaitingPlannerDecision"
+            or evaluation_id == candidate["EvaluationID"]
+        ):
+            continue
+        updated = deepcopy(row)
+        updated["Status"] = "Superseded"
+        updated["SupersededAt"] = _utc_iso(superseded_at)
+        updated["SupersededByEvaluationID"] = candidate["EvaluationID"]
+        updated["RecordVersion"] = int(row["RecordVersion"]) + 1
+        updates[evaluation_id] = updated
+    return updates

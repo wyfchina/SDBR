@@ -1648,19 +1648,6 @@ class TestOrderCommitmentAcceptancePreparation:
                 self._prepare(self._evaluation_for_action(action), action)
 
     def test_reject_never_requires_ccr_or_material_acknowledgement(self):
-        evaluation = self._evaluation_for_action("AcceptRequestedDate")
-
-        record = order_commitment_evaluation.rejected_evaluation_record(
-            evaluation=evaluation,
-            decision_id="DEC-MTO-REJECT",
-            decision="Reject",
-            decided_by="planner-1",
-            decided_at=self.evaluated_at,
-            reason="Planner rejected the recommendation.",
-            ccr_risk_acknowledged=False,
-            material_risk_acknowledged=False,
-        )
-
         assert order_commitment_evaluation.action_acknowledgement_requirements(
             action="Reject",
             requires_ccr_acknowledgement=True,
@@ -1669,7 +1656,6 @@ class TestOrderCommitmentAcceptancePreparation:
             "RequiresCcrAcknowledgement": False,
             "RequiresMaterialAcknowledgement": False,
         }
-        assert record["Status"] == "Rejected"
 
     def test_insufficient_shortage_and_not_assessable_reject_acceptance(self):
         for capacity_status, material_status in (
@@ -1735,6 +1721,60 @@ class TestOrderCommitmentAcceptancePreparation:
             != fingerprint
             for variant in variations
         )
+        write_set = self._prepare(evaluation, "AcceptRequestedDate")
+        accepted = order_commitment_evaluation.accepted_evaluation_record(
+            evaluation=evaluation,
+            write_set=write_set,
+            decision_id="DEC-MTO-1",
+            decision="AcceptRequestedDate",
+            decided_by="planner-1",
+            decided_at=self.evaluated_at,
+            reason="Planner reviewed frozen evidence.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+        rejected = order_commitment_evaluation.rejected_evaluation_record(
+            evaluation=evaluation,
+            decision_id="DEC-MTO-REJECT",
+            decision="Reject",
+            decided_by="planner-1",
+            decided_at=self.evaluated_at,
+            reason="Planner rejected the recommendation.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+        accepted_observed_later = order_commitment_evaluation.accepted_evaluation_record(
+            evaluation=evaluation,
+            write_set=write_set,
+            decision_id="DEC-MTO-1",
+            decision="AcceptRequestedDate",
+            decided_by="planner-1",
+            decided_at=self.evaluated_at + timedelta(minutes=1),
+            reason="Planner reviewed frozen evidence.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+
+        assert "Decision" not in evaluation
+        assert accepted["Status"] == "AcceptedPendingFormalSchedule"
+        assert accepted["RecordVersion"] == evaluation["RecordVersion"] + 1
+        assert accepted["Decision"]["DecisionFingerprint"] == fingerprint
+        assert accepted["Decision"]["ReservationBatchID"] == write_set.batch[
+            "ReservationBatchID"
+        ]
+        assert accepted["Decision"]["ExternalOrderAcceptance"] == "NotPerformed"
+        assert accepted["Decision"]["PlanningRunCreation"] == "NotPerformed"
+        assert accepted["Decision"]["ProductionMutation"] == "NotPerformed"
+        assert accepted_observed_later["Decision"]["DecidedAt"] != accepted[
+            "Decision"
+        ]["DecidedAt"]
+        assert accepted_observed_later["Decision"]["DecisionFingerprint"] == accepted[
+            "Decision"
+        ]["DecisionFingerprint"]
+        assert rejected["Status"] == "Rejected"
+        assert rejected["RecordVersion"] == evaluation["RecordVersion"] + 1
+        assert rejected["Decision"]["CcrRiskAcknowledged"] is False
+        assert rejected["Decision"]["MaterialRiskAcknowledged"] is False
 
     def test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context(
         self,

@@ -1422,3 +1422,135 @@ def prepare_mto_acceptance(
         capacity_requests=candidate.get("ReservationRequests", []),
         material_requests=material_requests,
     )
+
+
+def canonical_decision_fingerprint(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    actor_id: str,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> str:
+    identity = {
+        "DecisionID": _decision_text(decision_id, "DecisionID"),
+        "EvaluationID": evaluation["EvaluationID"],
+        "EvaluationFingerprint": evaluation["EvaluationFingerprint"],
+        "Decision": _decision_text(decision, "Decision"),
+        "ActorID": _decision_text(actor_id, "ActorID"),
+        "Reason": _decision_text(reason, "Reason"),
+        "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+        "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
+    }
+    return canonical_fingerprint(identity)
+
+
+def _decision_evidence(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    normalized_decision_id = _decision_text(decision_id, "DecisionID")
+    normalized_actor = _decision_text(decided_by, "DecidedBy")
+    normalized_reason = _decision_text(reason, "Reason")
+    decided_at = _utc(require_aware(decided_at, "DecidedAt"))
+    return {
+        "DecisionID": normalized_decision_id,
+        "DecisionFingerprint": canonical_decision_fingerprint(
+            evaluation=evaluation,
+            decision_id=normalized_decision_id,
+            decision=decision,
+            actor_id=normalized_actor,
+            reason=normalized_reason,
+            ccr_risk_acknowledged=ccr_risk_acknowledged,
+            material_risk_acknowledged=material_risk_acknowledged,
+        ),
+        "Decision": decision,
+        "DecidedBy": normalized_actor,
+        "DecidedAt": decided_at.isoformat(),
+        "Reason": normalized_reason,
+        "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+        "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
+    }
+
+
+def accepted_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    write_set: PlanningReservationWriteSet,
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    if evaluation["Status"] != "AwaitingPlannerDecision":
+        raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
+    if decision not in ACCEPTANCE_ACTION_CONTEXT:
+        raise OrderCommitmentConflict("Decision is not an acceptance action.")
+    updated = deepcopy(dict(evaluation))
+    evidence = _decision_evidence(
+        evaluation=evaluation,
+        decision_id=decision_id,
+        decision=decision,
+        decided_by=decided_by,
+        decided_at=decided_at,
+        reason=reason,
+        ccr_risk_acknowledged=ccr_risk_acknowledged,
+        material_risk_acknowledged=material_risk_acknowledged,
+    )
+    evidence.update({
+        "AcceptedPromiseAt": write_set.demand_commitment["AcceptedPromiseAt"],
+        "DemandCommitmentID": write_set.demand_commitment["DemandCommitmentID"],
+        "ReservationBatchID": write_set.batch["ReservationBatchID"],
+        "ExternalOrderAcceptance": "NotPerformed",
+        "PlanningRunCreation": "NotPerformed",
+        "ProductionMutation": "NotPerformed",
+    })
+    updated["Decision"] = evidence
+    updated["Status"] = "AcceptedPendingFormalSchedule"
+    updated["RecordVersion"] = int(evaluation["RecordVersion"]) + 1
+    return updated
+
+
+def rejected_evaluation_record(
+    *,
+    evaluation: Mapping[str, object],
+    decision_id: str,
+    decision: str,
+    decided_by: str,
+    decided_at: datetime,
+    reason: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
+) -> dict[str, object]:
+    if (
+        evaluation["Status"] != "AwaitingPlannerDecision"
+        or decision != "Reject"
+        or decision not in evaluation["Recommendation"]["AllowedActions"]
+    ):
+        raise OrderCommitmentConflict("Rejection is not allowed.")
+    updated = deepcopy(dict(evaluation))
+    updated["Decision"] = _decision_evidence(
+        evaluation=evaluation,
+        decision_id=decision_id,
+        decision=decision,
+        decided_by=decided_by,
+        decided_at=decided_at,
+        reason=reason,
+        ccr_risk_acknowledged=ccr_risk_acknowledged,
+        material_risk_acknowledged=material_risk_acknowledged,
+    )
+    updated["Status"] = "Rejected"
+    updated["RecordVersion"] = int(evaluation["RecordVersion"]) + 1
+    return updated

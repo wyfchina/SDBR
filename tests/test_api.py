@@ -5944,10 +5944,14 @@ def test_planner_workbench_page_exposes_data_readiness_workspace_without_raw_jso
 
 
 def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
+    # UI-DDMRP-002 / planner workbench page contract
     client = TestClient(create_app())
 
     html = client.get("/planner/workbench").text
     script = client.get("/planner/assets/planner-workbench.js").text
+    material_detail_html = html.split('<section id="material-planning-detail"', 1)[1].split(
+        '<details id="material-planning-technical-details"', 1
+    )[0]
 
     assert 'href="#material-planning"' in html
     assert 'data-route="material-planning"' in html
@@ -5961,7 +5965,14 @@ def test_planner_workbench_page_exposes_ddmrp_material_planning_workbench():
     assert 'data-i18n="openSupply"' in html
     assert 'data-i18n="qualifiedDemand"' in html
     assert 'id="material-planning-detail"' in html
-    assert 'data-i18n="trendPlaceholderMessage"' in html
+    assert 'id="material-detail-trend-placeholder"' in material_detail_html
+    assert 'data-i18n="trendPlaceholder"' in material_detail_html
+    assert 'data-i18n="trendPlaceholderMessage"' in material_detail_html
+    assert (
+        material_detail_html.index('id="material-detail-components-heading"')
+        < material_detail_html.index('id="material-detail-trend-placeholder"')
+        < material_detail_html.index('id="material-detail-gates-heading"')
+    )
 
     assert 'navMaterials: "物料计划"' in script
     assert 'navMaterials: "Materials Planning"' in script

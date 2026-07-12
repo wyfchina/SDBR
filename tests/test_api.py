@@ -5767,6 +5767,21 @@ class TestOrderCommitmentUiShell:
         ]
 
 
+def test_ui_commit_specification_remains_in_development_until_task_28():
+    # UI-COMMIT-001: Task 24 establishes the shell; Task 28 owns verification.
+    specification = Path("docs/ui-specification.md").read_text(encoding="utf-8")
+    capability = specification.split("### UI-COMMIT-001", 1)[1].split(
+        "### UI-DDOM-001", 1
+    )[0]
+    acceptance_record = specification.split("### 17.13", 1)[1].split(
+        "## 18.", 1
+    )[0]
+
+    assert "| 文档版本 | 5.35 |" in specification
+    assert "**状态：开发中**" in capability
+    assert "- 状态：开发中" in acceptance_record
+
+
 class TestOrderCommitmentUiReadFlow:
     # UI-COMMIT-001 / BE-SDBR-010
     def test_script_uses_workbench_detail_endpoints_and_revision_header(self):

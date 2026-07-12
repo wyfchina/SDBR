@@ -6,6 +6,7 @@ from math import inf, nan
 
 import pytest
 
+from sdbr import order_commitment_evaluation
 from sdbr.order_commitment_evaluation import (
     ORDER_COMMITMENT_OPERATIONAL_STATE_MAX_AGE_MINUTES,
     REFERENCE_CCR_PROTECTION_POLICY,
@@ -18,6 +19,8 @@ from sdbr.order_commitment_evaluation import (
     select_order_commitment_operational_snapshot,
 )
 from sdbr.operational_state import OperationalStateSnapshot
+from sdbr.planner_view import InventoryBufferPolicy
+from sdbr.release_candidates import MaterialAvailability
 
 
 def _mto_order() -> dict[str, object]:
@@ -496,3 +499,342 @@ class TestOrderCommitmentSnapshotFreshness:
 
         assert raised.value.status == "OperationalStateSnapshotNotFound"
         assert raised.value.snapshot_id == "OPS-UNKNOWN"
+
+
+class TestOrderCommitmentMaterialFeasibility:
+    observed_at = datetime(2026, 7, 11, 8, tzinfo=timezone.utc)
+
+    @classmethod
+    def _selection(
+        cls,
+        *,
+        captured_at: datetime | None = None,
+        buffers: list[InventoryBufferPolicy] | None = None,
+        availability: list[MaterialAvailability] | None = None,
+        explicit: bool = True,
+    ) -> dict[str, object]:
+        snapshot = OperationalStateSnapshot(
+            snapshot_id="OPS-1",
+            captured_at=captured_at or cls.observed_at,
+            inventory_buffers=buffers
+            if buffers is not None
+            else [InventoryBufferPolicy("RM-1", "MAIN", 10, 0, 0, 0)],
+            material_availability=availability
+            if availability is not None
+            else [MaterialAvailability("RM-1", "MAIN")],
+            wip_limits=[],
+        )
+        return select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=cls.observed_at,
+            requested_snapshot_id=snapshot.snapshot_id if explicit else None,
+        )
+
+    @classmethod
+    def _evaluate(
+        cls,
+        requirements: list[dict[str, object]],
+        *,
+        selection: dict[str, object] | None = None,
+        allocations: list[dict[str, object]] | None = None,
+        window_minutes: int = 0,
+        check: bool = True,
+        skip_reason: str | None = None,
+    ) -> dict[str, object]:
+        return order_commitment_evaluation.evaluate_mto_material_availability(
+            order={"MaterialRequirements": deepcopy(requirements)},
+            snapshot_selection=selection or cls._selection(),
+            active_material_allocations=allocations or [],
+            current_demand_commitment_id="DC-CURRENT",
+            evaluated_at=cls.observed_at,
+            material_check_window_minutes=window_minutes,
+            check_material_availability=check,
+            skip_reason=skip_reason,
+        )
+
+    @staticmethod
+    def _requirement(
+        line_id: str = "L1",
+        *,
+        quantity: float = 5,
+        item_id: str = "RM-1",
+        location_id: str = "MAIN",
+    ) -> dict[str, object]:
+        return {
+            "RequirementLineID": line_id,
+            "ItemID": item_id,
+            "LocationID": location_id,
+            "RequiredQty": quantity,
+            "Uom": "EA",
+        }
+
+    @staticmethod
+    def _allocation(
+        allocation_id: str,
+        *,
+        demand_id: str,
+        quantity: object,
+        item_id: str = "RM-1",
+        location_id: str = "MAIN",
+    ) -> dict[str, object]:
+        return {
+            "MaterialAllocationID": allocation_id,
+            "Status": "ActivePlanReservation",
+            "ItemID": item_id,
+            "LocationID": location_id,
+            "DemandCommitmentID": demand_id,
+            "AllocatedQty": quantity,
+        }
+
+    @staticmethod
+    def _same_key_material_result(requirements, *, on_hand=5.0):
+        observed_at = datetime(2026, 7, 11, 8, tzinfo=timezone.utc)
+        snapshot = OperationalStateSnapshot(
+            snapshot_id="OPS-1",
+            captured_at=observed_at,
+            inventory_buffers=[
+                InventoryBufferPolicy(
+                    "RM-1", "MAIN", on_hand, 0.0, 0.0, 0.0
+                )
+            ],
+            material_availability=[
+                MaterialAvailability("RM-1", "MAIN")
+            ],
+            wip_limits=[],
+        )
+        selection = select_order_commitment_operational_snapshot(
+            snapshots={snapshot.snapshot_id: snapshot},
+            evaluated_at=observed_at,
+            requested_snapshot_id=snapshot.snapshot_id,
+        )
+        return order_commitment_evaluation.evaluate_mto_material_availability(
+            order={"MaterialRequirements": deepcopy(requirements)},
+            snapshot_selection=selection,
+            active_material_allocations=[],
+            current_demand_commitment_id="DC-CURRENT",
+            evaluated_at=observed_at,
+            material_check_window_minutes=0,
+        )
+
+    def test_check_defaults_on_and_uses_uncommitted_shared_availability(self):
+        selection = self._selection(
+            availability=[MaterialAvailability("RM-1", "MAIN", 2)]
+        )
+        allocations = [
+            self._allocation("MA-OTHER", demand_id="DC-OTHER", quantity=3),
+        ]
+
+        result = self._evaluate(
+            [self._requirement()],
+            selection=selection,
+            allocations=allocations,
+        )
+
+        assert result["CheckEnabled"] is True
+        assert result["Status"] == "Feasible"
+        assert result["Lines"][0]["UncommittedAvailabilityQty"] == 5
+        assert result["Lines"][0]["OtherPlanningAllocatedQty"] == 3
+        assert result["AllocationRequests"][0]["AllocatedQty"] == 5
+
+    def test_skip_requires_reason_records_pending_requirements_and_zero_allocations(
+        self,
+    ):
+        requirements = [self._requirement()]
+        with pytest.raises(OrderCommitmentConflict, match="skip reason"):
+            self._evaluate(requirements, check=False)
+
+        result = self._evaluate(
+            requirements,
+            check=False,
+            skip_reason="  Planner requested capacity-only assessment.  ",
+        )
+
+        assert result["Status"] == "SkippedPendingConfirmation"
+        assert result["SkipReason"] == "Planner requested capacity-only assessment."
+        assert result["MaterialEligibilityCutoffAt"] is None
+        assert result["PendingRequirements"] == requirements
+        assert result["AllocationRequests"] == []
+
+    def test_stale_snapshot_returns_evidence_insufficient_and_zero_allocations(
+        self,
+    ):
+        selection = self._selection(
+            captured_at=self.observed_at - timedelta(minutes=61)
+        )
+
+        result = self._evaluate([self._requirement()], selection=selection)
+
+        assert result["Status"] == "EvidenceInsufficient"
+        assert result["Issues"] == [{
+            "Code": "OPERATIONAL_STATE_EVIDENCE_NOT_FRESH",
+            "FreshnessStatus": "Stale",
+        }]
+        assert result["AllocationRequests"] == []
+
+    def test_future_snapshot_returns_evidence_insufficient_and_zero_allocations(
+        self,
+    ):
+        selection = self._selection(
+            captured_at=self.observed_at + timedelta(minutes=1)
+        )
+
+        result = self._evaluate([self._requirement()], selection=selection)
+
+        assert result["Status"] == "EvidenceInsufficient"
+        assert result["Issues"][0]["FreshnessStatus"] == "Future"
+        assert result["AllocationRequests"] == []
+
+    def test_missing_snapshot_or_required_item_row_is_evidence_insufficient(self):
+        missing_snapshot = select_order_commitment_operational_snapshot(
+            snapshots={},
+            evaluated_at=self.observed_at,
+            requested_snapshot_id=None,
+        )
+        missing_row = self._selection(buffers=[], availability=[])
+
+        results = [
+            self._evaluate([self._requirement()], selection=missing_snapshot),
+            self._evaluate([self._requirement()], selection=missing_row),
+        ]
+
+        assert [result["Issues"][0]["Code"] for result in results] == [
+            "OPERATIONAL_STATE_EVIDENCE_NOT_FRESH",
+            "REQUIRED_MATERIAL_EVIDENCE_MISSING",
+        ]
+        assert all(result["AllocationRequests"] == [] for result in results)
+
+    def test_inbound_counts_only_when_aware_and_inside_frozen_material_window(self):
+        requirement = [self._requirement(quantity=12)]
+        inside = self._selection(
+            availability=[MaterialAvailability(
+                "RM-1",
+                "MAIN",
+                inbound_qty=2,
+                inbound_available_at=self.observed_at + timedelta(minutes=30),
+            )]
+        )
+        outside = self._selection(
+            availability=[MaterialAvailability(
+                "RM-1",
+                "MAIN",
+                inbound_qty=2,
+                inbound_available_at=self.observed_at + timedelta(minutes=31),
+            )]
+        )
+        naive = self._selection(
+            availability=[MaterialAvailability(
+                "RM-1",
+                "MAIN",
+                inbound_qty=2,
+                inbound_available_at=datetime(2026, 7, 11, 8, 30),
+            )]
+        )
+
+        covered = self._evaluate(requirement, selection=inside, window_minutes=30)
+        late = self._evaluate(requirement, selection=outside, window_minutes=30)
+        invalid = self._evaluate(requirement, selection=naive, window_minutes=30)
+
+        assert covered["Status"] == "Feasible"
+        assert covered["Lines"][0]["EligibleInboundQty"] == 2
+        assert late["Status"] == "Shortage"
+        assert late["Lines"][0]["EligibleInboundQty"] == 0
+        assert invalid["Status"] == "EvidenceInsufficient"
+        assert invalid["Issues"][0]["Code"] == "MATERIAL_EVIDENCE_INVALID"
+
+    def test_shortage_is_all_or_nothing_and_returns_no_allocation_requests(self):
+        requirements = [
+            self._requirement("L1", quantity=3),
+            self._requirement("L2", quantity=3),
+        ]
+
+        result = self._same_key_material_result(requirements)
+
+        assert result["Status"] == "Shortage"
+        assert result["AllocationRequests"] == []
+        assert result["PendingRequirements"] == requirements
+
+    def test_current_demand_allocation_is_not_subtracted_twice(self):
+        allocations = [
+            self._allocation("MA-CURRENT", demand_id="DC-CURRENT", quantity=9),
+            self._allocation("MA-OTHER", demand_id="DC-OTHER", quantity=2),
+        ]
+
+        result = self._evaluate(
+            [self._requirement(quantity=8)], allocations=allocations
+        )
+
+        assert result["Status"] == "Feasible"
+        assert result["Lines"][0]["OtherPlanningAllocatedQty"] == 2
+        assert result["Lines"][0]["UncommittedAvailabilityQty"] == 8
+
+    def test_same_item_location_lines_use_cumulative_candidate_balance(self):
+        requirements = [
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+        ]
+        result = self._same_key_material_result(requirements)
+        assert result["Status"] == "Shortage"
+        assert [row["CoverageStatus"] for row in result["Lines"]] == [
+            "Covered", "Shortage"
+        ]
+        assert [
+            row["UncommittedAvailabilityQty"] for row in result["Lines"]
+        ] == [5.0, 2.0]
+        assert result["AllocationRequests"] == []
+
+    def test_same_item_location_coverage_is_independent_of_input_line_order(self):
+        requirements = [
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 3.0, "Uom": "EA"},
+        ]
+        forward = self._same_key_material_result(requirements)
+        reverse = self._same_key_material_result(list(reversed(requirements)))
+        assert forward == reverse
+
+    def test_feasible_same_item_location_allocations_sum_to_accepted_total(self):
+        requirements = [
+            {"RequirementLineID": "L2", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 2.0, "Uom": "EA"},
+            {"RequirementLineID": "L1", "ItemID": "RM-1",
+             "LocationID": "MAIN", "RequiredQty": 2.0, "Uom": "EA"},
+        ]
+        result = self._same_key_material_result(requirements)
+        assert result["Status"] == "Feasible"
+        assert [
+            row["RequirementLineID"]
+            for row in result["AllocationRequests"]
+        ] == ["L1", "L2"]
+        assert sum(
+            row["AllocatedQty"] for row in result["AllocationRequests"]
+        ) == 4.0
+
+    def test_malformed_unrelated_material_allocation_is_ignored_but_matching_malformed_row_is_insufficient(
+        self,
+    ):
+        unrelated = {
+            "Status": "ActivePlanReservation",
+            "ItemID": "OTHER",
+            "LocationID": "ELSEWHERE",
+            "AllocatedQty": "not-a-number",
+        }
+        matching = {
+            **unrelated,
+            "ItemID": "RM-1",
+            "LocationID": "MAIN",
+        }
+
+        ignored = self._evaluate(
+            [self._requirement()], allocations=[unrelated]
+        )
+        insufficient = self._evaluate(
+            [self._requirement()], allocations=[matching]
+        )
+
+        assert ignored["Status"] == "Feasible"
+        assert insufficient["Status"] == "EvidenceInsufficient"
+        assert insufficient["Issues"][0]["Code"] == "MATERIAL_EVIDENCE_INVALID"
+        assert insufficient["AllocationRequests"] == []

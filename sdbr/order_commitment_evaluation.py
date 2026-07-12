@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -337,3 +338,135 @@ def select_order_commitment_operational_snapshot(
         ).isoformat(),
         "Acceptable": freshness.acceptable,
     }
+
+
+def _material_evidence_insufficient(
+    *,
+    evidence: Mapping[str, object],
+    order: Mapping[str, object],
+    code: str,
+    details: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        **deepcopy(dict(evidence)),
+        "Status": "EvidenceInsufficient",
+        "Lines": [],
+        "AllocationRequests": [],
+        "PendingRequirements": deepcopy(order["MaterialRequirements"]),
+        "Issues": [{"Code": code, **deepcopy(dict(details or {}))}],
+    }
+
+
+def evaluate_mto_material_availability(
+    *,
+    order: Mapping[str, object],
+    snapshot_selection: Mapping[str, object],
+    active_material_allocations: list[dict[str, object]],
+    current_demand_commitment_id: str,
+    evaluated_at: datetime,
+    material_check_window_minutes: int,
+    check_material_availability: bool = True,
+    skip_reason: str | None = None,
+) -> dict[str, object]:
+    selection = snapshot_selection
+    normalized_skip_reason = (
+        skip_reason.strip()
+        if isinstance(skip_reason, str) and skip_reason.strip()
+        else None
+    )
+    if material_check_window_minutes < 0:
+        raise OrderCommitmentConflict("Material check window cannot be negative.")
+    material_cutoff = (
+        _utc(evaluated_at)
+        + timedelta(minutes=material_check_window_minutes)
+        if check_material_availability
+        else None
+    )
+    evidence = {
+        "CheckEnabled": bool(check_material_availability),
+        "SkipReason": normalized_skip_reason,
+        "MaterialCheckWindowMinutes": material_check_window_minutes,
+        "MaterialEligibilityCutoffAt": (
+            material_cutoff.isoformat() if material_cutoff is not None else None
+        ),
+        "SnapshotSelectionMode": selection["SnapshotSelectionMode"],
+        "RequestedOperationalStateSnapshotID": selection[
+            "RequestedOperationalStateSnapshotID"
+        ],
+        "OperationalStateSnapshotID": selection[
+            "OperationalStateSnapshotID"
+        ],
+        "OperationalStateCapturedAt": selection[
+            "OperationalStateCapturedAt"
+        ],
+        "OperationalStateFreshnessStatus": selection[
+            "OperationalStateFreshnessStatus"
+        ],
+        "OperationalStateAgeMinutes": selection[
+            "OperationalStateAgeMinutes"
+        ],
+        "OperationalStateMaxAgeMinutes": 60,
+        "OperationalStateValidThroughAt": selection[
+            "OperationalStateValidThroughAt"
+        ],
+        "ReleaseGateStillRequired": True,
+    }
+    if not check_material_availability:
+        if not normalized_skip_reason:
+            raise OrderCommitmentConflict("Material check skip reason is required.")
+        return {
+            **evidence,
+            "Status": "SkippedPendingConfirmation",
+            "Lines": [],
+            "AllocationRequests": [],
+            "PendingRequirements": deepcopy(order["MaterialRequirements"]),
+        }
+    if not selection["Acceptable"]:
+        return _material_evidence_insufficient(
+            evidence=evidence,
+            order=order,
+            code="OPERATIONAL_STATE_EVIDENCE_NOT_FRESH",
+            details={
+                "FreshnessStatus": selection[
+                    "OperationalStateFreshnessStatus"
+                ]
+            },
+        )
+    if not order["MaterialRequirements"]:
+        return _material_evidence_insufficient(
+            evidence=evidence,
+            order=order,
+            code="MATERIAL_REQUIREMENTS_MISSING",
+        )
+    snapshot = selection["OperationalStateSnapshot"]
+    if snapshot is None or material_cutoff is None:
+        return _material_evidence_insufficient(
+            evidence=evidence,
+            order=order,
+            code="OPERATIONAL_STATE_EVIDENCE_MISSING",
+        )
+    relevant_keys = {
+        (str(row["ItemID"]), str(row["LocationID"]))
+        for row in order["MaterialRequirements"]
+    }
+    buffer_keys = {
+        (row.item_id, row.location_id)
+        for row in snapshot.inventory_buffers
+        if (row.item_id, row.location_id) in relevant_keys
+    }
+    availability_keys = {
+        (row.item_id, row.location_id)
+        for row in snapshot.material_availability
+        if (row.item_id, row.location_id) in relevant_keys
+    }
+    if buffer_keys != relevant_keys or availability_keys != relevant_keys:
+        return _material_evidence_insufficient(
+            evidence=evidence,
+            order=order,
+            code="REQUIRED_MATERIAL_EVIDENCE_MISSING",
+        )
+    return _material_evidence_insufficient(
+        evidence=evidence,
+        order=order,
+        code="MATERIAL_EVALUATION_NOT_IMPLEMENTED",
+    )

@@ -86,6 +86,7 @@ def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
             "PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED",
         ]
         and row["OperationalActionAllowed"] is False
+        and row["PendingReviewCount"] == 0
         for row in workbench["Rows"]
     )
     assert {

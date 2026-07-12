@@ -41,6 +41,7 @@ ROW_VIEW_FIELDS = (
     "TargetStatusCode", "RecommendedAction", "RecommendationID",
     "RecommendationVersion", "RecommendationStatus", "GateCodes",
     "DemandComponents", "SupplyComponents", "OperationalActionAllowed",
+    "PendingReviewCount",
 )
 ACTIVE_GRAPH_VIEW_FIELDS = (
     "LogicalReplenishmentID", "RecommendationID", "RecommendationVersion",
@@ -566,6 +567,10 @@ def _project_row(
         ),
         "RecommendationStatus": (
             recommendation_statuses[str(recommendation_id)] if recommendation else None
+        ),
+        "PendingReviewCount": int(
+            recommendation is not None
+            and recommendation_statuses[str(recommendation_id)] == "PendingReview"
         ),
         "DemandComponents": [
             _project(component, DEMAND_COMPONENT_FIELDS)

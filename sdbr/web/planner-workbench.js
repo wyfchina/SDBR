@@ -431,12 +431,12 @@ const I18N = {
     orderCommitmentSummary: "订单承诺摘要", awaitingDecision: "待决定", confirmationRequired: "需确认", materialPending: "物料待确认", acceptedPendingSchedule: "已接受，待正式排程",
     searchOrderOrProduct: "搜索订单或产品", allStatuses: "全部状态", order: "订单", product: "产品", requestedDueAt: "请求交期", earliestSafePromise: "建议安全日期",
     ccrLoadBeforeAfter: "CCR 负荷前后", protectionThresholdSource: "保护线来源", materialStatus: "物料状态", recommendation: "建议", reservationStatus: "预留状态", exceptionStatus: "异常状态",
-    actions: "操作", viewDetails: "查看详情", orderCommitmentEvaluation: "订单承诺评估", orderCommitmentLoadFailed: "无法读取订单承诺评估", orderCommitmentRetryAdvice: "请确认服务可用后重试。",
+    actions: "操作", viewDetails: "查看详情", orderCommitmentEvaluation: "订单承诺评估", orderCommitmentLoadFailed: "无法读取订单承诺评估", orderCommitmentRetryAdvice: "请确认服务可用后重试。", orderCommitmentDetailLoading: "正在读取订单承诺评估详情。", orderCommitmentDetailLoadFailed: "无法读取订单承诺评估详情。",
     materialSkipReasonRequired: "关闭物料检查时，请填写业务原因。", orderCommitmentRevisionConflict: "工作台状态已更新，已刷新当前评估；请复核后再操作。", orderCommitmentReevaluationFailed: "无法重新评估当前订单承诺。", orderCommitmentNotReevaluatable: "当前评估已结束或已被替代，不能重新评估。", orderCommitmentNotFound: "未找到订单承诺评估，请刷新后重试。",
     noOrderCommitments: "当前没有订单承诺评估。", orderDetails: "订单信息", capacityEvidence: "产能证据", materialEvidence: "物料证据", decision: "计划员决定", reservation: "计划预留",
     auditHistory: "审计记录", technicalDetails: "技术追溯", selectedPromise: "选定承诺日期", earliestSafeAssessment: "最早安全日期", requestedDateAssessment: "请求日期评估",
     loadBefore: "评估前负荷", loadAfter: "评估后负荷", loadPercent: "负荷率", protectionThreshold: "保护线", thresholdState: "保护线状态", materialCheck: "物料检查",
-    materialFreshness: "物料证据新鲜度", materialLines: "物料需求行", acceptedPromise: "接受的承诺日期", decidedBy: "决定人", decidedAt: "决定时间", decisionReason: "决定原因",
+    materialFreshness: "物料证据新鲜度", materialLines: "物料需求行", acceptedPromise: "接受的承诺日期", decidedBy: "决定人", decidedAt: "决定时间", decisionReason: "决定原因", ccrRiskAcknowledged: "CCR 风险已确认", materialRiskAcknowledged: "物料风险已确认", supersededByEvaluation: "替代评估",
     reservationBatch: "预留批次", demandCommitment: "需求承诺", boundary: "业务边界", recommendationOnly: "仅提供建议，最终决定由计划员作出。",
     externalOrderAcceptance: "外部订单接受", planningRunCreation: "创建 Planning Run", productionMutation: "生产权威变更", unknownStatus: "未知状态",
     RecommendAccept: "建议接受", PlannerConfirmationRequired: "需计划员确认", CapacityAcceptableMaterialPending: "产能可接受，物料待确认", MaterialEvidenceRequired: "待物料确认",
@@ -883,12 +883,12 @@ const I18N = {
     orderCommitmentSummary: "Order commitment summary", awaitingDecision: "Awaiting decision", confirmationRequired: "Confirmation required", materialPending: "Material pending", acceptedPendingSchedule: "Accepted, pending formal schedule",
     searchOrderOrProduct: "Search order or product", allStatuses: "All statuses", order: "Order", product: "Product", requestedDueAt: "Requested due", earliestSafePromise: "Earliest safe promise",
     ccrLoadBeforeAfter: "CCR load before / after", protectionThresholdSource: "Protection threshold source", materialStatus: "Material status", recommendation: "Recommendation", reservationStatus: "Reservation status", exceptionStatus: "Exception status",
-    actions: "Actions", viewDetails: "View details", orderCommitmentEvaluation: "Order commitment evaluation", orderCommitmentLoadFailed: "Order commitment evaluations could not be loaded", orderCommitmentRetryAdvice: "Check the service and retry.",
+    actions: "Actions", viewDetails: "View details", orderCommitmentEvaluation: "Order commitment evaluation", orderCommitmentLoadFailed: "Order commitment evaluations could not be loaded", orderCommitmentRetryAdvice: "Check the service and retry.", orderCommitmentDetailLoading: "Loading order commitment evaluation details.", orderCommitmentDetailLoadFailed: "Order commitment evaluation details could not be loaded.",
     materialSkipReasonRequired: "Provide a business reason when material checking is turned off.", orderCommitmentRevisionConflict: "Workbench state changed. The current evaluation was refreshed; review it before acting again.", orderCommitmentReevaluationFailed: "This order commitment could not be re-evaluated.", orderCommitmentNotReevaluatable: "This evaluation is closed or superseded and cannot be re-evaluated.", orderCommitmentNotFound: "The order commitment evaluation was not found. Refresh and try again.",
     noOrderCommitments: "No order commitment evaluations are available.", orderDetails: "Order details", capacityEvidence: "Capacity evidence", materialEvidence: "Material evidence", decision: "Planner decision", reservation: "Planning reservation",
     auditHistory: "Audit history", technicalDetails: "Technical trace", selectedPromise: "Selected promise", earliestSafeAssessment: "Earliest safe assessment", requestedDateAssessment: "Requested-date assessment",
     loadBefore: "Load before", loadAfter: "Load after", loadPercent: "Load percent", protectionThreshold: "Protection threshold", thresholdState: "Threshold state", materialCheck: "Material check",
-    materialFreshness: "Material evidence freshness", materialLines: "Material requirement lines", acceptedPromise: "Accepted promise", decidedBy: "Decided by", decidedAt: "Decided at", decisionReason: "Decision reason",
+    materialFreshness: "Material evidence freshness", materialLines: "Material requirement lines", acceptedPromise: "Accepted promise", decidedBy: "Decided by", decidedAt: "Decided at", decisionReason: "Decision reason", ccrRiskAcknowledged: "CCR risk acknowledged", materialRiskAcknowledged: "Material risk acknowledged", supersededByEvaluation: "Superseding evaluation",
     reservationBatch: "Reservation batch", demandCommitment: "Demand commitment", boundary: "Business boundary", recommendationOnly: "Recommendation only; the planner makes the final decision.",
     externalOrderAcceptance: "External order acceptance", planningRunCreation: "Planning Run creation", productionMutation: "Production authority mutation", unknownStatus: "Unknown status",
     RecommendAccept: "Recommend accept", PlannerConfirmationRequired: "Planner confirmation required", CapacityAcceptableMaterialPending: "Capacity acceptable, material pending", MaterialEvidenceRequired: "Material evidence required",
@@ -6023,13 +6023,34 @@ function orderCommitmentAssessmentRows(assessment) {
   ];
 }
 
+function orderCommitmentAuditFactText(details) {
+  const factValues = {
+    FromStatus: orderCommitmentLabel(details.FromStatus),
+    ToStatus: orderCommitmentLabel(details.ToStatus),
+    Recommendation: orderCommitmentLabel(details.Recommendation),
+    DecisionCode: orderCommitmentLabel(details.DecisionCode),
+    SupersededByEvaluationID: displayValue(details.SupersededByEvaluationID),
+    AcceptedPromiseAt: formatDate(details.AcceptedPromiseAt),
+    CcrRiskAcknowledged: businessValue(details.CcrRiskAcknowledged),
+    MaterialRiskAcknowledged: businessValue(details.MaterialRiskAcknowledged),
+    MaterialCheckEnabled: businessValue(details.MaterialCheckEnabled),
+    MaterialEvidenceFreshnessStatus: orderCommitmentLabel(details.MaterialEvidenceFreshnessStatus)
+  };
+  const factLabels = {
+    SupersededByEvaluationID: "supersededByEvaluation",
+    AcceptedPromiseAt: "acceptedPromise",
+    CcrRiskAcknowledged: "ccrRiskAcknowledged",
+    MaterialRiskAcknowledged: "materialRiskAcknowledged",
+    MaterialCheckEnabled: "materialCheck",
+    MaterialEvidenceFreshnessStatus: "materialFreshness"
+  };
+  return Object.entries(factValues)
+    .filter(([key]) => details[key] !== null && details[key] !== undefined && details[key] !== "")
+    .map(([key, value]) => factLabels[key] ? `${translate(factLabels[key])}: ${value}` : value);
+}
+
 function orderCommitmentAuditText(event) {
-  const details = event.Details || {};
-  const facts = [
-    details.FromStatus, details.ToStatus, details.Recommendation, details.DecisionCode,
-    details.AcceptedPromiseAt, details.MaterialEvidenceFreshnessStatus
-  ].filter((value) => value !== null && value !== undefined && value !== "")
-    .map((value) => orderCommitmentLabel(value));
+  const facts = orderCommitmentAuditFactText(event.Details || {});
   const eventType = orderCommitmentLabel(event.EventType);
   return [eventType, formatDate(event.OccurredAt), event.ActorID, ...facts]
     .filter(Boolean).join(" · ");
@@ -6215,16 +6236,46 @@ function renderOrderCommitmentDetail() {
   updateOrderCommitmentMaterialSkipField();
 }
 
+function renderOrderCommitmentDetailState(message, { retry } = {}) {
+  const content = document.getElementById("order-commitment-detail-content");
+  content.replaceChildren();
+  const state = document.createElement("p");
+  state.className = "order-commitment-detail-state";
+  state.textContent = message;
+  state.setAttribute("role", retry ? "alert" : "status");
+  content.append(state);
+  if (retry) {
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "button secondary";
+    retryButton.textContent = translate("refresh");
+    retryButton.addEventListener("click", retry);
+    content.append(retryButton);
+  }
+  document.getElementById("order-commitment-reevaluation-form").hidden = true;
+  document.getElementById("order-commitment-actions").replaceChildren();
+}
+
 async function openOrderCommitmentDetail(evaluationId) {
-  const response = await fetch(
-    "/planner/workbench/order-commitments/" + encodeURIComponent(evaluationId),
-    { headers: { Accept: "application/json" } }
-  );
-  orderCommitmentRevision = response.headers.get("X-Workbench-Revision") || orderCommitmentRevision;
-  if (!response.ok) throw new Error("order-commitment-detail-failed");
-  selectedOrderCommitment = (await response.json()).Data;
-  renderOrderCommitmentDetail();
   openSideDrawer("order-commitment-detail");
+  selectedOrderCommitment = null;
+  setText("order-commitment-detail-title", evaluationId);
+  renderOrderCommitmentDetailState(translate("orderCommitmentDetailLoading"));
+  try {
+    const response = await fetch(
+      "/planner/workbench/order-commitments/" + encodeURIComponent(evaluationId),
+      { headers: { Accept: "application/json" } }
+    );
+    orderCommitmentRevision = response.headers.get("X-Workbench-Revision") || orderCommitmentRevision;
+    if (!response.ok) throw new Error("order-commitment-detail-failed");
+    selectedOrderCommitment = (await response.json()).Data;
+    renderOrderCommitmentDetail();
+  } catch (_error) {
+    renderOrderCommitmentDetailState(
+      `${translate("orderCommitmentDetailLoadFailed")} ${translate("orderCommitmentRetryAdvice")}`,
+      { retry: () => openOrderCommitmentDetail(evaluationId) }
+    );
+  }
 }
 
 function openSideDrawer(id) {

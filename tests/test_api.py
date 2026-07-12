@@ -5888,6 +5888,36 @@ class TestOrderCommitmentUiReadFlow:
         ):
             assert f"detail.{field}" in detail_renderer
 
+    def test_audit_facts_use_localized_dates_and_business_boolean_labels(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        audit_renderer = script[
+            script.index("function orderCommitmentAuditFactText"):
+            script.index("function showOrderCommitmentError")
+        ]
+
+        assert "AcceptedPromiseAt: formatDate(details.AcceptedPromiseAt)" in audit_renderer
+        assert "CcrRiskAcknowledged: businessValue(details.CcrRiskAcknowledged)" in audit_renderer
+        assert "MaterialRiskAcknowledged: businessValue(details.MaterialRiskAcknowledged)" in audit_renderer
+        assert "MaterialCheckEnabled: businessValue(details.MaterialCheckEnabled)" in audit_renderer
+        assert "orderCommitmentLabel(value)" not in audit_renderer
+
+    def test_detail_fetch_has_localized_loading_error_and_retry_states(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        detail_fetch = script[
+            script.index("async function openOrderCommitmentDetail"):
+            script.index("function openSideDrawer", script.index("async function openOrderCommitmentDetail"))
+        ]
+
+        assert 'renderOrderCommitmentDetailState(translate("orderCommitmentDetailLoading"))' in detail_fetch
+        assert 'renderOrderCommitmentDetailState(' in detail_fetch
+        assert 'translate("orderCommitmentDetailLoadFailed")' in detail_fetch
+        assert 'translate("orderCommitmentRetryAdvice")' in detail_fetch
+        assert "retry: () => openOrderCommitmentDetail(evaluationId)" in detail_fetch
+
 
 class TestOrderCommitmentUiReevaluation:
     # UI-COMMIT-001 / BE-SDBR-010

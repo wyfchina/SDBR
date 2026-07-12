@@ -48,3 +48,13 @@ Implemented Task25 only from `docs/superpowers/plans/2026-07-11-mto-order-commit
 ## Concerns
 
 - Browser acceptance, re-evaluation controls, and planner decision controls remain deferred to Tasks 26 through 28.
+
+## 2026-07-12 Review Remediation Evidence
+
+- Scope: fixed only the two `UI-COMMIT-001` / `BE-SDBR-010` Task25 findings from `.superpowers/sdd/mto-task25-review.md`; Task26 commit `bd1cecc` and the Task27 decision dialog were not changed.
+- Audit history now formats `AcceptedPromiseAt` through the localized date/time formatter and renders `CcrRiskAcknowledged`, `MaterialRiskAcknowledged`, and `MaterialCheckEnabled` through localized business boolean labels. The remaining safe audit fields are rendered from the approved whitelist only; no raw JSON or payload path was added.
+- Detail fetch now opens a localized loading state, catches failed or missing responses into a localized error state, suppresses stale actions, and exposes a localized retry action for safe recovery.
+- TDD red: `pytest tests/test_api.py::TestOrderCommitmentUiReadFlow -q --basetemp .tmp/pytest-mto-task25-findings-red -p no:cacheprovider` - `2 failed, 4 passed, 1 warning`; both failures were the newly added audit-formatting and detail-state regressions.
+- TDD green: `pytest tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_order_commitment_api.py::TestOrderCommitmentUiContract -q --basetemp .tmp/pytest-mto-task25-findings-green -p no:cacheprovider` - `7 passed, 1 warning`.
+- Focused UI/API verification: `pytest tests/test_api.py::TestOrderCommitmentUiShell tests/test_api.py::TestOrderCommitmentUiReadFlow tests/test_api.py::TestOrderCommitmentUiReevaluation tests/test_order_commitment_api.py::TestOrderCommitmentUiContract tests/test_order_commitment_api.py::TestOrderCommitmentApiIntakeAndReads -q --basetemp .tmp/pytest-mto-task25-findings-focused -p no:cacheprovider` - `24 passed, 1 warning`.
+- Syntax and whitespace verification: `python -m compileall -q sdbr` and `git diff --check` passed. `Get-Command node -All` and a worktree executable search found no Node runtime, so no bundled/workspace `node --check` command was available.

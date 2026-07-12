@@ -939,6 +939,7 @@ let orderCommitmentData = null;
 let orderCommitmentRevision = null;
 let selectedOrderCommitment = null;
 let selectedOrderCommitmentAction = null;
+const sideDrawerOpeners = new Map();
 let planningRunWorkbench = null;
 let planningRunWizardStep = 1;
 let scheduleResultData = null;
@@ -5980,6 +5981,7 @@ function renderOrderCommitments() {
     const viewButton = document.createElement("button");
     viewButton.type = "button";
     viewButton.className = "run-action";
+    viewButton.dataset.orderCommitmentEvaluationId = row.EvaluationID;
     viewButton.textContent = translate("viewDetails");
     viewButton.addEventListener("click", () => openOrderCommitmentDetail(row.EvaluationID));
     actionCell.append(viewButton);
@@ -6149,43 +6151,51 @@ async function reevaluateOrderCommitment(event) {
     return;
   }
   const evaluationId = selectedOrderCommitment.EvaluationID;
-  const response = await fetch(
-    "/planner/workbench/order-commitments/"
-      + encodeURIComponent(evaluationId) + "/reevaluate",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "If-Match": orderCommitmentRevision
-      },
-      body: JSON.stringify({
-        RequestedBy: "planner-1",
-        OperationalStateSnapshotID: null,
-        CheckMaterialAvailability: enabled,
-        MaterialCheckSkipReason: enabled ? null : reason
-      })
-    }
-  );
-  orderCommitmentRevision = response.headers.get(
-    "X-Workbench-Revision"
-  ) || orderCommitmentRevision;
-  const payload = await response.json();
-  if (!response.ok) {
-    const status = payload?.Data?.Status;
-    if (status === "StateStoreRevisionConflict") {
-      await loadOrderCommitments();
-      await openOrderCommitmentDetail(evaluationId);
-      showOrderCommitmentError(
-        orderCommitmentReevaluationErrorMessage(status)
-      );
+  try {
+    const response = await fetch(
+      "/planner/workbench/order-commitments/"
+        + encodeURIComponent(evaluationId) + "/reevaluate",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": orderCommitmentRevision
+        },
+        body: JSON.stringify({
+          RequestedBy: "planner-1",
+          OperationalStateSnapshotID: null,
+          CheckMaterialAvailability: enabled,
+          MaterialCheckSkipReason: enabled ? null : reason
+        })
+      }
+    );
+    orderCommitmentRevision = response.headers.get(
+      "X-Workbench-Revision"
+    ) || orderCommitmentRevision;
+    const payload = await response.json();
+    if (!response.ok) {
+      const status = payload?.Data?.Status;
+      if (status === "StateStoreRevisionConflict") {
+        await loadOrderCommitments();
+        await openOrderCommitmentDetail(evaluationId);
+        showOrderCommitmentError(
+          orderCommitmentReevaluationErrorMessage(status)
+        );
+        return;
+      }
+      showOrderCommitmentError(orderCommitmentReevaluationErrorMessage(status));
       return;
     }
-    showOrderCommitmentError(orderCommitmentReevaluationErrorMessage(status));
-    return;
+    const newId = payload.Data.Evaluation.EvaluationID;
+    await loadOrderCommitments();
+    await openOrderCommitmentDetail(newId);
+  } catch (_error) {
+    showOrderCommitmentError(
+      `${translate("orderCommitmentReevaluationFailed")} ${
+        translate("orderCommitmentRetryAdvice")
+      }`
+    );
   }
-  const newId = payload.Data.Evaluation.EvaluationID;
-  await loadOrderCommitments();
-  await openOrderCommitmentDetail(newId);
 }
 
 function orderCommitmentDecisionRequirements(action) {
@@ -6529,6 +6539,7 @@ function renderOrderCommitmentDetailState(message, { retry } = {}) {
 
 async function openOrderCommitmentDetail(evaluationId) {
   openSideDrawer("order-commitment-detail");
+  document.getElementById("close-order-commitment-detail").focus();
   selectedOrderCommitment = null;
   setText("order-commitment-detail-title", evaluationId);
   renderOrderCommitmentDetailState(translate("orderCommitmentDetailLoading"));
@@ -6551,19 +6562,67 @@ async function openOrderCommitmentDetail(evaluationId) {
 
 function openSideDrawer(id) {
   const drawer = document.getElementById(id);
+  const modal = drawer.getAttribute("aria-modal") === "true";
+  if (modal && drawer.hidden) {
+    const activeElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    sideDrawerOpeners.set(
+      id,
+      {
+        element: activeElement,
+        evaluationId: activeElement?.dataset?.orderCommitmentEvaluationId
+          || null
+      }
+    );
+  }
   drawer.hidden = false;
   drawer.classList.add("is-open");
   drawer.setAttribute("aria-hidden", "false");
   document.getElementById("drawer-backdrop").hidden = false;
+  if (modal) document.querySelector(".app-shell").inert = true;
 }
 
 function closeSideDrawer(id) {
   const drawer = document.getElementById(id);
+  if (drawer.hidden) return;
   drawer.classList.remove("is-open");
   drawer.hidden = true;
   drawer.setAttribute("aria-hidden", "true");
   const anyOpen = [...document.querySelectorAll(".issues-drawer")].some((item) => !item.hidden);
   document.getElementById("drawer-backdrop").hidden = !anyOpen;
+  const anyModalOpen = [...document.querySelectorAll(
+    '.issues-drawer[aria-modal="true"]'
+  )].some((item) => !item.hidden);
+  document.querySelector(".app-shell").inert = anyModalOpen;
+  const openerRecord = sideDrawerOpeners.get(id);
+  sideDrawerOpeners.delete(id);
+  let opener = openerRecord?.element;
+  if (!opener?.isConnected && openerRecord?.evaluationId) {
+    opener = [...document.querySelectorAll(
+      "[data-order-commitment-evaluation-id]"
+    )].find((candidate) => (
+      candidate.dataset.orderCommitmentEvaluationId
+      === openerRecord.evaluationId
+    ));
+  }
+  if (opener?.isConnected) opener.focus();
+}
+
+function handleOrderCommitmentDrawerKeydown(event) {
+  const drawer = document.getElementById("order-commitment-detail");
+  const decisionDialog = document.getElementById(
+    "order-commitment-decision-dialog"
+  );
+  if (
+    event.key !== "Escape"
+    || drawer.hidden
+    || decisionDialog.open
+  ) {
+    return;
+  }
+  event.preventDefault();
+  closeSideDrawer("order-commitment-detail");
 }
 
 function isNarrowScreen() {
@@ -6659,6 +6718,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "order-commitment-material-ack"
   ].forEach((id) => document.getElementById(id).addEventListener("input", updateOrderCommitmentDecisionValidity));
   document.getElementById("close-order-commitment-detail").addEventListener("click", () => closeSideDrawer("order-commitment-detail"));
+  document.addEventListener("keydown", handleOrderCommitmentDrawerKeydown);
   document.getElementById("operational-metrics-run-select").addEventListener("change", loadOperationalMetrics);
   document.getElementById("operational-metrics-evaluated-at").addEventListener("change", loadOperationalMetrics);
   document.getElementById("refresh-operational-metrics").addEventListener("click", loadOperationalMetrics);

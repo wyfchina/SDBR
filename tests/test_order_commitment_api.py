@@ -205,6 +205,7 @@ class TestOrderCommitmentUiContract:
         row = workbench.json()["Data"]["Rows"][0]
         body = detail.json()["Data"]
         assert set(row) == set(ORDER_COMMITMENT_ROW_FIELDS)
+        assert row["ProtectionThresholdPercent"] == 80.0
         assert set(body) == set(DETAIL_FIELDS)
         assert {
             "OrderID", "DemandLineID", "ProductID", "Quantity", "Uom",
@@ -390,6 +391,123 @@ class TestOrderCommitmentApiContracts:
         for model, payload, prohibited_field in cases:
             with pytest.raises(ValidationError, match=prohibited_field):
                 model(**{**payload, prohibited_field: "not-authoritative"})
+
+    @pytest.mark.parametrize(
+        "field_path",
+        (
+            "SourceSystem",
+            "SourceObjectType",
+            "OrderID",
+            "OrderVersion",
+            "DemandLineID",
+            "ProductID",
+            "LocationID",
+            "Uom",
+            "TraceID",
+            "BaselinePlanningRunID",
+            "RoutingID",
+            "OperationalStateSnapshotID",
+            "MaterialRequirements.0.RequirementLineID",
+            "MaterialRequirements.0.ItemID",
+            "MaterialRequirements.0.LocationID",
+            "MaterialRequirements.0.Uom",
+        ),
+    )
+    def test_blank_typed_intake_identifiers_are_structured_422_without_writes(
+        self,
+        field_path: str,
+    ):
+        store, fixture = _order_commitment_store()
+        client = TestClient(
+            api.create_app(
+                state_store=store,
+                require_auth=True,
+                utc_now=lambda: MTO_FIXTURE_TIME,
+            ),
+            raise_server_exceptions=False,
+        )
+        payload = deepcopy(fixture["IntakePayloadTemplate"])
+        payload["OperationalStateSnapshotID"] = fixture[
+            "OperationalStateSnapshotID"
+        ]
+        target: dict[str, object] = payload
+        parts = field_path.split(".")
+        if parts[0] == "MaterialRequirements":
+            target = payload["MaterialRequirements"][int(parts[1])]
+            field = parts[2]
+        else:
+            field = parts[0]
+        target[field] = " \t "
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=payload,
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 422
+        assert isinstance(response.json().get("detail"), list)
+        assert _public_store_snapshot(store) == before
+
+    @pytest.mark.parametrize(
+        "field",
+        ("RequestedBy", "BaselinePlanningRunID", "OperationalStateSnapshotID"),
+    )
+    def test_blank_typed_reevaluation_identifiers_are_structured_422_without_writes(
+        self,
+        field: str,
+    ):
+        client, store, fixture = _order_commitment_client()
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
+            json={"RequestedBy": "planner-1", field: " \t "},
+            headers=_planner_headers(),
+        )
+
+        assert response.status_code == 422
+        assert isinstance(response.json().get("detail"), list)
+        assert _public_store_snapshot(store) == before
+
+    @pytest.mark.parametrize(
+        "field",
+        ("DecisionID", "DecidedBy", "Reason", "ExpectedEvaluationFingerprint"),
+    )
+    def test_blank_typed_decision_fields_are_structured_422_without_writes(
+        self,
+        field: str,
+    ):
+        client, store, fixture = _order_commitment_client()
+        intake = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        evaluation_id = intake.json()["Data"]["Evaluation"]["EvaluationID"]
+        evaluation = store.order_commitment_evaluations[evaluation_id]
+        payload = _decision_payload(evaluation)
+        payload[field] = " \t "
+        before = _public_store_snapshot(store)
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/decision",
+            json=payload,
+            headers=TestOrderCommitmentApiDecisionReplay._decision_headers(
+                client
+            ),
+        )
+
+        assert response.status_code == 422
+        assert isinstance(response.json().get("detail"), list)
+        assert _public_store_snapshot(store) == before
 
     def test_auth_helper_allows_all_roles_get_and_only_planner_admin_post(self):
         for role in ("Viewer", "Planner", "Worker", "Admin"):
@@ -1625,6 +1743,51 @@ class TestOrderCommitmentApiStaleness:
             "CheckEnabled"
         ] is False
         return rechecked_id
+
+    def test_padded_material_opt_out_reason_is_canonical_and_not_stale(self):
+        client, store, _, _, evaluation_id = self._fixture()
+        reevaluation = client.post(
+            f"/planner/workbench/order-commitments/{evaluation_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-staleness",
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": "  Capacity-only probe.  ",
+            },
+            headers=_planner_headers(),
+        )
+        assert reevaluation.status_code == 200
+        rechecked_id = reevaluation.json()["Data"]["Evaluation"]["EvaluationID"]
+        evaluation = store.order_commitment_evaluations[rechecked_id]
+        assert evaluation["MaterialAssessment"]["SkipReason"] == (
+            "Capacity-only probe."
+        )
+        assert evaluation["Basis"]["DecisionStalenessBasis"]["MaterialPolicy"][
+            "SkipReason"
+        ] == "Capacity-only probe."
+        action = next(
+            candidate
+            for candidate in evaluation["Recommendation"]["AllowedActions"]
+            if candidate.startswith("ConditionallyAccept")
+        )
+        payload = _decision_payload(
+            evaluation,
+            decision_id="DEC-TST-MTO-CANONICAL-SKIP",
+            decision=action,
+            reason="Planner accepted with explicit material confirmation.",
+            ccr_risk_acknowledged=True,
+            material_risk_acknowledged=True,
+        )
+
+        response = client.post(
+            f"/planner/workbench/order-commitments/{rechecked_id}/decision",
+            json=payload,
+            headers=self._decision_headers(client),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["Data"]["Status"] == (
+            "AcceptedPendingFormalSchedule"
+        )
 
     def test_exact_assessed_0800_1600_capacity_change_marks_evaluation_stale(self):
         client, store, _, _, evaluation_id = self._fixture()

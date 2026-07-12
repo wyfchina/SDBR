@@ -404,6 +404,16 @@ def _material_evidence_insufficient(
     }
 
 
+def normalize_material_check_skip_reason(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise OrderCommitmentConflict(
+            "Material check skip reason must be a string."
+        )
+    return value.strip() or None
+
+
 def evaluate_mto_material_availability(
     *,
     order: Mapping[str, object],
@@ -416,11 +426,7 @@ def evaluate_mto_material_availability(
     skip_reason: str | None = None,
 ) -> dict[str, object]:
     selection = snapshot_selection
-    normalized_skip_reason = (
-        skip_reason.strip()
-        if isinstance(skip_reason, str) and skip_reason.strip()
-        else None
-    )
+    normalized_skip_reason = normalize_material_check_skip_reason(skip_reason)
     if material_check_window_minutes < 0:
         raise OrderCommitmentConflict("Material check window cannot be negative.")
     material_cutoff = (
@@ -831,6 +837,9 @@ def build_order_commitment_basis(
     material_ledger_rows: list[dict[str, object]],
 ) -> dict[str, object]:
     selection = snapshot_selection
+    material_skip_reason = normalize_material_check_skip_reason(
+        material_skip_reason
+    )
     capacity_keys = sorted({
         (
             str(resource_id),

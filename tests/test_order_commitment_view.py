@@ -118,7 +118,7 @@ class TestOrderCommitmentViewContract:
                 "RawSnapshotPayload": {"must": "not leak"},
             },
             "ProtectionPolicy": {
-                "ThresholdPercent": 75.0,
+                "TargetPercent": 75.0,
                 "Source": "ApprovedOperatingModel",
                 "Approved": True,
                 "RawPolicyPayload": {"must": "not leak"},
@@ -204,6 +204,7 @@ class TestOrderCommitmentViewContract:
 
         row = result["Rows"][0]
         assert set(row) == set(ORDER_COMMITMENT_ROW_FIELDS)
+        assert row["ProtectionThresholdPercent"] == 75.0
         assert row["ReservationStatus"] == "NotReserved"
         assert row["ExceptionStatus"] == "None"
 

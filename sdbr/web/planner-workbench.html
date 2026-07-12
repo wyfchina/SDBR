@@ -1113,10 +1113,10 @@
     <div id="readiness-issues" class="readiness-issues"></div>
   </aside>
 
-  <aside id="order-commitment-detail" class="issues-drawer run-detail" aria-labelledby="order-commitment-detail-title" aria-hidden="true" hidden>
+  <aside id="order-commitment-detail" class="issues-drawer run-detail" role="dialog" aria-modal="true" aria-labelledby="order-commitment-detail-title" aria-hidden="true" hidden>
     <div class="drawer-heading">
       <div><span class="panel-kicker" data-i18n="orderCommitmentEvaluation">订单承诺评估</span><h2 id="order-commitment-detail-title">-</h2></div>
-      <button id="close-order-commitment-detail" class="icon-button" type="button" data-i18n-aria-label="close">&#10005;</button>
+      <button id="close-order-commitment-detail" class="icon-button" type="button" aria-label="关闭" data-i18n-aria-label="close">&#10005;</button>
     </div>
     <div id="order-commitment-detail-content" class="run-detail-content"></div>
     <form id="order-commitment-reevaluation-form" class="order-commitment-reevaluation" hidden>

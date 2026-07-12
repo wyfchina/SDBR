@@ -23,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StringConstraints,
 )
 
 from sdbr.api_payload import get_planner_workbench_demo_payload
@@ -123,6 +124,7 @@ from sdbr.order_commitment_evaluation import (
     create_order_commitment_evaluation,
     evaluate_mto_material_availability,
     exact_order_commitment_intake_replay,
+    normalize_material_check_skip_reason,
     normalize_mto_order,
     prepare_mto_acceptance,
     register_order_commitment_evaluation,
@@ -350,14 +352,21 @@ class RoutingPayload(BaseModel):
     IsPrimary: bool = True
 
 
+MtoNonBlankString = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
+MtoOptionalNonBlankString = MtoNonBlankString | None
+
+
 class MtoMaterialRequirementPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    RequirementLineID: str
-    ItemID: str
-    LocationID: str
+    RequirementLineID: MtoNonBlankString
+    ItemID: MtoNonBlankString
+    LocationID: MtoNonBlankString
     RequiredQty: float = Field(gt=0)
-    Uom: str = "EA"
+    Uom: MtoNonBlankString = "EA"
 
 
 def _require_iso_datetime_string(value: object) -> object:
@@ -375,22 +384,22 @@ MtoAwareIsoDatetime = Annotated[
 class MtoOrderCommitmentIntakePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    SourceSystem: str = "MockERP"
-    SourceObjectType: str = "CustomerOrder"
-    OrderID: str
-    OrderVersion: str
-    DemandLineID: str = "1"
-    ProductID: str
-    LocationID: str
+    SourceSystem: MtoNonBlankString = "MockERP"
+    SourceObjectType: MtoNonBlankString = "CustomerOrder"
+    OrderID: MtoNonBlankString
+    OrderVersion: MtoNonBlankString
+    DemandLineID: MtoNonBlankString = "1"
+    ProductID: MtoNonBlankString
+    LocationID: MtoNonBlankString
     Quantity: float = Field(gt=0)
-    Uom: str = "EA"
+    Uom: MtoNonBlankString = "EA"
     RequestedDueAt: MtoAwareIsoDatetime
     BusinessPriority: int = Field(default=100, ge=1, le=999)
     ReceivedAt: MtoAwareIsoDatetime
-    TraceID: str
-    BaselinePlanningRunID: str
-    RoutingID: str = "PRIMARY"
-    OperationalStateSnapshotID: str | None = None
+    TraceID: MtoNonBlankString
+    BaselinePlanningRunID: MtoNonBlankString
+    RoutingID: MtoNonBlankString = "PRIMARY"
+    OperationalStateSnapshotID: MtoOptionalNonBlankString = None
     MaterialRequirements: list[MtoMaterialRequirementPayload] = Field(
         default_factory=list
     )
@@ -399,9 +408,9 @@ class MtoOrderCommitmentIntakePayload(BaseModel):
 class MtoOrderCommitmentReevaluationPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    RequestedBy: str
-    BaselinePlanningRunID: str | None = None
-    OperationalStateSnapshotID: str | None = None
+    RequestedBy: MtoNonBlankString
+    BaselinePlanningRunID: MtoOptionalNonBlankString = None
+    OperationalStateSnapshotID: MtoOptionalNonBlankString = None
     CheckMaterialAvailability: StrictBool = True
     MaterialCheckSkipReason: str | None = None
 
@@ -409,7 +418,7 @@ class MtoOrderCommitmentReevaluationPayload(BaseModel):
 class MtoOrderCommitmentDecisionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    DecisionID: str
+    DecisionID: MtoNonBlankString
     Decision: Literal[
         "AcceptRequestedDate",
         "ConditionallyAcceptRequestedDate",
@@ -417,9 +426,9 @@ class MtoOrderCommitmentDecisionPayload(BaseModel):
         "ConditionallyAcceptRecommendedDate",
         "Reject",
     ]
-    DecidedBy: str
-    Reason: str
-    ExpectedEvaluationFingerprint: str
+    DecidedBy: MtoNonBlankString
+    Reason: MtoNonBlankString
+    ExpectedEvaluationFingerprint: MtoNonBlankString
     CcrRiskAcknowledged: StrictBool = False
     MaterialRiskAcknowledged: StrictBool = False
 
@@ -1746,6 +1755,9 @@ def create_app(
             )
         )
         try:
+            material_check_skip_reason = normalize_material_check_skip_reason(
+                material_check_skip_reason
+            )
             material = evaluate_mto_material_availability(
                 order=order,
                 snapshot_selection=selection,

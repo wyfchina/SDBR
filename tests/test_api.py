@@ -6009,7 +6009,10 @@ class TestOrderCommitmentUiReevaluation:
         script = client.get("/planner/assets/planner-workbench.js").text
         request = script[
             script.index("async function reevaluateOrderCommitment"):
-            script.index("function openSideDrawer", script.index("async function reevaluateOrderCommitment"))
+            script.index(
+                "function orderCommitmentDecisionRequirements",
+                script.index("async function reevaluateOrderCommitment"),
+            )
         ]
 
         assert "OperationalStateSnapshotID: null" in request
@@ -6024,26 +6027,93 @@ class TestOrderCommitmentUiReevaluation:
         script = client.get("/planner/assets/planner-workbench.js").text
         request = script[
             script.index("async function reevaluateOrderCommitment"):
-            script.index("function openSideDrawer", script.index("async function reevaluateOrderCommitment"))
+            script.index(
+                "function orderCommitmentDecisionRequirements",
+                script.index("async function reevaluateOrderCommitment"),
+            )
         ]
 
         assert '"If-Match": orderCommitmentRevision' in request
-        assert 'response.headers.get("X-Workbench-Revision")' in request
+        assert "response.headers.get(" in request
+        assert '"X-Workbench-Revision"' in request
         assert "await loadOrderCommitments()" in request
         assert "await openOrderCommitmentDetail(newId)" in request
         assert "StateStoreRevisionConflict" in request
         assert "orderCommitmentReevaluationErrorMessage(status)" in request
         assert 'translate("orderCommitmentRevisionConflict")' in script
+        branch_start = request.index(
+            'if (status === "StateStoreRevisionConflict") {'
+        )
+        load_index = request.index(
+            "await loadOrderCommitments()", branch_start
+        )
+        detail_index = request.index(
+            "await openOrderCommitmentDetail(evaluationId)", load_index
+        )
+        error_index = request.index(
+            "orderCommitmentReevaluationErrorMessage(status)", detail_index
+        )
+        return_index = request.index("return;", error_index)
+        assert branch_start < load_index < detail_index < error_index < return_index
+        assert request.count("fetch(") == 1
+
+    def test_transport_and_json_failures_show_localized_recoverable_feedback(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        request = script[
+            script.index("async function reevaluateOrderCommitment"):
+            script.index("function orderCommitmentDecisionRequirements")
+        ]
+
+        assert "try {" in request
+        assert "const response = await fetch(" in request
+        assert "const payload = await response.json()" in request
+        assert "catch (_error)" in request
+        assert 'translate("orderCommitmentReevaluationFailed")' in request
+        assert "showOrderCommitmentError(" in request
+        assert request.count("fetch(") == 1
+
+
+class TestOrderCommitmentDrawerAccessibility:
+    # UI-COMMIT-001 / BE-SDBR-010
+    def test_detail_drawer_is_modal_and_manages_focus_and_background(self):
+        client = TestClient(create_app())
+
+        html = client.get("/planner/workbench").text
+        script = client.get("/planner/assets/planner-workbench.js").text
+        drawer_helpers = script[
+            script.index("function openSideDrawer"):
+            script.index("function isNarrowScreen")
+        ]
+
         assert (
-            'if (status === "StateStoreRevisionConflict") {\n'
-            '      await loadOrderCommitments();\n'
-            '      await openOrderCommitmentDetail(evaluationId);\n'
-            '      showOrderCommitmentError(\n'
-            '        orderCommitmentReevaluationErrorMessage(status)\n'
-            '      );\n'
-            '      return;\n'
-            '    }'
-        ) in request
+            '<aside id="order-commitment-detail" class="issues-drawer '
+            'run-detail" role="dialog" aria-modal="true"'
+        ) in html
+        assert 'aria-labelledby="order-commitment-detail-title"' in html
+        assert "sideDrawerOpeners" in script
+        assert 'document.querySelector(".app-shell").inert = true' in drawer_helpers
+        assert 'document.getElementById("close-order-commitment-detail").focus()' in script
+        assert 'document.querySelector(".app-shell").inert = anyModalOpen' in drawer_helpers
+        assert "opener?.isConnected" in drawer_helpers
+        assert "opener.focus()" in drawer_helpers
+
+    def test_detail_drawer_escape_closes_and_restores_invoking_control(self):
+        client = TestClient(create_app())
+
+        script = client.get("/planner/assets/planner-workbench.js").text
+        handler = script[
+            script.index("function handleOrderCommitmentDrawerKeydown"):
+            script.index("function isNarrowScreen")
+        ]
+
+        assert 'event.key !== "Escape"' in handler
+        assert 'closeSideDrawer("order-commitment-detail")' in handler
+        assert (
+            'addEventListener("keydown", handleOrderCommitmentDrawerKeydown)'
+            in script
+        )
 
 
 class TestOrderCommitmentUiDecisionFlow:

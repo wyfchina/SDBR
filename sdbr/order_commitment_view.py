@@ -371,7 +371,7 @@ def _order_commitment_row(
         "LoadAfterPercent": deepcopy(
             max((row.get("LoadAfterPercent") for row in windows), default=None)
         ),
-        "ProtectionThresholdPercent": deepcopy(policy.get("ThresholdPercent")),
+        "ProtectionThresholdPercent": deepcopy(policy.get("TargetPercent")),
         "ProtectionThresholdSource": deepcopy(policy.get("Source")),
         "ProtectionThresholdApproved": deepcopy(policy.get("Approved")),
         "MaterialStatus": deepcopy(material.get("Status")),

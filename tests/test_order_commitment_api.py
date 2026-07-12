@@ -1,6 +1,7 @@
 """BE-SDBR-010: MTO API payload and authorization contracts."""
 
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import sys
@@ -13,7 +14,11 @@ from pydantic import ValidationError
 
 from sdbr import api
 from sdbr.operational_state import OperationalStateSnapshot
-from sdbr.order_commitment_evaluation import normalize_mto_order
+from sdbr.order_commitment_evaluation import (
+    OrderCommitmentConflict,
+    normalize_mto_order,
+    rejected_evaluation_record,
+)
 from sdbr.order_commitment_view import DETAIL_FIELDS, ORDER_COMMITMENT_ROW_FIELDS
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import seed_mto_order_commitment_fixture
@@ -654,3 +659,143 @@ class TestOrderCommitmentApiIntakeAndReads:
         assert store.planning_reservation_events == before[
             "PlanningReservationEvents"
         ]
+
+    def test_v1_to_v2_intake_atomically_supersedes_v1_and_old_row_has_no_actions(self):
+        client, store, fixture = _order_commitment_client()
+        v1 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        v2_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v2_payload["OrderVersion"] = "2"
+
+        v2 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=v2_payload,
+            headers=_planner_headers(),
+        )
+        v1_id = v1.json()["Data"]["Evaluation"]["EvaluationID"]
+        v2_id = v2.json()["Data"]["Evaluation"]["EvaluationID"]
+        workbench = client.get(
+            "/planner/workbench/order-commitments/workbench",
+            headers=_planner_headers(),
+        )
+        rows = {row["EvaluationID"]: row for row in workbench.json()["Data"]["Rows"]}
+
+        assert v2.status_code == 200
+        assert store.order_commitment_evaluations[v1_id]["Status"] == "Superseded"
+        assert store.order_commitment_evaluations[v1_id]["SupersededByEvaluationID"] == v2_id
+        assert rows[v1_id]["AllowedActions"] == []
+        assert rows[v2_id]["Status"] == "AwaitingPlannerDecision"
+        assert [
+            event["EventType"] for event in store.order_commitment_events
+        ] == [
+            "OrderCommitmentEvaluated",
+            "OrderCommitmentEvaluationSuperseded",
+            "OrderCommitmentEvaluated",
+        ]
+
+    def test_decision_against_superseded_v1_is_rejected(self):
+        client, store, fixture = _order_commitment_client()
+        v1 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        v2_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v2_payload["OrderVersion"] = "2"
+        client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=v2_payload,
+            headers=_planner_headers(),
+        )
+        v1_evaluation = store.order_commitment_evaluations[
+            v1.json()["Data"]["Evaluation"]["EvaluationID"]
+        ]
+
+        with pytest.raises(OrderCommitmentConflict, match="Rejection is not allowed"):
+            rejected_evaluation_record(
+                evaluation=v1_evaluation,
+                decision_id="DEC-TST-MTO-SUPERSEDED",
+                decision="Reject",
+                decided_by="planner-task17",
+                decided_at=MTO_FIXTURE_TIME,
+                reason="Newer order version supersedes this evaluation.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
+    def test_concurrent_v1_v2_intake_leaves_only_greatest_rank_open(self):
+        client, store, fixture = _order_commitment_client()
+        v1_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v2_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v2_payload["OrderVersion"] = "2"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(
+                lambda payload: client.post(
+                    "/planner/workbench/order-commitments/intake",
+                    json=payload,
+                    headers=_planner_headers(),
+                ),
+                (v1_payload, v2_payload),
+            ))
+
+        assert all(response.status_code in {200, 409} for response in responses)
+        open_rows = [
+            row
+            for row in store.order_commitment_evaluations.values()
+            if row["Status"] == "AwaitingPlannerDecision"
+        ]
+        assert len(open_rows) == 1
+        assert open_rows[0]["Order"]["OrderVersion"] == "2"
+        assert all(
+            row["Order"]["OrderVersion"] == "2" or row["Status"] == "Superseded"
+            for row in store.order_commitment_evaluations.values()
+        )
+
+    def test_new_version_after_rejected_is_allowed_but_after_accepted_requires_amendment(self):
+        client, store, fixture = _order_commitment_client()
+        v1 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=fixture["IntakePayloadTemplate"],
+            headers=_planner_headers(),
+        )
+        v1_id = v1.json()["Data"]["Evaluation"]["EvaluationID"]
+        store.order_commitment_evaluations[v1_id] = rejected_evaluation_record(
+            evaluation=store.order_commitment_evaluations[v1_id],
+            decision_id="DEC-TST-MTO-REJECTED-V1",
+            decision="Reject",
+            decided_by="planner-task17",
+            decided_at=MTO_FIXTURE_TIME,
+            reason="Rejected version may be replaced by a newer version.",
+            ccr_risk_acknowledged=False,
+            material_risk_acknowledged=False,
+        )
+        v2_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v2_payload["OrderVersion"] = "2"
+
+        v2 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=v2_payload,
+            headers=_planner_headers(),
+        )
+        v2_id = v2.json()["Data"]["Evaluation"]["EvaluationID"]
+        store.order_commitment_evaluations[v2_id]["Status"] = (
+            "AcceptedPendingFormalSchedule"
+        )
+        v3_payload = deepcopy(fixture["IntakePayloadTemplate"])
+        v3_payload["OrderVersion"] = "3"
+
+        v3 = client.post(
+            "/planner/workbench/order-commitments/intake",
+            json=v3_payload,
+            headers=_planner_headers(),
+        )
+
+        assert v2.status_code == 200
+        assert v3.status_code == 409
+        assert v3.json()["Data"]["Status"] == (
+            "AcceptedOrderVersionChangeRequiresExplicitAmendment"
+        )

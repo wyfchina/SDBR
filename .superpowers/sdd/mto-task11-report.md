@@ -76,3 +76,29 @@ Applicable backend capability IDs: `BE-SDBR-006` through `BE-SDBR-010`.
   `python -m compileall -q sdbr` and `git diff --check` also passed.
 - Scope remains Task 11 only. Task 10 fix commit `5b5b9d2` is preserved; no
   Task 12 or later work was included.
+
+## Remaining Medium Finding Remediation (2026-07-12)
+
+Applicable backend capability IDs: `BE-SDBR-006` through `BE-SDBR-010`.
+
+- MTO acceptance preparation now freezes both acknowledgement booleans in the
+  reservation batch `ConfirmationContext`. The context is added before the
+  reservation payload fingerprint is calculated.
+- `accepted_evaluation_record` now requires its CCR and material acknowledgement
+  flags to exactly match that frozen write-set context before persisting decision
+  evidence.
+- TDD RED evidence: the two added regressions failed before the implementation
+  because both calls returned an accepted record. They cover a conditional
+  material acknowledgement changed from `true` to `false`, and a later-safe,
+  reference-fallback CCR acknowledgement changed from `true` to `false`.
+- GREEN evidence: the two regressions passed after the binding was installed.
+  `python -m pytest
+  tests/test_order_commitment_evaluation.py::TestOrderCommitmentAcceptancePreparation
+  -q --basetemp .tmp/pytest-mto-task11-ack-class -p no:cacheprovider` passed
+  with 16 tests. Related verification passed with 194 tests: `python -m pytest
+  tests/test_order_commitment_evaluation.py tests/test_planning_reservations.py
+  tests/test_ccr_shadow_scheduler.py -q --basetemp
+  .tmp/pytest-mto-task11-ack-related -p no:cacheprovider`.
+  `python -m compileall -q sdbr` and `git diff --check` also passed.
+- Scope remains Task 11 only. Task 12 commit `47d0f26` remains the worktree
+  HEAD parent and was not modified; no Task 13 or later work was included.

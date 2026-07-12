@@ -1852,6 +1852,67 @@ class TestOrderCommitmentAcceptancePreparation:
                 material_risk_acknowledged=False,
             )
 
+    def test_accepted_record_rejects_material_acknowledgement_different_from_prepared_context(self):
+        evaluation = self._evaluation_for_action(
+            "ConditionallyAcceptRequestedDate"
+        )
+        write_set = self._prepare(
+            evaluation,
+            "ConditionallyAcceptRequestedDate",
+            material_risk_acknowledged=True,
+        )
+        assert write_set.batch["ConfirmationContext"] == {
+            "CcrRiskAcknowledged": False,
+            "MaterialRiskAcknowledged": True,
+        }
+
+        with pytest.raises(
+            OrderCommitmentConflict,
+            match="acknowledgement.*write set",
+        ):
+            order_commitment_evaluation.accepted_evaluation_record(
+                evaluation=evaluation,
+                write_set=write_set,
+                decision_id="DEC-MTO-1",
+                decision="ConditionallyAcceptRequestedDate",
+                decided_by="planner-1",
+                decided_at=self.evaluated_at,
+                reason="Planner reviewed frozen evidence.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
+    def test_accepted_record_rejects_later_safe_ccr_acknowledgement_different_from_prepared_context(self):
+        evaluation = self._evaluation_for_action(
+            "AcceptRecommendedDate",
+            policy=REFERENCE_CCR_PROTECTION_POLICY,
+        )
+        write_set = self._prepare(
+            evaluation,
+            "AcceptRecommendedDate",
+            ccr_risk_acknowledged=True,
+        )
+        assert write_set.batch["ConfirmationContext"] == {
+            "CcrRiskAcknowledged": True,
+            "MaterialRiskAcknowledged": False,
+        }
+
+        with pytest.raises(
+            OrderCommitmentConflict,
+            match="acknowledgement.*write set",
+        ):
+            order_commitment_evaluation.accepted_evaluation_record(
+                evaluation=evaluation,
+                write_set=write_set,
+                decision_id="DEC-MTO-1",
+                decision="AcceptRecommendedDate",
+                decided_by="planner-1",
+                decided_at=self.evaluated_at,
+                reason="Planner reviewed frozen evidence.",
+                ccr_risk_acknowledged=False,
+                material_risk_acknowledged=False,
+            )
+
     def test_acceptance_uses_normalize_demand_commitment_and_preserves_mto_context(
         self,
         monkeypatch: pytest.MonkeyPatch,

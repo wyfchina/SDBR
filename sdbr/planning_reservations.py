@@ -245,6 +245,7 @@ def prepare_reservation_confirmation(
     confirmed_at: datetime,
     capacity_requests: Iterable[Mapping[str, object]],
     material_requests: Iterable[Mapping[str, object]],
+    confirmation_context: Mapping[str, object] | None = None,
 ) -> PlanningReservationWriteSet:
     try:
         demand_snapshot = normalize_demand_commitment(demand_commitment)
@@ -328,6 +329,8 @@ def prepare_reservation_confirmation(
         ],
         "RecordVersion": 1,
     }
+    if confirmation_context is not None:
+        batch["ConfirmationContext"] = deepcopy(dict(confirmation_context))
     idempotency_key = f"PlanningReservationActivated:{confirmation_id}"
     payload_fingerprint = _fingerprint(
         _write_set_business_payload(

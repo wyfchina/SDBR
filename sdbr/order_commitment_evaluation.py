@@ -1429,6 +1429,10 @@ def prepare_mto_acceptance(
         confirmed_at=decided_at,
         capacity_requests=candidate.get("ReservationRequests", []),
         material_requests=material_requests,
+        confirmation_context={
+            "CcrRiskAcknowledged": bool(ccr_risk_acknowledged),
+            "MaterialRiskAcknowledged": bool(material_risk_acknowledged),
+        },
     )
 
 
@@ -1496,6 +1500,8 @@ def _assert_accepted_write_set_context(
     write_set: PlanningReservationWriteSet,
     decision_id: str,
     decision: str,
+    ccr_risk_acknowledged: bool,
+    material_risk_acknowledged: bool,
 ) -> None:
     normalized_decision_id = _decision_text(decision_id, "DecisionID")
     context = ACCEPTANCE_ACTION_CONTEXT.get(decision)
@@ -1531,6 +1537,20 @@ def _assert_accepted_write_set_context(
         raise OrderCommitmentConflict(
             "Decision ID does not match reservation batch confirmation ID."
         )
+    prepared_context = write_set.batch.get("ConfirmationContext")
+    if not isinstance(prepared_context, Mapping):
+        raise OrderCommitmentConflict(
+            "Prepared acknowledgement context is missing from reservation write set."
+        )
+    if (
+        prepared_context.get("CcrRiskAcknowledged")
+        is not bool(ccr_risk_acknowledged)
+        or prepared_context.get("MaterialRiskAcknowledged")
+        is not bool(material_risk_acknowledged)
+    ):
+        raise OrderCommitmentConflict(
+            "Prepared acknowledgement evidence does not match reservation write set."
+        )
 
 
 def accepted_evaluation_record(
@@ -1552,6 +1572,8 @@ def accepted_evaluation_record(
         write_set=write_set,
         decision_id=decision_id,
         decision=decision,
+        ccr_risk_acknowledged=ccr_risk_acknowledged,
+        material_risk_acknowledged=material_risk_acknowledged,
     )
     updated = deepcopy(dict(evaluation))
     evidence = _decision_evidence(

@@ -48,11 +48,22 @@ DDMRP_READ_ONLY_REPLENISHMENT_CASE_ID = "TST-DDMRP-REPLENISHMENT-READONLY-202607
 DDMRP_READ_ONLY_REPLENISHMENT_EVALUATED_AT = datetime(
     2026, 7, 11, 1, tzinfo=timezone.utc
 )
-DDMRP_READ_ONLY_REPLENISHMENT_ITEM_IDS = (
-    "TST-DDMRP-RO-ABOVE-GREEN",
-    "TST-DDMRP-RO-GREEN",
-    "TST-DDMRP-RO-RED",
-    "TST-DDMRP-RO-YELLOW",
+DDMRP_READ_ONLY_REPLENISHMENT_ROWS = (
+    ("TST-DDMRP-RO-ABOVE-GREEN-1", "AboveGreen", 150.0, 0.0),
+    ("TST-DDMRP-RO-ABOVE-GREEN-2", "AboveGreen", 165.0, 0.0),
+    ("TST-DDMRP-RO-ABOVE-GREEN-3", "AboveGreen", 180.0, 0.0),
+    ("TST-DDMRP-RO-GREEN-1", "Green", 75.0, 0.0),
+    ("TST-DDMRP-RO-GREEN-2", "Green", 82.0, 0.0),
+    ("TST-DDMRP-RO-GREEN-3", "Green", 95.0, 0.0),
+    ("TST-DDMRP-RO-RED-1", "Red", 10.0, 90.0),
+    ("TST-DDMRP-RO-RED-2", "Red", 14.0, 86.0),
+    ("TST-DDMRP-RO-RED-3", "Red", 18.0, 82.0),
+    ("TST-DDMRP-RO-YELLOW-1", "Yellow", 35.0, 65.0),
+    ("TST-DDMRP-RO-YELLOW-2", "Yellow", 42.0, 58.0),
+    ("TST-DDMRP-RO-YELLOW-3", "Yellow", 49.0, 51.0),
+)
+DDMRP_READ_ONLY_REPLENISHMENT_ITEM_IDS = tuple(
+    row[0] for row in DDMRP_READ_ONLY_REPLENISHMENT_ROWS
 )
 
 
@@ -406,11 +417,11 @@ def test_case_catalog_payload() -> dict[str, object]:
                 "MasterDataVersionID": DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID,
                 "PurposeZh": "展示同一时间点下红区、黄区、绿区和高于绿区四类解耦点的净流位置、在手执行状态和补货建议。",
                 "ExpectedSummary": {
-                    "RedCount": 1,
-                    "YellowCount": 1,
-                    "GreenCount": 1,
-                    "AboveGreenCount": 1,
-                    "ReplenishmentSuggestionCount": 2,
+                    "RedCount": 3,
+                    "YellowCount": 3,
+                    "GreenCount": 3,
+                    "AboveGreenCount": 3,
+                    "ReplenishmentSuggestionCount": 6,
                 },
                 "CoveredSpecIDs": [
                     "BE-DDMRP-001",
@@ -430,11 +441,11 @@ def test_case_catalog_payload() -> dict[str, object]:
                 "PurposeZh": "验证受控测试夹具可重复展示受门控的只读补货评估，且不授权任何操作写入。",
                 "TestFixtureOnly": True,
                 "ExpectedSummary": {
-                    "RedCount": 1,
-                    "YellowCount": 1,
-                    "GreenCount": 1,
-                    "AboveGreenCount": 1,
-                    "BlockedRecommendationCount": 2,
+                    "RedCount": 3,
+                    "YellowCount": 3,
+                    "GreenCount": 3,
+                    "AboveGreenCount": 3,
+                    "BlockedRecommendationCount": 6,
                     "PendingReviewCount": 0,
                     "AdjustmentRequiredCount": 0,
                     "ActiveGraphCount": 0,
@@ -1057,12 +1068,24 @@ def _seed_ddmrp_net_flow_case(
     resources = _baseline_resources()
     routings = _baseline_routings()
     orders = _baseline_orders()
+    ddmrp_case_rows = (
+        ("TST-DDMRP-RED", "Red", 40, "BP-HIGH-VARIABILITY", 40),
+        ("TST-DDMRP-RED-2", "Red", 20, "BP-HIGH-VARIABILITY", 40),
+        ("TST-DDMRP-RED-3", "Red", 30, "BP-HIGH-VARIABILITY", 40),
+        ("TST-DDMRP-YELLOW", "Yellow", 80, "BP-MEDIUM-VARIABILITY", 30),
+        ("TST-DDMRP-YELLOW-2", "Yellow", 70, "BP-MEDIUM-VARIABILITY", 30),
+        ("TST-DDMRP-YELLOW-3", "Yellow", 90, "BP-MEDIUM-VARIABILITY", 30),
+        ("TST-DDMRP-GREEN", "Green", 140, "BP-LOW-VARIABILITY", 20),
+        ("TST-DDMRP-GREEN-2", "Green", 130, "BP-LOW-VARIABILITY", 20),
+        ("TST-DDMRP-GREEN-3", "Green", 150, "BP-LOW-VARIABILITY", 20),
+        ("TST-DDMRP-ABOVE", "AboveGreen", 230, "BP-STABLE", 20),
+        ("TST-DDMRP-ABOVE-2", "AboveGreen", 220, "BP-STABLE", 20),
+        ("TST-DDMRP-ABOVE-3", "AboveGreen", 260, "BP-STABLE", 20),
+    )
     inventory_buffers = import_inventory_buffers_from_rows(
         [
-            InventoryBufferImportRow("TST-DDMRP-RED", "TST-MAIN", 40, 50, 50, 100),
-            InventoryBufferImportRow("TST-DDMRP-YELLOW", "TST-MAIN", 80, 50, 50, 100),
-            InventoryBufferImportRow("TST-DDMRP-GREEN", "TST-MAIN", 140, 50, 50, 100),
-            InventoryBufferImportRow("TST-DDMRP-ABOVE", "TST-MAIN", 230, 50, 50, 100),
+            InventoryBufferImportRow(item_id, "TST-MAIN", on_hand, 50, 50, 100)
+            for item_id, _, on_hand, _, _ in ddmrp_case_rows
         ]
     )
     validation = validate_master_data(
@@ -1087,41 +1110,22 @@ def _seed_ddmrp_net_flow_case(
         "MaterialRequirements": [],
         "DdmrpDecouplingPoints": [
             {
-                "ItemID": "TST-DDMRP-RED",
+                "ItemID": item_id,
                 "LocationID": "TST-MAIN",
-                "BufferProfileID": "BP-HIGH-VARIABILITY",
+                "BufferProfileID": buffer_profile_id,
                 "DLTMinutes": 1440,
                 "OrderMultipleQty": 10,
-                "MinimumOrderQty": 40,
+                "MinimumOrderQty": minimum_order_qty,
                 "Status": "Active",
-            },
-            {
-                "ItemID": "TST-DDMRP-YELLOW",
-                "LocationID": "TST-MAIN",
-                "BufferProfileID": "BP-MEDIUM-VARIABILITY",
-                "DLTMinutes": 1440,
-                "OrderMultipleQty": 10,
-                "MinimumOrderQty": 30,
-                "Status": "Active",
-            },
-            {
-                "ItemID": "TST-DDMRP-GREEN",
-                "LocationID": "TST-MAIN",
-                "BufferProfileID": "BP-LOW-VARIABILITY",
-                "DLTMinutes": 1440,
-                "OrderMultipleQty": 10,
-                "MinimumOrderQty": 20,
-                "Status": "Active",
-            },
-            {
-                "ItemID": "TST-DDMRP-ABOVE",
-                "LocationID": "TST-MAIN",
-                "BufferProfileID": "BP-STABLE",
-                "DLTMinutes": 1440,
-                "OrderMultipleQty": 10,
-                "MinimumOrderQty": 20,
-                "Status": "Active",
-            },
+                "PlanningStatus": planning_status,
+            }
+            for (
+                item_id,
+                planning_status,
+                _,
+                buffer_profile_id,
+                minimum_order_qty,
+            ) in ddmrp_case_rows
         ],
         "DdmrpDemandSignals": [
             {
@@ -1239,11 +1243,8 @@ def _seed_ddmrp_read_only_replenishment_case(*, store: WorkbenchStateStore) -> N
                         "LocationID": "TST-MAIN",
                         "AvailableQty": quantity,
                     }
-                    for item_id, quantity in (
-                        ("TST-DDMRP-RO-ABOVE-GREEN", 150.0),
-                        ("TST-DDMRP-RO-GREEN", 75.0),
-                        ("TST-DDMRP-RO-RED", 10.0),
-                        ("TST-DDMRP-RO-YELLOW", 35.0),
+                    for item_id, _, quantity, _ in (
+                        DDMRP_READ_ONLY_REPLENISHMENT_ROWS
                     )
                 ],
                 "DemandSignals": [],
@@ -1279,29 +1280,17 @@ def _seed_ddmrp_read_only_replenishment_case(*, store: WorkbenchStateStore) -> N
             "Summary": {},
             "Lines": [
                 _ddmrp_read_only_replenishment_runtime_line(
-                    item_id="TST-DDMRP-RO-ABOVE-GREEN",
-                    planning_status="AboveGreen",
-                    net_flow_position=150.0,
-                    suggested_replenishment_qty=0.0,
-                ),
-                _ddmrp_read_only_replenishment_runtime_line(
-                    item_id="TST-DDMRP-RO-GREEN",
-                    planning_status="Green",
-                    net_flow_position=75.0,
-                    suggested_replenishment_qty=0.0,
-                ),
-                _ddmrp_read_only_replenishment_runtime_line(
-                    item_id="TST-DDMRP-RO-RED",
-                    planning_status="Red",
-                    net_flow_position=10.0,
-                    suggested_replenishment_qty=90.0,
-                ),
-                _ddmrp_read_only_replenishment_runtime_line(
-                    item_id="TST-DDMRP-RO-YELLOW",
-                    planning_status="Yellow",
-                    net_flow_position=35.0,
-                    suggested_replenishment_qty=65.0,
-                ),
+                    item_id=item_id,
+                    planning_status=planning_status,
+                    net_flow_position=net_flow_position,
+                    suggested_replenishment_qty=suggested_replenishment_qty,
+                )
+                for (
+                    item_id,
+                    planning_status,
+                    net_flow_position,
+                    suggested_replenishment_qty,
+                ) in DDMRP_READ_ONLY_REPLENISHMENT_ROWS
             ],
             "Issues": [],
         },

@@ -51,11 +51,11 @@ def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
     seeded_case = seeded_cases[0]
     assert seeded_case["CaseGroup"] == "DDMRPRuntimeCases"
     assert seeded_case["ExpectedSummary"] == {
-        "RedCount": 1,
-        "YellowCount": 1,
-        "GreenCount": 1,
-        "AboveGreenCount": 1,
-        "BlockedRecommendationCount": 2,
+        "RedCount": 3,
+        "YellowCount": 3,
+        "GreenCount": 3,
+        "AboveGreenCount": 3,
+        "BlockedRecommendationCount": 6,
         "PendingReviewCount": 0,
         "AdjustmentRequiredCount": 0,
         "ActiveGraphCount": 0,
@@ -68,19 +68,24 @@ def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
     workbench = workbench_response.json()["Data"]
     assert workbench["Evaluation"]["EvaluationAt"] == "2026-07-11T01:00:00+00:00"
     assert workbench["Summary"] == seeded_case["ExpectedSummary"]
-    assert sorted(
-        (row["ItemID"], row["LocationID"]) for row in workbench["Rows"]
-    ) == [
-        ("TST-DDMRP-RO-ABOVE-GREEN", "TST-MAIN"),
-        ("TST-DDMRP-RO-GREEN", "TST-MAIN"),
-        ("TST-DDMRP-RO-RED", "TST-MAIN"),
-        ("TST-DDMRP-RO-YELLOW", "TST-MAIN"),
-    ]
+    assert len(workbench["Rows"]) == 12
+    assert {
+        status: sum(1 for row in workbench["Rows"] if row["PlanningStatus"] == status)
+        for status in ("Red", "Yellow", "Green", "AboveGreen")
+    } == {"Red": 3, "Yellow": 3, "Green": 3, "AboveGreen": 3}
     expected_authority_on_hand = {
-        "TST-DDMRP-RO-ABOVE-GREEN": 150.0,
-        "TST-DDMRP-RO-GREEN": 75.0,
-        "TST-DDMRP-RO-RED": 10.0,
-        "TST-DDMRP-RO-YELLOW": 35.0,
+        "TST-DDMRP-RO-ABOVE-GREEN-1": 150.0,
+        "TST-DDMRP-RO-ABOVE-GREEN-2": 165.0,
+        "TST-DDMRP-RO-ABOVE-GREEN-3": 180.0,
+        "TST-DDMRP-RO-GREEN-1": 75.0,
+        "TST-DDMRP-RO-GREEN-2": 82.0,
+        "TST-DDMRP-RO-GREEN-3": 95.0,
+        "TST-DDMRP-RO-RED-1": 10.0,
+        "TST-DDMRP-RO-RED-2": 14.0,
+        "TST-DDMRP-RO-RED-3": 18.0,
+        "TST-DDMRP-RO-YELLOW-1": 35.0,
+        "TST-DDMRP-RO-YELLOW-2": 42.0,
+        "TST-DDMRP-RO-YELLOW-3": 49.0,
     }
     assert {
         row["ItemID"]: row["QualifiedOnHandQty"] for row in workbench["Rows"]
@@ -101,15 +106,16 @@ def test_be_ddmrp_007_seeded_read_only_replenishment_workbench_is_reproducible(
         and row["PendingReviewCount"] == 0
         for row in workbench["Rows"]
     )
-    assert {
-        row["PlanningStatus"]: row["RecommendationStatus"]
+    assert all(
+        row["RecommendationStatus"] == "Blocked"
         for row in workbench["Rows"]
-    } == {
-        "Red": "Blocked",
-        "Yellow": "Blocked",
-        "Green": None,
-        "AboveGreen": None,
-    }
+        if row["PlanningStatus"] in {"Red", "Yellow"}
+    )
+    assert all(
+        row["RecommendationStatus"] is None
+        for row in workbench["Rows"]
+        if row["PlanningStatus"] in {"Green", "AboveGreen"}
+    )
     assert all(
         row["SuggestedReplenishmentQty"] == 0
         and row["RecommendedAction"] == "Monitor"
@@ -156,13 +162,10 @@ def test_seed_baseline_test_data_builds_business_readable_state():
     assert "MTA" in p1_demand_classes.values()
     assert any(row.get("DemandClass") == "MTA" for row in p1_version["Orders"])
     ddmrp_version = store.master_data_versions[DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID]
-    assert len(ddmrp_version["DdmrpDecouplingPoints"]) == 4
-    assert {item["ItemID"] for item in ddmrp_version["DdmrpDecouplingPoints"]} == {
-        "TST-DDMRP-RED",
-        "TST-DDMRP-YELLOW",
-        "TST-DDMRP-GREEN",
-        "TST-DDMRP-ABOVE",
-    }
+    assert len(ddmrp_version["DdmrpDecouplingPoints"]) == 12
+    assert {
+        row["PlanningStatus"] for row in ddmrp_version["DdmrpDecouplingPoints"]
+    } == {"Red", "Yellow", "Green", "AboveGreen"}
 
 
 def test_p1_market_control_case_contains_mto_and_mta_orders():
@@ -189,11 +192,11 @@ def test_test_case_catalog_documents_business_acceptance_cases():
         DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
     )
     assert payload["DdmrpRuntimeCases"][0]["ExpectedSummary"] == {
-        "RedCount": 1,
-        "YellowCount": 1,
-        "GreenCount": 1,
-        "AboveGreenCount": 1,
-        "ReplenishmentSuggestionCount": 2,
+        "RedCount": 3,
+        "YellowCount": 3,
+        "GreenCount": 3,
+        "AboveGreenCount": 3,
+        "ReplenishmentSuggestionCount": 6,
     }
     cases = {case["CaseID"]: case for case in payload["Cases"]}
     assert cases["TST-CASE-BASELINE"]["PlanningRunID"] == "TST-RUN-BASELINE-001"
@@ -441,13 +444,13 @@ def test_seeded_test_database_feeds_ddmrp_runtime_status(tmp_path):
     data = response.json()["Data"]
     assert data["Source"]["VersionID"] == DDMRP_NET_FLOW_MASTER_DATA_VERSION_ID
     assert data["Summary"] == {
-        "DecouplingPointCount": 4,
-        "LineCount": 4,
-        "RedCount": 1,
-        "YellowCount": 1,
-        "GreenCount": 1,
-        "AboveGreenCount": 1,
-        "ReplenishmentSuggestionCount": 2,
+        "DecouplingPointCount": 12,
+        "LineCount": 12,
+        "RedCount": 3,
+        "YellowCount": 3,
+        "GreenCount": 3,
+        "AboveGreenCount": 3,
+        "ReplenishmentSuggestionCount": 6,
         "MissingDataCount": 0,
         "ReadyForRuntime": True,
     }

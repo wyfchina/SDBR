@@ -1573,6 +1573,8 @@ def accepted_evaluation_record(
     reason: str,
     ccr_risk_acknowledged: bool,
     material_risk_acknowledged: bool,
+    planning_run_id: str | None = None,
+    planning_run_creation: str = "NotPerformed",
 ) -> dict[str, object]:
     if evaluation["Status"] != "AwaitingPlannerDecision":
         raise OrderCommitmentConflict("Evaluation is not decision-eligible.")
@@ -1600,9 +1602,13 @@ def accepted_evaluation_record(
         "DemandCommitmentID": write_set.demand_commitment["DemandCommitmentID"],
         "ReservationBatchID": write_set.batch["ReservationBatchID"],
         "ExternalOrderAcceptance": "NotPerformed",
-        "PlanningRunCreation": "NotPerformed",
+        "PlanningRunCreation": planning_run_creation,
         "ProductionMutation": "NotPerformed",
     })
+    if planning_run_id is not None:
+        evidence["PlanningRunID"] = _decision_text(
+            planning_run_id, "PlanningRunID"
+        )
     updated["Decision"] = evidence
     updated["Status"] = "AcceptedPendingFormalSchedule"
     updated["RecordVersion"] = int(evaluation["RecordVersion"]) + 1

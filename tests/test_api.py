@@ -5945,7 +5945,7 @@ class TestOrderCommitmentUiReadFlow:
             ),
             (
                 "orderCommitmentExternalBoundary",
-                "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES",
+                "选择接受时，将建立内部计划预留并把 OR-Tools 排程任务加入队列；不会自动接受外部订单，也不会修改 ERP/MES。",
                 "This action does not accept the external order, create a Planning Run, or change ERP/MES",
             ),
             ("evaluationFingerprint", "评估指纹", "Evaluation fingerprint"),
@@ -5994,7 +5994,7 @@ class TestOrderCommitmentUiReadFlow:
             "PlannedAllocationPrepared": ("计划分配已准备", "Planned allocation prepared"),
             "PendingConfirmation": ("待确认", "Pending confirmation"),
             "AwaitingPlannerDecision": ("待计划员决定", "Awaiting planner decision"),
-            "AcceptedPendingFormalSchedule": ("已接受，待正式排程", "Accepted, pending formal schedule"),
+            "AcceptedPendingFormalSchedule": ("已接受，已进入排程队列", "Accepted, queued for scheduling"),
             "Rejected": ("已拒绝", "Rejected"), "Superseded": ("已由新评估替代", "Superseded by newer evaluation"),
             "NotReserved": ("尚未预留", "Not reserved"),
             "ActivePlanReservation": ("计划预留有效", "Active plan reservation"),
@@ -6357,8 +6357,10 @@ class TestOrderCommitmentUiDecisionFlow:
         assert 'detail.Boundary?.ExternalOrderAcceptance' in decision
         assert 'detail.Boundary?.PlanningRunCreation' in decision
         assert 'detail.Boundary?.ProductionMutation' in decision
-        assert 'AcceptedPendingFormalSchedule: "已接受，待正式排程"' in script
-        assert 'AcceptedPendingFormalSchedule: "Accepted, pending formal schedule"' in script
+        assert 'AcceptedPendingFormalSchedule: "已接受，已进入排程队列"' in script
+        assert 'AcceptedPendingFormalSchedule: "Accepted, queued for scheduling"' in script
+        assert 'translateWith("queuedPlanningRun"' in decision
+        assert "payload?.Data?.PlanningRunID" in decision
 
     def test_dialog_has_bilingual_business_errors_replay_and_failure_handling(self):
         script, _, _ = self._assets()
@@ -6407,7 +6409,10 @@ class TestOrderCommitmentUiDecisionFlow:
         assert 'addEventListener("input", updateOrderCommitmentDecisionValidity)' in script
         assert 'actions.replaceChildren()' in action_renderer
         assert '.filter((action) => allowed.has(action))' in action_renderer
-        assert '.compact-dialog { width: min(620px, calc(100vw - 24px)); }' in style
+        assert '.compact-dialog { width: min(680px, calc(100vw - 24px)); }' in style
+        assert ".compact-dialog form { grid-template-rows: auto;" in style
+        assert '.compact-dialog > form > label[hidden] { display: none; }' in style
+        assert ".order-commitment-decision-grid .detail-grid" in style
         assert 'max-height: calc(100vh - 32px)' in style
 
 
@@ -6461,7 +6466,7 @@ def test_ui_calendar_001_page_exposes_calendar_preview_workspace():
     assert 'workSchedules: "工作周 / 基础日历"' in script
     assert 'workSchedules: "Work schedules / Base calendar"' in script
     assert 'calendarPriorityRule: "维护 > 节假日 > 临时覆盖 > 加班 > 基础班次"' in script
-    assert 'src="/planner/assets/planner-workbench.js?v=20260712-p1-integration"' in html
+    assert 'src="/planner/assets/planner-workbench.js?v=20260713-p1-integration-ui"' in html
     assert 'id="master-data-input"' not in html
     assert "DEFAULT_MASTER_DATA" not in html
 
@@ -6601,6 +6606,26 @@ def test_ui_ddmrp_003_renders_versioned_gated_workbench_without_operational_acti
     assert 'id="ddmrp-adjustment-factor-editor"' not in html
     assert 'id="material-planning-erp-order"' not in html
     assert 'id="material-planning-raw-json"' not in html
+    assert "function ddmrpGateBusinessMessage" in script
+    for business_message in (
+        "补货目标日期规则尚未启用；当前只给出建议，不直接下达。",
+        "当前库存证据仅用于评估，暂不能直接执行补货。",
+        "ERP/MRP 补货建议接口尚未启用，不能自动生成补货单。",
+        "计划 BOM 可行性接口尚未启用，暂不展开下级物料。",
+    ):
+        assert business_message in script
+    assert "item.textContent = ddmrpGateBusinessMessage(gate);" in script
+    assert "function ddmrpTargetStatusLabel" in script
+    assert "function ddmrpRecommendationStatusLabel" in script
+    assert "textCell(ddmrpTargetStatusLabel(rowData.TargetStatusCode))" in script
+    assert "textCell(ddmrpRecommendationStatusLabel(rowData.RecommendationStatus))" in script
+    assert 'key === "TargetStatusCode"' in script
+    assert 'key === "RecommendationStatus"' in script
+    assert 'zh: "目标日期待确认"' in script
+    assert 'Blocked: { zh: "暂不能执行"' in script
+    assert 'evaluationFreshness: "当前评估状态"' in script
+    assert 'versionedEvaluation: "本次物料评估"' in script
+    assert 'technicalDetails: "可追溯信息"' in script
     assert "StandardTargetReceiptAt =" not in script
     assert "notify(" not in script
 

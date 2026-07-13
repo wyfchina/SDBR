@@ -107,7 +107,8 @@ _EVIDENCE_REFERENCE_FIELDS = (
 _DECISION_FIELDS = (
     "DecisionID", "Decision", "DecidedBy", "DecidedAt", "Reason",
     "CcrRiskAcknowledged", "MaterialRiskAcknowledged", "AcceptedPromiseAt",
-    "DemandCommitmentID", "ReservationBatchID",
+    "DemandCommitmentID", "ReservationBatchID", "PlanningRunID",
+    "PlanningRunCreation", "ExternalOrderAcceptance", "ProductionMutation",
 )
 _RESERVATION_FIELDS = ("DemandCommitmentID", "ReservationBatchID", "Status")
 _TECHNICAL_DETAIL_FIELDS = (
@@ -517,5 +518,16 @@ def build_order_commitment_detail(
         },
         "AuditHistory": _project_audit_history(events),
         "TechnicalDetails": technical,
-        "Boundary": deepcopy(_BOUNDARY),
+        "Boundary": {
+            **deepcopy(_BOUNDARY),
+            "ExternalOrderAcceptance": deepcopy(
+                decision.get("ExternalOrderAcceptance", "NotPerformed")
+            ),
+            "PlanningRunCreation": deepcopy(
+                decision.get("PlanningRunCreation", "NotPerformed")
+            ),
+            "ProductionMutation": deepcopy(
+                decision.get("ProductionMutation", "NotPerformed")
+            ),
+        },
     }

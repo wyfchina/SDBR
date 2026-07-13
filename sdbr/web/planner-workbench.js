@@ -137,14 +137,14 @@ const I18N = {
     zone_Red: "红区：需要行动", zone_Yellow: "黄区：需要关注", zone_Green: "绿区：正常", zone_AboveGreen: "高于绿区：暂不补货",
     materialPlanningSummary: "物料计划摘要", criticalPriority: "紧急", attentionPriority: "关注", normalPriority: "正常",
     blockedRecommendations: "受门控建议", adjustmentRequired: "需要调整", activeGraphs: "活动图",
-    evaluationFreshness: "评估与权威新鲜度", versionedEvaluation: "版本化评估", evaluationId: "评估编号",
+    evaluationFreshness: "当前评估状态", versionedEvaluation: "本次物料评估", evaluationId: "评估编号",
     evaluationTime: "评估时间", recordedAt: "记录时间", runtimePlanningPackage: "运行包", packageVersion: "包版本",
     operatingModelConfiguration: "运行模型配置", ddmrpConfiguration: "DDMRP 配置", workbenchRevision: "工作台修订",
-    standardTargetStatus: "标准目标状态", recommendationStatus: "建议状态", activeReplenishmentGraphs: "活动补货图",
+    standardTargetStatus: "补货日期状态", recommendationStatus: "建议状态", activeReplenishmentGraphs: "活动补货图",
     logicalReplenishment: "逻辑补货链", recommendationVersion: "建议版本", recommendation: "建议", status: "状态",
     replenishmentHistory: "补货历史", noActiveReplenishmentGraphs: "当前没有活动补货图。",
-    noReplenishmentHistory: "当前没有可显示的补货历史。", businessGates: "业务门控",
-    technicalDetailsAdvice: "仅显示安全摘要和稳定标识；不显示原始权威载荷。",
+    noReplenishmentHistory: "当前没有可显示的补货历史。", businessGates: "当前限制",
+    technicalDetailsAdvice: "仅显示本次评估编号、快照和指纹，便于追溯；原始数据不在业务界面展开。",
     evaluationFingerprint: "评估指纹", authoritySignatureFingerprint: "权威签名指纹", runtimeSnapshot: "运行快照",
     relevantPlanningLedger: "相关计划台账", planningBoundary: "计划边界",
     materialPlanningWorkbench: "物料计划工作台", searchItemOrLocation: "搜索物料或地点", sortBy: "排序",
@@ -154,8 +154,8 @@ const I18N = {
     materialDetail: "物料详情", selectMaterialForDetails: "选择一条物料查看详情",
     materialDetailAdvice: "详情显示当前快照的缓冲边界、需求/供应构成和趋势占位。",
     topOfRed: "红区顶部", topOfYellow: "黄区顶部", topOfGreen: "绿区顶部",
-    supplyDemandComponents: "需求与供应构成", trendPlaceholder: "趋势分析",
-    trendPlaceholderMessage: "第一版显示当前快照；历史缓冲、在手和净流趋势将在后续版本补充。",
+    supplyDemandComponents: "需求与供应构成", trendPlaceholder: "当前库存快照",
+    trendPlaceholderMessage: "这里显示本次评估采用的库存状态；历史变化趋势将在后续版本补充。",
     demandComponentsCount: "合格需求 {count} 条", supplyComponentsCount: "有效在途 {count} 条",
     operationalMetricsContext: "运营指标范围", operationalMetricsOverview: "运营指标总览",
     operationalMetricsLoadFailed: "无法读取运营指标", operationalMetricsRetryAdvice: "请确认已存在完成的排程任务和本地服务可用后重试。",
@@ -439,24 +439,24 @@ const I18N = {
     Applied: "已应用", PartiallyApplied: "部分应用",
     Idle: "空闲", Online: "在线", Healthy: "健康", Unhealthy: "异常",
     navOrderCommitments: "订单承诺", pageOrderCommitments: "订单承诺", descriptionOrderCommitments: "查看 MTO 自动评估、证据和计划员待决定事项。",
-    orderCommitmentSummary: "订单承诺摘要", awaitingDecision: "待决定", confirmationRequired: "需确认", materialPending: "物料待确认", acceptedPendingSchedule: "已接受，待正式排程",
+    orderCommitmentSummary: "订单承诺摘要", awaitingDecision: "待决定", confirmationRequired: "需确认", materialPending: "物料待确认", acceptedPendingSchedule: "已接受，已进入排程队列",
     searchOrderOrProduct: "搜索订单或产品", allStatuses: "全部状态", order: "订单", product: "产品", requestedDueAt: "请求交期", earliestSafePromise: "建议安全日期",
     ccrLoadBeforeAfter: "CCR 负荷前后", protectionThresholdSource: "保护线来源", materialStatus: "物料状态", recommendation: "建议", reservationStatus: "预留状态", exceptionStatus: "异常状态",
     actions: "操作", viewDetails: "查看详情", orderCommitmentEvaluation: "订单承诺评估", orderCommitmentLoadFailed: "无法读取订单承诺评估", orderCommitmentRetryAdvice: "请确认服务可用后重试。", orderCommitmentDetailLoading: "正在读取订单承诺评估详情。", orderCommitmentDetailLoadFailed: "无法读取订单承诺评估详情。",
     materialSkipReason: "跳过原因", materialSkipReasonRequired: "关闭物料检查时，请填写业务原因。", orderCommitmentRevisionConflict: "工作台状态已更新，已刷新当前评估；请复核后再操作。", orderCommitmentReevaluationFailed: "无法重新评估当前订单承诺。", orderCommitmentNotReevaluatable: "当前评估已结束或已被替代，不能重新评估。", orderCommitmentNotFound: "未找到订单承诺评估，请刷新后重试。",
-    requiredDecisionEvidenceMissing: "请填写决定原因并完成当前操作要求的风险确认。", orderCommitmentEvidenceChanged: "决定依据已变化，已刷新当前评估；请重新选择操作。", orderCommitmentReplayConflict: "该决定与已记录的结果不一致，已刷新当前评估；不会自动重试。", orderCommitmentDecisionFailed: "无法记录当前订单承诺决定。请复核后重试。", orderCommitmentDecisionRecorded: "订单承诺决定已记录：",
+    requiredDecisionEvidenceMissing: "请填写决定原因并完成当前操作要求的风险确认。", orderCommitmentEvidenceChanged: "决定依据已变化，已刷新当前评估；请重新选择操作。", orderCommitmentReplayConflict: "该决定与已记录的结果不一致，已刷新当前评估；不会自动重试。", orderCommitmentDecisionFailed: "无法记录当前订单承诺决定。请复核后重试。", orderCommitmentDecisionRecorded: "订单承诺决定已记录：", queuedPlanningRun: "已创建排程任务 {runId}，正在排队等待计算。",
     noOrderCommitments: "当前没有订单承诺评估。", orderDetails: "订单信息", quantity: "数量", businessPriority: "业务优先级", capacityEvidence: "产能证据", materialEvidence: "物料证据", decision: "计划员决定", reservation: "计划预留",
-    auditHistory: "审计记录", technicalDetails: "技术追溯", evaluationFingerprint: "评估指纹", decisionFingerprint: "决定指纹", traceId: "追踪编号", selectedPromise: "选定承诺日期", earliestSafeAssessment: "最早安全日期", requestedDateAssessment: "请求日期评估",
+    auditHistory: "审计记录", technicalDetails: "可追溯信息", evaluationFingerprint: "评估指纹", decisionFingerprint: "决定指纹", traceId: "追踪编号", selectedPromise: "选定承诺日期", earliestSafeAssessment: "最早安全日期", requestedDateAssessment: "请求日期评估",
     loadBefore: "评估前负荷", loadAfter: "评估后负荷", loadPercent: "负荷率", protectionThreshold: "保护线", thresholdState: "保护线状态", materialCheck: "物料检查",
     materialFreshness: "物料证据新鲜度", materialLines: "物料需求行", acceptedPromise: "接受的承诺日期", decidedBy: "决定人", decidedAt: "决定时间", decisionReason: "决定原因", ccrRiskAcknowledged: "CCR 风险已确认", materialRiskAcknowledged: "物料风险已确认", supersededByEvaluation: "替代评估",
     reservationBatch: "预留批次", demandCommitment: "需求承诺", boundary: "业务边界", recommendationOnly: "仅提供建议，最终决定由计划员作出。",
-    externalOrderAcceptance: "外部订单接受", planningRunCreation: "创建 Planning Run", productionMutation: "生产权威变更", checkMaterialAvailability: "检查物料计划可用性", orderCommitmentMaterialGateReminder: "释放阶段仍执行物料硬门控", plannerDecision: "计划员决定", acknowledgeCcrRisk: "我已复核 CCR 保护负荷风险", acknowledgeMaterialPending: "我确认物料仍待处理，且释放阶段继续硬门控", orderCommitmentExternalBoundary: "不会自动接受外部订单，也不会创建 Planning Run 或修改 ERP/MES", unknownStatus: "未知状态",
+    externalOrderAcceptance: "外部订单接受", planningRunCreation: "内部排程任务", productionMutation: "生产系统数据变更", checkMaterialAvailability: "检查物料计划可用性", orderCommitmentMaterialGateReminder: "释放阶段仍执行物料硬门控", plannerDecision: "计划员决定", acknowledgeCcrRisk: "我已复核 CCR 保护负荷风险", acknowledgeMaterialPending: "我确认物料仍待处理，且释放阶段继续硬门控", orderCommitmentExternalBoundary: "选择接受时，将建立内部计划预留并把 OR-Tools 排程任务加入队列；不会自动接受外部订单，也不会修改 ERP/MES。", unknownStatus: "未知状态",
     RecommendAccept: "建议接受", PlannerConfirmationRequired: "需计划员确认", CapacityAcceptableMaterialPending: "产能可接受，物料待确认", MaterialEvidenceRequired: "待物料确认",
     RecommendLaterPromise: "建议调整交期", DoNotRecommendAccept: "暂不建议接受", Feasible: "物料可行", SkippedPendingConfirmation: "物料待确认（已跳过检查）",
     EvidenceInsufficient: "物料证据不足", Shortage: "物料短缺", OnTime: "可按请求日期完成", LaterSafeDate: "需采用后续安全日期", NotAssessable: "暂不可评估",
     Fresh: "新鲜", Stale: "已过期", Future: "时间异常", Missing: "缺失", Protected: "保护范围内", Watch: "需要关注", NearLimit: "接近上限", Overloaded: "超载",
     ApprovedWithin: "批准保护线内", ApprovedExceeded: "超过批准保护线", Covered: "已覆盖", PlannedAllocationPrepared: "计划分配已准备", PendingConfirmation: "待确认",
-    AwaitingPlannerDecision: "待计划员决定", AcceptedPendingFormalSchedule: "已接受，待正式排程", Rejected: "已拒绝", Superseded: "已由新评估替代",
+    AwaitingPlannerDecision: "待计划员决定", AcceptedPendingFormalSchedule: "已接受，已进入排程队列", Rejected: "已拒绝", Superseded: "已由新评估替代", Queued: "已进入排程队列",
     NotReserved: "尚未预留", ActivePlanReservation: "计划预留有效", LinkedToFormalOrder: "已关联正式订单", ConvertedToScheduledOccupancy: "已转正式排程占用",
     HeldForPlanningError: "排程异常待处理", AdjustmentRequired: "需要调整", Released: "已释放", Cancelled: "已取消", ReservationEvidenceMissing: "预留证据缺失",
     None: "无异常", AssessmentBlocked: "评估受阻", MaterialEvidenceBlocked: "物料证据受阻", PlanningErrorPending: "排程异常待处理",
@@ -601,14 +601,14 @@ const I18N = {
     zone_Red: "Red: action required", zone_Yellow: "Yellow: watch", zone_Green: "Green: normal", zone_AboveGreen: "Above green: no replenishment",
     materialPlanningSummary: "Materials planning summary", criticalPriority: "Critical", attentionPriority: "Attention", normalPriority: "Normal",
     blockedRecommendations: "Blocked recommendations", adjustmentRequired: "Adjustment required", activeGraphs: "Active graphs",
-    evaluationFreshness: "Evaluation and authority freshness", versionedEvaluation: "Versioned evaluation", evaluationId: "Evaluation ID",
+    evaluationFreshness: "Current evaluation status", versionedEvaluation: "This material evaluation", evaluationId: "Evaluation ID",
     evaluationTime: "Evaluation time", recordedAt: "Recorded at", runtimePlanningPackage: "Runtime package", packageVersion: "Package version",
     operatingModelConfiguration: "Operating model configuration", ddmrpConfiguration: "DDMRP configuration", workbenchRevision: "Workbench revision",
-    standardTargetStatus: "Standard target status", recommendationStatus: "Recommendation status", activeReplenishmentGraphs: "Active replenishment graphs",
+    standardTargetStatus: "Replenishment date status", recommendationStatus: "Recommendation status", activeReplenishmentGraphs: "Active replenishment graphs",
     logicalReplenishment: "Logical replenishment", recommendationVersion: "Recommendation version", recommendation: "Recommendation", status: "Status",
     replenishmentHistory: "Replenishment history", noActiveReplenishmentGraphs: "No active replenishment graphs are available.",
-    noReplenishmentHistory: "No replenishment history is available.", businessGates: "Business gates",
-    technicalDetailsAdvice: "Only safe summaries and stable identifiers are shown; raw authority payloads are not displayed.",
+    noReplenishmentHistory: "No replenishment history is available.", businessGates: "Current limitations",
+    technicalDetailsAdvice: "Evaluation identifiers, snapshots, and fingerprints are shown for traceability; raw data stays outside the business view.",
     evaluationFingerprint: "Evaluation fingerprint", authoritySignatureFingerprint: "Authority signature fingerprint", runtimeSnapshot: "Runtime snapshot",
     relevantPlanningLedger: "Relevant planning ledger", planningBoundary: "Planning boundary",
     materialPlanningWorkbench: "Materials planning workbench", searchItemOrLocation: "Search item or location", sortBy: "Sort by",
@@ -618,8 +618,8 @@ const I18N = {
     materialDetail: "Material detail", selectMaterialForDetails: "Select a material to view details",
     materialDetailAdvice: "Details show the current snapshot boundaries, demand/supply components, and a trend placeholder.",
     topOfRed: "Top of red", topOfYellow: "Top of yellow", topOfGreen: "Top of green",
-    supplyDemandComponents: "Demand and supply components", trendPlaceholder: "Trend analysis",
-    trendPlaceholderMessage: "V1 shows the current snapshot. Historical buffer, on-hand, and net-flow trends will be added later.",
+    supplyDemandComponents: "Demand and supply components", trendPlaceholder: "Current inventory snapshot",
+    trendPlaceholderMessage: "This shows the inventory state used by the current evaluation. Historical trends will be added later.",
     demandComponentsCount: "{count} qualified demand rows", supplyComponentsCount: "{count} effective open supply rows",
     operationalMetricsContext: "Operational metrics scope", operationalMetricsOverview: "Operational metrics overview",
     operationalMetricsLoadFailed: "Operational metrics could not be loaded", operationalMetricsRetryAdvice: "Check that a completed planning run and the local service are available, then retry.",
@@ -903,12 +903,12 @@ const I18N = {
     Applied: "Applied", PartiallyApplied: "Partially applied",
     Idle: "Idle", Online: "Online", Healthy: "Healthy", Unhealthy: "Unhealthy",
     navOrderCommitments: "Order Commitments", pageOrderCommitments: "Order Commitments", descriptionOrderCommitments: "Review MTO evaluations, evidence, and planner decisions awaiting action.",
-    orderCommitmentSummary: "Order commitment summary", awaitingDecision: "Awaiting decision", confirmationRequired: "Confirmation required", materialPending: "Material pending", acceptedPendingSchedule: "Accepted, pending formal schedule",
+    orderCommitmentSummary: "Order commitment summary", awaitingDecision: "Awaiting decision", confirmationRequired: "Confirmation required", materialPending: "Material pending", acceptedPendingSchedule: "Accepted, queued for scheduling",
     searchOrderOrProduct: "Search order or product", allStatuses: "All statuses", order: "Order", product: "Product", requestedDueAt: "Requested due", earliestSafePromise: "Earliest safe promise",
     ccrLoadBeforeAfter: "CCR load before / after", protectionThresholdSource: "Protection threshold source", materialStatus: "Material status", recommendation: "Recommendation", reservationStatus: "Reservation status", exceptionStatus: "Exception status",
     actions: "Actions", viewDetails: "View details", orderCommitmentEvaluation: "Order commitment evaluation", orderCommitmentLoadFailed: "Order commitment evaluations could not be loaded", orderCommitmentRetryAdvice: "Check the service and retry.", orderCommitmentDetailLoading: "Loading order commitment evaluation details.", orderCommitmentDetailLoadFailed: "Order commitment evaluation details could not be loaded.",
     materialSkipReason: "Skip reason", materialSkipReasonRequired: "Provide a business reason when material checking is turned off.", orderCommitmentRevisionConflict: "Workbench state changed. The current evaluation was refreshed; review it before acting again.", orderCommitmentReevaluationFailed: "This order commitment could not be re-evaluated.", orderCommitmentNotReevaluatable: "This evaluation is closed or superseded and cannot be re-evaluated.", orderCommitmentNotFound: "The order commitment evaluation was not found. Refresh and try again.",
-    requiredDecisionEvidenceMissing: "Provide a decision reason and complete the risk acknowledgements required for this action.", orderCommitmentEvidenceChanged: "Decision evidence changed. The current evaluation was refreshed; choose the action again.", orderCommitmentReplayConflict: "This decision conflicts with the recorded result. The evaluation was refreshed and was not retried.", orderCommitmentDecisionFailed: "This order commitment decision could not be recorded. Review it and try again.", orderCommitmentDecisionRecorded: "Order commitment decision recorded:",
+    requiredDecisionEvidenceMissing: "Provide a decision reason and complete the risk acknowledgements required for this action.", orderCommitmentEvidenceChanged: "Decision evidence changed. The current evaluation was refreshed; choose the action again.", orderCommitmentReplayConflict: "This decision conflicts with the recorded result. The evaluation was refreshed and was not retried.", orderCommitmentDecisionFailed: "This order commitment decision could not be recorded. Review it and try again.", orderCommitmentDecisionRecorded: "Order commitment decision recorded:", queuedPlanningRun: "Planning run {runId} was created and is waiting in the queue.",
     noOrderCommitments: "No order commitment evaluations are available.", orderDetails: "Order details", quantity: "Quantity", businessPriority: "Business priority", capacityEvidence: "Capacity evidence", materialEvidence: "Material evidence", decision: "Planner decision", reservation: "Planning reservation",
     auditHistory: "Audit history", technicalDetails: "Technical trace", evaluationFingerprint: "Evaluation fingerprint", decisionFingerprint: "Decision fingerprint", traceId: "Trace ID", selectedPromise: "Selected promise", earliestSafeAssessment: "Earliest safe assessment", requestedDateAssessment: "Requested-date assessment",
     loadBefore: "Load before", loadAfter: "Load after", loadPercent: "Load percent", protectionThreshold: "Protection threshold", thresholdState: "Threshold state", materialCheck: "Material check",
@@ -920,7 +920,7 @@ const I18N = {
     EvidenceInsufficient: "Material evidence insufficient", Shortage: "Material shortage", OnTime: "On time", LaterSafeDate: "Later safe date", NotAssessable: "Not assessable",
     Fresh: "Fresh", Stale: "Stale", Future: "Future", Missing: "Missing", Protected: "Protected", Watch: "Watch", NearLimit: "Near limit", Overloaded: "Overloaded",
     ApprovedWithin: "Within approved threshold", ApprovedExceeded: "Approved threshold exceeded", Covered: "Covered", PlannedAllocationPrepared: "Planned allocation prepared", PendingConfirmation: "Pending confirmation",
-    AwaitingPlannerDecision: "Awaiting planner decision", AcceptedPendingFormalSchedule: "Accepted, pending formal schedule", Rejected: "Rejected", Superseded: "Superseded by newer evaluation",
+    AwaitingPlannerDecision: "Awaiting planner decision", AcceptedPendingFormalSchedule: "Accepted, queued for scheduling", Rejected: "Rejected", Superseded: "Superseded by newer evaluation", Queued: "Queued for scheduling",
     NotReserved: "Not reserved", ActivePlanReservation: "Active plan reservation", LinkedToFormalOrder: "Linked to formal order", ConvertedToScheduledOccupancy: "Converted to scheduled occupancy",
     HeldForPlanningError: "Held for planning error", AdjustmentRequired: "Adjustment required", Released: "Released", Cancelled: "Cancelled", ReservationEvidenceMissing: "Reservation evidence missing",
     None: "No exception", AssessmentBlocked: "Assessment blocked", MaterialEvidenceBlocked: "Material evidence blocked", PlanningErrorPending: "Planning error pending",
@@ -1785,8 +1785,8 @@ function renderMaterialPlanningTable() {
       textCell(formatNumber(rowData.QualifiedDemandQty)),
       textCell(formatNumber(rowData.NetFlowPosition)),
       textCell(formatNumber(rowData.SuggestedReplenishmentQty)),
-      textCell(displayValue(rowData.TargetStatusCode)),
-      textCell(displayValue(rowData.RecommendationStatus)),
+      textCell(ddmrpTargetStatusLabel(rowData.TargetStatusCode)),
+      textCell(ddmrpRecommendationStatusLabel(rowData.RecommendationStatus)),
       nodeCell(action)
     ].forEach((cell) => row.append(cell));
     body.append(row);
@@ -1824,7 +1824,7 @@ function renderMaterialPlanningDetail() {
   gates.replaceChildren();
   (selected.GateCodes || []).forEach((gate) => {
     const item = document.createElement("li");
-    item.textContent = `${displayValue(gate.Code)}: ${displayValue(gate.Message)}`;
+    item.textContent = ddmrpGateBusinessMessage(gate);
     gates.append(item);
   });
   if (!gates.children.length) {
@@ -1832,6 +1832,72 @@ function renderMaterialPlanningDetail() {
     item.textContent = translate("notAvailable");
     gates.append(item);
   }
+}
+
+function ddmrpGateBusinessMessage(gate) {
+  const messages = {
+    DLT_TARGET_SEMANTICS_INSUFFICIENT: {
+      zh: "补货目标日期规则尚未启用；当前只给出建议，不直接下达。",
+      en: "The replenishment target-date rule is not active; this remains advice only."
+    },
+    OPERATIONAL_AUTHORITY_NOT_ACCEPTED: {
+      zh: "当前库存证据仅用于评估，暂不能直接执行补货。",
+      en: "Current inventory evidence is evaluation-only and cannot directly trigger replenishment."
+    },
+    PLANNING_ADVICE_CONTRACT_NOT_ACCEPTED: {
+      zh: "ERP/MRP 补货建议接口尚未启用，不能自动生成补货单。",
+      en: "The ERP/MRP replenishment-advice interface is not active, so no order can be generated automatically."
+    },
+    PLAN_BOM_FEASIBILITY_CONTRACT_NOT_ACCEPTED: {
+      zh: "计划 BOM 可行性接口尚未启用，暂不展开下级物料。",
+      en: "The plan-BOM feasibility interface is not active, so lower-level materials are not expanded."
+    }
+  };
+  const message = messages[String(gate?.Code)]?.[currentLanguage];
+  if (message) return message;
+  return currentLanguage === "zh"
+    ? "当前建议受业务条件限制，请在可追溯信息中核查来源。"
+    : "This recommendation is limited by a business condition; review its trace information."
+}
+
+function ddmrpTargetStatusLabel(value) {
+  const messages = {
+    DLT_TARGET_SEMANTICS_INSUFFICIENT: {
+      zh: "目标日期待确认",
+      en: "Target date pending"
+    }
+  };
+  if (value === null || value === undefined || value === "") {
+    return currentLanguage === "zh" ? "不适用" : "Not applicable";
+  }
+  return messages[String(value)]?.[currentLanguage]
+    || (currentLanguage === "zh" ? "目标日期规则待确认" : "Target-date rule pending");
+}
+
+function ddmrpRecommendationStatusLabel(value) {
+  const statuses = {
+    Blocked: { zh: "暂不能执行", en: "Not executable yet" },
+    PendingReview: { zh: "待计划员确认", en: "Awaiting planner review" },
+    Confirmed: { zh: "已确认", en: "Confirmed" },
+    Rejected: { zh: "已拒绝", en: "Rejected" },
+    AdjustmentRequired: { zh: "需要调整", en: "Adjustment required" },
+    Issued: { zh: "已输出建议", en: "Advice issued" },
+    OutputFailed: { zh: "建议输出失败", en: "Advice output failed" },
+    ERPAccepted: { zh: "ERP 已接收", en: "Accepted by ERP" },
+    InExecution: { zh: "执行中", en: "In execution" },
+    Superseded: { zh: "已由新建议替代", en: "Superseded by newer advice" },
+    Released: { zh: "已释放", en: "Released" },
+    Cancelled: { zh: "已取消", en: "Cancelled" },
+    Completed: { zh: "已完成", en: "Completed" },
+    Open: { zh: "处理中", en: "Open" },
+    ActiveGraph: { zh: "已进入计划", en: "Added to plan" },
+    Active: { zh: "生效", en: "Active" }
+  };
+  if (value === null || value === undefined || value === "") {
+    return currentLanguage === "zh" ? "仅监控" : "Monitor only";
+  }
+  return statuses[String(value)]?.[currentLanguage]
+    || (currentLanguage === "zh" ? "状态待确认" : "Status pending");
 }
 
 function selectMaterialPlanningRow(rowKey) {
@@ -1869,6 +1935,8 @@ async function loadMaterialPlanning() {
 }
 
 function displayMaterialPlanningValue(key, value) {
+  if (key === "TargetStatusCode") return ddmrpTargetStatusLabel(value);
+  if (key === "RecommendationStatus") return ddmrpRecommendationStatusLabel(value);
   return ["TopOfRed", "TopOfYellow", "TopOfGreen", "QualifiedOpenSupplyQty", "QualifiedDemandQty", "RecommendationVersion"].includes(key)
     ? formatNumber(value)
     : displayValue(value);
@@ -1898,7 +1966,7 @@ function renderMaterialPlanningActiveGraphs(graphs) {
     const row = document.createElement("tr");
     [
       textCell(graph.LogicalReplenishmentID), textCell(graph.ItemID), textCell(graph.LocationID),
-      textCell(formatNumber(graph.RecommendationVersion)), textCell(displayValue(graph.GraphStatus)),
+      textCell(formatNumber(graph.RecommendationVersion)), textCell(ddmrpRecommendationStatusLabel(graph.GraphStatus)),
       textCell(graph.AdjustmentRequired ? translate("adjustmentRequired") : "-")
     ].forEach((cell) => row.append(cell));
     body.append(row);
@@ -1913,7 +1981,7 @@ function renderMaterialPlanningHistory(history) {
     const row = document.createElement("tr");
     [
       textCell(entry.LogicalReplenishmentID), textCell(entry.RecommendationID),
-      textCell(formatNumber(entry.RecommendationVersion)), textCell(displayValue(entry.CurrentStatus)),
+      textCell(formatNumber(entry.RecommendationVersion)), textCell(ddmrpRecommendationStatusLabel(entry.CurrentStatus)),
       textCell(formatDate(entry.EvaluationAt))
     ].forEach((cell) => row.append(cell));
     body.append(row);
@@ -6546,9 +6614,13 @@ async function submitOrderCommitmentDecision(event) {
       updateOrderCommitmentDecisionValidity();
       return;
     }
+    const planningRunId = payload?.Data?.PlanningRunID;
+    const queueMessage = planningRunId
+      ? ` ${translateWith("queuedPlanningRun", { runId: planningRunId })}`
+      : "";
     const successMessage = `${translate("orderCommitmentDecisionRecorded")} ${
       orderCommitmentLabel(status)
-    }`;
+    }${queueMessage}`;
     closeOrderCommitmentDecision();
     await loadOrderCommitments();
     await openOrderCommitmentDetail(detail.EvaluationID);
@@ -6594,7 +6666,9 @@ function renderOrderCommitmentDetail() {
   content.append(detailSection("decision", [
     ["decision", orderCommitmentLabel(detail.Decision?.Decision)], ["decidedBy", detail.Decision?.DecidedBy],
     ["decidedAt", formatDate(detail.Decision?.DecidedAt)], ["decisionReason", detail.Decision?.Reason],
-    ["acceptedPromise", formatDate(detail.Decision?.AcceptedPromiseAt)]
+    ["acceptedPromise", formatDate(detail.Decision?.AcceptedPromiseAt)],
+    ["planningRunCreation", orderCommitmentLabel(detail.Decision?.PlanningRunCreation)],
+    ["runId", detail.Decision?.PlanningRunID]
   ]));
   content.append(detailSection("reservation", [
     ["demandCommitment", detail.Reservation?.DemandCommitmentID], ["reservationBatch", detail.Reservation?.ReservationBatchID],

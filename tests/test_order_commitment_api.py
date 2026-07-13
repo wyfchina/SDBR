@@ -171,11 +171,12 @@ PHASE0_FIELDS = {
     "planning_reservation_events",
     "processed_planning_event_keys",
 }
+PLANNING_RUN_FIELDS = {"planning_runs", "audit_events"}
 ALLOWED_STORE_CHANGES = {
     "intake": MTO_FIELDS,
     "reevaluate": MTO_FIELDS,
     "reject": MTO_FIELDS,
-    "accept": MTO_FIELDS | PHASE0_FIELDS,
+    "accept": MTO_FIELDS | PHASE0_FIELDS | PLANNING_RUN_FIELDS,
 }
 
 
@@ -2441,7 +2442,7 @@ class TestOrderCommitmentApiAcceptance:
             payload=payload,
         )
 
-    def test_acceptance_atomically_creates_only_mto_phase0_rows(self):
+    def test_acceptance_atomically_creates_phase0_rows_and_queued_planning_run(self):
         client, store, _, evaluation_id = self._open_evaluation()
         evaluation = store.order_commitment_evaluations[evaluation_id]
         before = _public_store_snapshot(store)
@@ -2473,6 +2474,8 @@ class TestOrderCommitmentApiAcceptance:
         assert data["MaterialAllocationIDs"] == list(
             store.material_planning_allocations
         )
+        assert data["PlanningRunID"] in store.planning_runs
+        assert store.planning_runs[data["PlanningRunID"]]["Status"] == "Queued"
 
     def test_conditional_recommended_date_creates_pending_material_and_zero_allocations(self):
         client, store, evaluation_id, payload = (
@@ -2529,7 +2532,7 @@ class TestOrderCommitmentApiAcceptance:
             == MTO_FIXTURE_TIME.isoformat()
         )
 
-    def test_acceptance_response_is_accepted_pending_formal_schedule_and_not_performed_boundaries(self):
+    def test_acceptance_response_is_accepted_and_queues_follow_up_planning_run(self):
         client, store, _, evaluation_id = self._open_evaluation()
         payload = self._acceptance_payload(
             store.order_commitment_evaluations[evaluation_id]
@@ -2553,13 +2556,28 @@ class TestOrderCommitmentApiAcceptance:
         assert data["Status"] == "AcceptedPendingFormalSchedule"
         assert data["Evaluation"]["Status"] == "AcceptedPendingFormalSchedule"
         assert data["ExternalOrderAcceptance"] == "NotPerformed"
-        assert data["PlanningRunCreation"] == "NotPerformed"
+        assert data["PlanningRunCreation"] == "Queued"
+        assert data["PlanningRunID"] in store.planning_runs
         assert data["ProductionMutation"] == "NotPerformed"
+        queued_run = store.planning_runs[data["PlanningRunID"]]
+        assert queued_run["Status"] == "Queued"
+        assert queued_run["SolverBackendID"] == "ortools"
+        assert queued_run["PlanningReservationBatchIDs"] == [
+            data["ReservationBatchID"]
+        ]
+        detail = client.get(
+            f"/planner/workbench/order-commitments/{evaluation_id}",
+            headers=_planner_headers(),
+        ).json()["Data"]
+        assert detail["Decision"]["PlanningRunID"] == data["PlanningRunID"]
+        assert detail["Boundary"]["PlanningRunCreation"] == "Queued"
+        assert detail["Boundary"]["ExternalOrderAcceptance"] == "NotPerformed"
+        assert detail["Boundary"]["ProductionMutation"] == "NotPerformed"
         assert replay.json()["Data"] == data
         assert replay.headers["X-Workbench-Revision"] == first_revision
         assert _public_store_snapshot(store) == after_first
 
-    def test_acceptance_creates_no_planning_run_and_does_not_change_existing_publication(self):
+    def test_acceptance_creates_new_planning_run_without_changing_existing_publication(self):
         client, store, fixture, evaluation_id = self._open_evaluation()
         before_runs = deepcopy(store.planning_runs)
         before_publication = deepcopy(
@@ -2577,7 +2595,12 @@ class TestOrderCommitmentApiAcceptance:
         )
 
         assert response.status_code == 200
-        assert store.planning_runs == before_runs
+        data = response.json()["Data"]
+        assert set(store.planning_runs) == set(before_runs) | {data["PlanningRunID"]}
+        assert store.planning_runs[data["PlanningRunID"]]["Status"] == "Queued"
+        assert store.planning_runs[data["PlanningRunID"]]["SourceType"] == (
+            "MTOOrderCommitmentAcceptance"
+        )
         assert store.planning_runs[fixture["BaselinePlanningRunID"]][
             "PublicationHistory"
         ] == before_publication
@@ -2828,7 +2851,7 @@ class TestOrderCommitmentBrowserSequence:
         authority_fields = tuple(
             field
             for field in PUBLIC_STORE_FIELDS
-            if field not in MTO_FIELDS | PHASE0_FIELDS
+            if field not in MTO_FIELDS | PHASE0_FIELDS | PLANNING_RUN_FIELDS
         )
         authority_before = {
             field: deepcopy(getattr(store, field))
@@ -2982,7 +3005,12 @@ class TestOrderCommitmentBrowserSequence:
         assert accepted_detail["Reservation"]["ReservationBatchID"]
         assert rejected_detail["Status"] == "Rejected"
         assert rejected_detail["Recommendation"]["AllowedActions"] == []
-        assert store.planning_runs == baseline_runs
+        created_run_ids = set(store.planning_runs) - set(baseline_runs)
+        assert len(created_run_ids) == 1
+        created_run = store.planning_runs[created_run_ids.pop()]
+        assert created_run["Status"] == "Queued"
+        assert created_run["SolverBackendID"] == "ortools"
+        assert created_run["SourceType"] == "MTOOrderCommitmentAcceptance"
         assert fixture["BaselinePlanningRunID"] in store.planning_runs
         assert {
             field: deepcopy(getattr(store, field))

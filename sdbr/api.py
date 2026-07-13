@@ -3320,6 +3320,7 @@ def create_app(
                         "ReservationBatchID",
                         "ExternalOrderAcceptance",
                         "PlanningRunCreation",
+                        "PlanningRunID",
                         "ProductionMutation",
                     )
                     for field in text_fields:
@@ -3382,7 +3383,22 @@ def create_app(
                         material_risk_acknowledged=persisted_decision[
                             "MaterialRiskAcknowledged"
                         ],
+                        planning_run_id=persisted_decision["PlanningRunID"],
+                        planning_run_creation="Queued",
                     )
+                    persisted_planning_run = planning_runs.get(
+                        persisted_decision["PlanningRunID"]
+                    )
+                    if (
+                        persisted_planning_run is None
+                        or persisted_planning_run.get("SourceDecisionID")
+                        != persisted_decision["DecisionID"]
+                        or persisted_planning_run.get("ReservationBatchID")
+                        != persisted_decision["ReservationBatchID"]
+                    ):
+                        raise OrderCommitmentConflict(
+                            "Persisted accepted decision Planning Run evidence drifted."
+                        )
                     if expected_accepted != evaluation:
                         raise OrderCommitmentConflict(
                             "Persisted accepted decision immutable content drifted."
@@ -3409,6 +3425,9 @@ def create_app(
                             ],
                             "MaterialRiskAcknowledged": persisted_decision[
                                 "MaterialRiskAcknowledged"
+                            ],
+                            "PlanningRunID": persisted_decision[
+                                "PlanningRunID"
                             ],
                         },
                     )
@@ -3464,9 +3483,15 @@ def create_app(
                 "DemandCommitmentID": demand_commitment_id,
                 "ReservationBatchID": reservation_batch_id,
                 "ExternalOrderAcceptance": "NotPerformed",
-                "PlanningRunCreation": "NotPerformed",
+                "PlanningRunCreation": persisted_decision.get(
+                    "PlanningRunCreation", "NotPerformed"
+                ),
                 "ProductionMutation": "NotPerformed",
             }
+            if persisted_decision.get("PlanningRunID") is not None:
+                replay_data["PlanningRunID"] = persisted_decision[
+                    "PlanningRunID"
+                ]
             if replay_write_set is not None:
                 replay_data.update({
                     "CapacityReservationIDs": list(
@@ -3543,15 +3568,129 @@ def create_app(
                     ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
                     material_risk_acknowledged=payload.MaterialRiskAcknowledged,
                 )
+                planning_run_id = (
+                    f"MTO-RUN-{incoming_fingerprint[:20].upper()}"
+                )
+                if planning_run_id in planning_runs:
+                    raise OrderCommitmentConflict(
+                        "Accepted order commitment Planning Run already exists."
+                    )
+                baseline_run_id = str(
+                    evaluation["Basis"]["BaselinePlanningRunID"]
+                )
+                baseline_run = planning_runs.get(baseline_run_id)
+                if baseline_run is None or baseline_run.get("Status") != "Completed":
+                    raise OrderCommitmentConflict(
+                        "Accepted order commitment baseline Planning Run is unavailable."
+                    )
+                planning_run_payload = _mto_acceptance_planning_run_payload(
+                    evaluation=evaluation,
+                    baseline_run=baseline_run,
+                    planning_run_id=planning_run_id,
+                    reservation_batch_id=str(
+                        write_set.batch["ReservationBatchID"]
+                    ),
+                    requested_by=actor_id,
+                    requested_at=decision_at,
+                )
+                temp_commitments = deepcopy(planning_demand_commitments)
+                temp_batches = deepcopy(planning_reservation_batches)
+                temp_capacity = deepcopy(ccr_capacity_reservations)
+                temp_material = deepcopy(material_planning_allocations)
+                temp_events = deepcopy(planning_reservation_events)
+                temp_event_keys = deepcopy(processed_planning_event_keys)
                 apply_reservation_write_set(
                     write_set=write_set,
-                    commitments=planning_demand_commitments,
-                    batches=planning_reservation_batches,
-                    capacity_reservations=ccr_capacity_reservations,
-                    material_allocations=material_planning_allocations,
-                    events=planning_reservation_events,
-                    processed_event_keys=processed_planning_event_keys,
+                    commitments=temp_commitments,
+                    batches=temp_batches,
+                    capacity_reservations=temp_capacity,
+                    material_allocations=temp_material,
+                    events=temp_events,
+                    processed_event_keys=temp_event_keys,
                 )
+                frozen_planning_reservations = freeze_planning_reservations(
+                    batch_ids=planning_run_payload.PlanningReservationBatchIDs,
+                    demand_commitments=temp_commitments,
+                    batches=temp_batches,
+                    capacity_reservations=temp_capacity,
+                    material_allocations=temp_material,
+                )
+                master_data_version = master_data_versions.get(
+                    planning_run_payload.MasterDataVersionID
+                )
+                operational_snapshot = operational_state_snapshots.get(
+                    planning_run_payload.OperationalStateSnapshotID
+                )
+                if master_data_version is None or operational_snapshot is None:
+                    raise OrderCommitmentConflict(
+                        "Accepted order commitment planning references are unavailable."
+                    )
+                operating_model_configuration = (
+                    operating_model_configurations.get(
+                        planning_run_payload.OperatingModelConfigurationID
+                    )
+                    if planning_run_payload.OperatingModelConfigurationID
+                    else None
+                )
+                scheduling_strategy = _scheduling_strategy_snapshot_for_id(
+                    strategy_id=planning_run_payload.ObjectiveStrategyID,
+                    scheduling_strategy_versions=scheduling_strategy_versions,
+                )
+                if scheduling_strategy is None:
+                    raise OrderCommitmentConflict(
+                        "Accepted order commitment scheduling strategy is unavailable."
+                    )
+                pending_run = _pending_planning_run(
+                    payload=planning_run_payload,
+                    master_data_version=master_data_version,
+                    operational_snapshot=operational_snapshot,
+                    release_policy=(
+                        deepcopy(baseline_run.get("FrozenReleasePolicy"))
+                        if isinstance(
+                            baseline_run.get("FrozenReleasePolicy"), Mapping
+                        )
+                        else None
+                    ),
+                    scheduling_strategy=scheduling_strategy,
+                    operating_model_configuration=operating_model_configuration,
+                    frozen_base_calendars=_active_base_calendars(
+                        base_calendars.values()
+                    ),
+                    frozen_resource_calendar_assignments=(
+                        _active_resource_calendar_assignments(
+                            resource_calendar_assignments.values()
+                        )
+                    ),
+                    frozen_calendar_overrides=_active_calendar_overrides(
+                        calendar_overrides.values()
+                    ),
+                    frozen_planning_reservations=frozen_planning_reservations,
+                )
+                queued_run = dict(pending_run)
+                queued_run.update({
+                    "Status": "Queued",
+                    "EnqueuedBy": actor_id,
+                    "EnqueuedAt": decision_at.isoformat(),
+                    "AttemptCount": 0,
+                    "NextAttemptAt": decision_at.isoformat(),
+                    "SourceType": "MTOOrderCommitmentAcceptance",
+                    "SourceEvaluationID": evaluation_id,
+                    "SourceDecisionID": payload.DecisionID.strip(),
+                    "DemandCommitmentID": write_set.demand_commitment[
+                        "DemandCommitmentID"
+                    ],
+                    "ReservationBatchID": write_set.batch[
+                        "ReservationBatchID"
+                    ],
+                })
+                queued_run["StatusHistory"] = [
+                    *pending_run["StatusHistory"],
+                    {
+                        "Status": "Queued",
+                        "ChangedAt": decision_at.isoformat(),
+                        "ChangedBy": actor_id,
+                    },
+                ]
                 updated = accepted_evaluation_record(
                     evaluation=evaluation,
                     write_set=write_set,
@@ -3562,6 +3701,8 @@ def create_app(
                     reason=payload.Reason,
                     ccr_risk_acknowledged=payload.CcrRiskAcknowledged,
                     material_risk_acknowledged=payload.MaterialRiskAcknowledged,
+                    planning_run_id=planning_run_id,
+                    planning_run_creation="Queued",
                 )
             except (OrderCommitmentConflict, ReservationConflict) as error:
                 return _order_commitment_error(
@@ -3570,6 +3711,40 @@ def create_app(
                     status=error.status,
                     message=str(error),
                 )
+            apply_reservation_write_set(
+                write_set=write_set,
+                commitments=planning_demand_commitments,
+                batches=planning_reservation_batches,
+                capacity_reservations=ccr_capacity_reservations,
+                material_allocations=material_planning_allocations,
+                events=planning_reservation_events,
+                processed_event_keys=processed_planning_event_keys,
+            )
+            planning_runs[planning_run_id] = queued_run
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=planning_run_id,
+                action="PlanningRunCreated",
+                actor_id=actor_id,
+                occurred_at=decision_at,
+                details={
+                    "SourceType": "MTOOrderCommitmentAcceptance",
+                    "ReservationBatchID": write_set.batch[
+                        "ReservationBatchID"
+                    ],
+                },
+            )
+            _append_planning_run_audit_event(
+                audit_events=audit_events,
+                run_id=planning_run_id,
+                action="PlanningRunEnqueued",
+                actor_id=actor_id,
+                occurred_at=decision_at,
+                details={
+                    "MaxAttempts": planning_run_payload.MaxAttempts,
+                    "RetryDelaySeconds": planning_run_payload.RetryDelaySeconds,
+                },
+            )
             order_commitment_evaluations[evaluation_id] = updated
             _append_order_commitment_event(
                 evaluation=updated,
@@ -3586,6 +3761,7 @@ def create_app(
                     "AcceptedPromiseAt": updated["Decision"]["AcceptedPromiseAt"],
                     "CcrRiskAcknowledged": payload.CcrRiskAcknowledged,
                     "MaterialRiskAcknowledged": payload.MaterialRiskAcknowledged,
+                    "PlanningRunID": planning_run_id,
                 },
             )
             return {
@@ -3605,7 +3781,8 @@ def create_app(
                     ),
                     "Status": "AcceptedPendingFormalSchedule",
                     "ExternalOrderAcceptance": "NotPerformed",
-                    "PlanningRunCreation": "NotPerformed",
+                    "PlanningRunCreation": "Queued",
+                    "PlanningRunID": planning_run_id,
                     "ProductionMutation": "NotPerformed",
                 },
             }
@@ -11608,6 +11785,76 @@ def _pending_planning_run(
             }
         ],
     }
+
+
+def _mto_acceptance_planning_run_payload(
+    *,
+    evaluation: Mapping[str, object],
+    baseline_run: Mapping[str, object],
+    planning_run_id: str,
+    reservation_batch_id: str,
+    requested_by: str,
+    requested_at: datetime,
+) -> PlanningRunPayload:
+    basis = evaluation["Basis"]
+    material = evaluation["MaterialAssessment"]
+    if not isinstance(basis, Mapping) or not isinstance(material, Mapping):
+        raise OrderCommitmentConflict(
+            "Accepted order commitment planning basis is invalid."
+        )
+    operational_snapshot_id = material.get("OperationalStateSnapshotID") or basis.get(
+        "SelectedOperationalStateSnapshotID"
+    )
+    if not isinstance(operational_snapshot_id, str) or not operational_snapshot_id:
+        raise OrderCommitmentConflict(
+            "Accepted order commitment operational snapshot is missing."
+        )
+    setup_rows = baseline_run.get("SetupTransitions", [])
+    setup_transitions = (
+        [SetupTransitionPayload(**row) for row in setup_rows]
+        if isinstance(setup_rows, list)
+        else []
+    )
+    order = evaluation["Order"]
+    if not isinstance(order, Mapping):
+        raise OrderCommitmentConflict(
+            "Accepted order commitment order identity is invalid."
+        )
+    return PlanningRunPayload(
+        RunID=planning_run_id,
+        ProblemID=(
+            f"MTO-{order.get('OrderID')}-{order.get('DemandLineID')}"
+        ),
+        MasterDataVersionID=str(basis["MasterDataVersionID"]),
+        OperationalStateSnapshotID=operational_snapshot_id,
+        OperatingModelConfigurationID=(
+            str(basis["OperatingModelConfigurationID"])
+            if basis.get("OperatingModelConfigurationID") is not None
+            else None
+        ),
+        SourceRunID=str(basis["BaselinePlanningRunID"]),
+        ReleasePolicyVersionID=(
+            str(basis["ReleasePolicyVersionID"])
+            if basis.get("ReleasePolicyVersionID") is not None
+            else None
+        ),
+        ScheduleStartAt=requested_at,
+        TimeBufferMinutes=int(basis.get("TimeBufferMinutes", 0)),
+        FreezeWindowMinutes=int(baseline_run.get("FreezeWindowMinutes", 0)),
+        ObjectiveStrategyID=str(
+            baseline_run.get(
+                "ObjectiveStrategyID", "v1_delivery_flow_bottleneck"
+            )
+        ),
+        SetupTransitions=setup_transitions,
+        SolverBackendID=ACTIVE_SOLVER_BACKEND_ID,
+        TimeLimitSeconds=int(baseline_run.get("TimeLimitSeconds", 300)),
+        MaxAttempts=int(baseline_run.get("MaxAttempts", 3)),
+        RetryDelaySeconds=int(baseline_run.get("RetryDelaySeconds", 60)),
+        PlanningReservationBatchIDs=[reservation_batch_id],
+        RequestedBy=requested_by,
+        RequestedAt=requested_at,
+    )
 
 
 def _planning_run_payload_from_record(

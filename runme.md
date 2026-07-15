@@ -4,24 +4,9 @@
 
 ## 1. 选择要启动的版本
 
-项目使用 Git worktree 并行开发。启动前必须先选择源码目录；否则可能从 `master` 启动旧版本。
+项目使用 Git worktree 并行开发。启动前必须先选择源码目录；否则可能从非预期分支启动应用。
 
-### 1.1 当前开发版（P1，日常检查使用）
-
-```powershell
-$SDBR_ROOT = "D:\Documents\SDBR\.worktrees\p1-integration"
-Set-Location $SDBR_ROOT
-git branch --show-current
-git rev-parse --short HEAD
-```
-
-当前预期分支是：
-
-```text
-codex/p1-mto-ddmrp-integration
-```
-
-### 1.2 稳定主线（只检查 master 时使用）
+### 1.1 当前集成版（master，日常检查使用）
 
 ```powershell
 $SDBR_ROOT = "D:\Documents\SDBR"
@@ -30,7 +15,22 @@ git branch --show-current
 git rev-parse --short HEAD
 ```
 
-当前预期分支是 `master`。后续所有命令都在已选择的 `$SDBR_ROOT` 下执行。
+当前预期分支是：
+
+```text
+master
+```
+
+### 1.2 P1 集成 worktree（继续独立开发时使用）
+
+```powershell
+$SDBR_ROOT = "D:\Documents\SDBR\.worktrees\p1-integration"
+Set-Location $SDBR_ROOT
+git branch --show-current
+git rev-parse --short HEAD
+```
+
+当前预期分支是 `codex/p1-mto-ddmrp-integration`。后续所有命令都在已选择的 `$SDBR_ROOT` 下执行。MTO、DDMRP 与 P1 集成功能已于 2026-07-16 合并到本地主线，日常检查应优先选择 `master`。
 
 > 注意：不要只打开 worktree 中的 `runme.md` 后直接复制旧的绝对路径。应先执行本节并核对终端打印的分支和提交号。
 
@@ -240,5 +240,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
 Get-Content (Join-Path $SDBR_ROOT "uvicorn.err.log") -Tail 30 -ErrorAction SilentlyContinue
 ```
 
-当前开发功能（MTO 订单承诺、DDMRP 补货闭环及其最新兼容修正）应从 `p1-integration` worktree 启动。`master` 仅代表尚未合并这些开发提交的稳定主线。
+当前功能（MTO 订单承诺、DDMRP 补货闭环及其最新兼容修正）已经合并到本地 `master`。日常检查从主目录启动；只有继续在 P1 分支上做独立开发时，才从 `p1-integration` worktree 启动。
 

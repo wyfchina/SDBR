@@ -58,12 +58,84 @@ def test_ddmrp_net_flow_uses_on_hand_supply_and_qualified_demand():
 
     line = result["Lines"][0]
     assert line["QualifiedDemandQty"] == 45
-    assert line["QualifiedOpenSupplyQty"] == 25
-    assert line["NetFlowPosition"] == 30
-    assert line["PlanningStatus"] == "Red"
+    assert line["QualifiedOpenSupplyQty"] == 85
+    assert line["NetFlowPosition"] == 90
+    assert line["PlanningStatus"] == "Green"
     assert line["ExecutionStatus"] == "Yellow"
-    assert line["SuggestedReplenishmentQty"] == 90
-    assert result["Summary"]["ReplenishmentSuggestionCount"] == 1
+    assert line["SuggestedReplenishmentQty"] == 0
+    assert result["Summary"]["ReplenishmentSuggestionCount"] == 0
+
+
+def test_be_ddmrp_003_trusts_governed_spike_beyond_plain_dlt_window():
+    now = datetime(2026, 6, 25, 9, 0, tzinfo=timezone.utc)
+
+    result = evaluate_ddmrp_net_flow(
+        decoupling_points=[
+            DecouplingPoint("RM-CHIP", "MAIN", "BP-HIGH", dlt_minutes=60)
+        ],
+        stock_buffers=[
+            InventoryBufferPolicy("RM-CHIP", "MAIN", 100, 20, 30, 50)
+        ],
+        demand_signals=[
+            DemandSignal(
+                "RM-CHIP",
+                "MAIN",
+                40,
+                now + timedelta(days=3),
+                is_qualified_spike=True,
+            )
+        ],
+        open_supply=[],
+        evaluated_at=now,
+    )
+
+    line = result["Lines"][0]
+    assert line["QualifiedDemandQty"] == 40
+    assert line["NetFlowPosition"] == 60
+
+
+def test_be_ddmrp_004_returns_pdf_planning_and_execution_priorities():
+    now = datetime(2026, 6, 25, 9, 0, tzinfo=timezone.utc)
+
+    result = evaluate_ddmrp_net_flow(
+        decoupling_points=[
+            DecouplingPoint("RM-CHIP", "MAIN", "BP-HIGH", dlt_minutes=60)
+        ],
+        stock_buffers=[
+            InventoryBufferPolicy("RM-CHIP", "MAIN", 30, 20, 30, 50)
+        ],
+        demand_signals=[],
+        open_supply=[OpenSupply("RM-CHIP", "MAIN", 20, now + timedelta(days=3))],
+        evaluated_at=now,
+    )
+
+    line = result["Lines"][0]
+    assert line["NetFlowPosition"] == 50
+    assert line["PlanningPriorityPercent"] == pytest.approx(50.0)
+    assert line["ExecutionPriorityPercent"] == pytest.approx(150.0)
+
+
+def test_be_ddmrp_003_does_not_double_count_received_supply():
+    now = datetime(2026, 6, 25, 9, 0, tzinfo=timezone.utc)
+
+    result = evaluate_ddmrp_net_flow(
+        decoupling_points=[
+            DecouplingPoint("RM-CHIP", "MAIN", "BP-HIGH", dlt_minutes=60)
+        ],
+        stock_buffers=[
+            InventoryBufferPolicy("RM-CHIP", "MAIN", 30, 20, 30, 50)
+        ],
+        demand_signals=[],
+        open_supply=[
+            OpenSupply("RM-CHIP", "MAIN", 20, now, status="Received"),
+            OpenSupply("RM-CHIP", "MAIN", 15, now, status="InTransit"),
+        ],
+        evaluated_at=now,
+    )
+
+    line = result["Lines"][0]
+    assert line["QualifiedOpenSupplyQty"] == 15
+    assert line["NetFlowPosition"] == 45
 
 
 def test_ddmrp_above_green_does_not_replenish():
@@ -143,4 +215,25 @@ def test_ddmrp_rejects_naive_evaluation_time():
             demand_signals=[],
             open_supply=[],
             evaluated_at=datetime(2026, 6, 25, 9, 0),
+        )
+
+
+def test_be_ddmrp_006_standalone_evaluation_rejects_mixed_component_uom():
+    now = datetime(2026, 6, 25, 9, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="UnitOfMeasure reference mismatch"):
+        evaluate_ddmrp_net_flow(
+            decoupling_points=[
+                DecouplingPoint("RM-CHIP", "MAIN", "BP-HIGH", dlt_minutes=60)
+            ],
+            stock_buffers=[
+                InventoryBufferPolicy("RM-CHIP", "MAIN", 30, 20, 30, 50)
+            ],
+            demand_signals=[
+                DemandSignal("RM-CHIP", "MAIN", 5, now, uom="EA")
+            ],
+            open_supply=[
+                OpenSupply("RM-CHIP", "MAIN", 5, now, uom="KG")
+            ],
+            evaluated_at=now,
         )

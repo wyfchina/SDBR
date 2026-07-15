@@ -191,21 +191,15 @@ def _evaluate_point(
     evaluated_at: datetime,
     issues: list[DdmrpIssue],
 ) -> dict[str, object]:
-    window_end = evaluated_at + timedelta(minutes=point.dlt_minutes)
     qualified_demands = [
         signal
         for signal in demand_signals
-        if _is_qualified_demand(signal=signal, evaluated_at=evaluated_at, window_end=window_end)
+        if _is_qualified_demand(signal=signal, evaluated_at=evaluated_at)
     ]
     qualified_supply = [
         supply
         for supply in open_supply
-        if _is_qualified_supply(
-            supply=supply,
-            evaluated_at=evaluated_at,
-            window_end=window_end,
-            issues=issues,
-        )
+        if _is_qualified_supply(supply=supply, issues=issues)
     ]
     qualified_demand_qty = sum(item.demand_qty for item in qualified_demands)
     qualified_supply_qty = sum(item.supply_qty for item in qualified_supply)
@@ -215,6 +209,8 @@ def _evaluate_point(
     net_flow_position = buffer.on_hand_qty + qualified_supply_qty - qualified_demand_qty
     planning_status = _buffer_status(net_flow_position, top_of_red, top_of_yellow, top_of_green)
     execution_status = _buffer_status(buffer.on_hand_qty, top_of_red, top_of_yellow, top_of_green)
+    planning_priority_percent = _priority_percent(net_flow_position, top_of_green)
+    execution_priority_percent = _priority_percent(buffer.on_hand_qty, top_of_red)
     raw_replenishment_qty = (
         max(0.0, top_of_green - net_flow_position)
         if planning_status in {"Red", "Yellow"}
@@ -240,6 +236,8 @@ def _evaluate_point(
         "TopOfGreen": top_of_green,
         "PlanningStatus": planning_status,
         "ExecutionStatus": execution_status,
+        "PlanningPriorityPercent": planning_priority_percent,
+        "ExecutionPriorityPercent": execution_priority_percent,
         "SuggestedReplenishmentQty": suggested_replenishment_qty,
         "RecommendedAction": "Replenish" if suggested_replenishment_qty > 0 else "Monitor",
         "DemandComponents": [
@@ -293,6 +291,25 @@ def _validate_inputs(
             raise ValueError(f"Open supply {supply.item_id}/{supply.location_id} has negative supply.")
         if supply.expected_at is not None:
             _require_aware(supply.expected_at, "Open supply expected time")
+    _validate_component_uoms(demand_signals, open_supply)
+
+
+def _validate_component_uoms(
+    demand_signals: list[DemandSignal],
+    open_supply: list[OpenSupply],
+) -> None:
+    expected_by_key: dict[tuple[str, str], str] = {}
+    for source, items in (("DemandSignal", demand_signals), ("OpenSupply", open_supply)):
+        for item in items:
+            if item.uom is None:
+                continue
+            key = (item.item_id, item.location_id)
+            expected = expected_by_key.setdefault(key, item.uom)
+            if item.uom != expected:
+                raise ValueError(
+                    f"UnitOfMeasure reference mismatch for {key[0]}/{key[1]}: "
+                    f"expected {expected}, but {source} uses {item.uom}."
+                )
 
 
 def _require_aware(value: datetime, label: str) -> None:
@@ -304,24 +321,19 @@ def _is_qualified_demand(
     *,
     signal: DemandSignal,
     evaluated_at: datetime,
-    window_end: datetime,
 ) -> bool:
     due_at = signal.demand_due_at.astimezone(evaluated_at.tzinfo)
     day_start = datetime.combine(evaluated_at.date(), time.min, tzinfo=evaluated_at.tzinfo)
     day_end = day_start + timedelta(days=1)
-    return due_at < day_start or day_start <= due_at < day_end or (
-        signal.is_qualified_spike and due_at <= window_end
-    )
+    return due_at < day_start or day_start <= due_at < day_end or signal.is_qualified_spike
 
 
 def _is_qualified_supply(
     *,
     supply: OpenSupply,
-    evaluated_at: datetime,
-    window_end: datetime,
     issues: list[DdmrpIssue],
 ) -> bool:
-    if supply.status in {"Cancelled", "Closed", "Completed"}:
+    if supply.status in {"Cancelled", "Closed", "Completed", "Received"}:
         return False
     if supply.expected_at is None:
         issues.append(
@@ -334,8 +346,13 @@ def _is_qualified_supply(
             )
         )
         return False
-    expected_at = supply.expected_at.astimezone(evaluated_at.tzinfo)
-    return expected_at <= window_end
+    return True
+
+
+def _priority_percent(numerator: float, denominator: float) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator * 100
 
 
 def _rounded_replenishment_qty(

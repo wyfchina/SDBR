@@ -2,11 +2,37 @@
 
 本文档记录本项目在 Windows / PowerShell 下的常用检查、测试和启动命令。
 
-## 1. 进入项目目录
+## 1. 选择要启动的版本
+
+项目使用 Git worktree 并行开发。启动前必须先选择源码目录；否则可能从 `master` 启动旧版本。
+
+### 1.1 当前开发版（P1，日常检查使用）
 
 ```powershell
-cd D:\Documents\SDBR
+$SDBR_ROOT = "D:\Documents\SDBR\.worktrees\p1-integration"
+Set-Location $SDBR_ROOT
+git branch --show-current
+git rev-parse --short HEAD
 ```
+
+当前预期分支是：
+
+```text
+codex/p1-mto-ddmrp-integration
+```
+
+### 1.2 稳定主线（只检查 master 时使用）
+
+```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
+git branch --show-current
+git rev-parse --short HEAD
+```
+
+当前预期分支是 `master`。后续所有命令都在已选择的 `$SDBR_ROOT` 下执行。
+
+> 注意：不要只打开 worktree 中的 `runme.md` 后直接复制旧的绝对路径。应先执行本节并核对终端打印的分支和提交号。
 
 ## 2. 安装依赖
 
@@ -71,6 +97,7 @@ data\test\workbench-state.db
 前台启动：
 
 ```powershell
+$env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "test"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
 ```
@@ -90,15 +117,25 @@ Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:8765/planner/workbench/
 ## 6. 后台启动测试系统服务
 
 ```powershell
+$env:SDBR_ENVIRONMENT = "test"
+$env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
+$stdoutLog = Join-Path $SDBR_ROOT "uvicorn.out.log"
+$stderrLog = Join-Path $SDBR_ROOT "uvicorn.err.log"
+
+$branch = git -C $SDBR_ROOT branch --show-current
+$commit = git -C $SDBR_ROOT rev-parse --short HEAD
+Write-Host "Starting SDBR from $SDBR_ROOT"
+Write-Host "Branch: $branch  Commit: $commit"
+
 $processIds = (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue).OwningProcess | Sort-Object -Unique
 foreach ($processId in $processIds) { Stop-Process -Id $processId -Force }
 
 Start-Process -WindowStyle Hidden `
   -FilePath python `
   -ArgumentList @("-m", "uvicorn", "sdbr.api:app", "--host", "127.0.0.1", "--port", "8765") `
-  -WorkingDirectory "D:\Documents\SDBR" `
-  -RedirectStandardOutput "D:\Documents\SDBR\uvicorn.out.log" `
-  -RedirectStandardError "D:\Documents\SDBR\uvicorn.err.log"
+  -WorkingDirectory $SDBR_ROOT `
+  -RedirectStandardOutput $stdoutLog `
+  -RedirectStandardError $stderrLog
 
 Start-Sleep -Seconds 2
 (Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:8765/planner/workbench -TimeoutSec 5).StatusCode
@@ -120,6 +157,7 @@ data\production\workbench-state.db
 ```
 
 ```powershell
+$env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\production\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "production"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8766
 ```
@@ -136,7 +174,7 @@ http://127.0.0.1:8766/planner/workbench
 
 ```powershell
 $env:SDBR_ENVIRONMENT = "test"
-$env:SDBR_WORKBENCH_DB_PATH = "D:\Documents\SDBR\data\test\workbench-state.db"
+$env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
 ```
 
@@ -189,4 +227,18 @@ git status --short
 ```
 
 `nofinish\` 是临时目录，不需要跟踪或提交。
+
+## 13. 启动版本核对
+
+页面内容与预期不一致时，先执行以下命令，不要先重置测试数据：
+
+```powershell
+Write-Host "Source root: $SDBR_ROOT"
+git -C $SDBR_ROOT branch --show-current
+git -C $SDBR_ROOT rev-parse --short HEAD
+Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+Get-Content (Join-Path $SDBR_ROOT "uvicorn.err.log") -Tail 30 -ErrorAction SilentlyContinue
+```
+
+当前开发功能（MTO 订单承诺、DDMRP 补货闭环及其最新兼容修正）应从 `p1-integration` worktree 启动。`master` 仅代表尚未合并这些开发提交的稳定主线。
 

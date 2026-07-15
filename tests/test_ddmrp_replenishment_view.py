@@ -114,6 +114,58 @@ def test_be_ddmrp_007_view_exposes_null_target_and_business_gate_codes() -> None
     assert row["OperationalActionAllowed"] is False
 
 
+def test_be_ddmrp_004_view_exposes_pdf_priority_metrics() -> None:
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+
+    row = _build(**_ledgers(write_set))["Rows"][0]
+
+    assert row["PlanningPriorityPercent"] == 0.0
+    assert row["ExecutionPriorityPercent"] == 50.0
+    assert row["BufferPercent"] == row["PlanningPriorityPercent"]
+
+
+def test_be_ddmrp_004_view_derives_priority_metrics_for_legacy_evaluation_rows() -> None:
+    from sdbr.ddmrp_replenishment import canonical_fingerprint
+
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+    ledgers = _ledgers(write_set)
+    legacy_row = next(iter(ledgers["evaluation_rows"].values()))
+    legacy_row.pop("PlanningPriorityPercent")
+    legacy_row.pop("ExecutionPriorityPercent")
+    legacy_row["EvaluationRowFingerprint"] = canonical_fingerprint({
+        key: value for key, value in legacy_row.items()
+        if key != "EvaluationRowFingerprint"
+    })
+
+    row = _build(**ledgers)["Rows"][0]
+
+    assert row["PlanningPriorityPercent"] == 0.0
+    assert row["ExecutionPriorityPercent"] == 50.0
+    assert row["BufferPercent"] == row["PlanningPriorityPercent"]
+
+
+def test_be_ddmrp_004_view_rejects_tampered_legacy_evaluation_row() -> None:
+    from sdbr.ddmrp_replenishment import DdmrpReplenishmentConflict
+
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+    ledgers = _ledgers(write_set)
+    legacy_row = next(iter(ledgers["evaluation_rows"].values()))
+    legacy_row.pop("PlanningPriorityPercent")
+    legacy_row.pop("ExecutionPriorityPercent")
+
+    with pytest.raises(
+        DdmrpReplenishmentConflict,
+        match="evaluation row fingerprint mismatch",
+    ):
+        _build(**ledgers)
+
+
 def test_be_ddmrp_007_view_never_exposes_frozen_payload_or_evidence_rows() -> None:
     write_set = _prepare_evaluation()
 

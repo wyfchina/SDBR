@@ -297,6 +297,12 @@ def evaluate_ddmrp_runtime_signals_from_package(
         (str(item["ItemID"]), str(item["LocationID"])): item
         for item in runtime.get("InventoryPositions", [])
     }
+    _validate_ddmrp_runtime_uom_references(
+        ddmrp_config=ddmrp_config,
+        runtime=runtime,
+        buffer_by_id=buffer_by_id,
+        inventory_by_key=inventory_by_key,
+    )
     decoupling_points: list[DecouplingPoint] = []
     buffers: list[InventoryBufferPolicy] = []
     for point in ddmrp_config.get("DecouplingPoints", []):
@@ -383,6 +389,63 @@ def evaluate_ddmrp_runtime_signals_from_package(
         "settings are consumed as frozen read-only inputs."
     )
     return result
+
+
+def _validate_ddmrp_runtime_uom_references(
+    *,
+    ddmrp_config: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    buffer_by_id: Mapping[str, Mapping[str, Any]],
+    inventory_by_key: Mapping[tuple[str, str], Mapping[str, Any]],
+) -> None:
+    expected_uom_by_key: dict[tuple[str, str], str] = {}
+    for point in ddmrp_config.get("DecouplingPoints", []):
+        key = (str(point["ItemID"]), str(point["LocationID"]))
+        inventory = inventory_by_key.get(key)
+        profile = buffer_by_id.get(str(point["BufferProfileID"]))
+        if inventory is None or profile is None:
+            continue
+        inventory_uom = str(inventory["UnitOfMeasure"])
+        profile_uom = str(profile["UnitOfMeasure"])
+        if profile_uom != inventory_uom:
+            _raise_uom_reference_error(
+                key=key,
+                expected_uom=inventory_uom,
+                actual_uom=profile_uom,
+                source="StockBufferProfile",
+            )
+        expected_uom_by_key[key] = inventory_uom
+
+    for collection_name in ("DemandSignals", "OpenSupplySignals"):
+        for row in runtime.get(collection_name, []):
+            key = (str(row["ItemID"]), str(row["LocationID"]))
+            expected_uom = expected_uom_by_key.get(key)
+            if expected_uom is None:
+                continue
+            actual_uom = str(row["UnitOfMeasure"])
+            if actual_uom != expected_uom:
+                _raise_uom_reference_error(
+                    key=key,
+                    expected_uom=expected_uom,
+                    actual_uom=actual_uom,
+                    source=collection_name,
+                )
+
+
+def _raise_uom_reference_error(
+    *,
+    key: tuple[str, str],
+    expected_uom: str,
+    actual_uom: str,
+    source: str,
+) -> None:
+    raise DdmrpRuntimeAuthorityError(
+        "REFERENCE_NOT_FOUND",
+        (
+            f"UnitOfMeasure reference mismatch for {key[0]}/{key[1]}: "
+            f"inventory uses {expected_uom}, but {source} uses {actual_uom}."
+        ),
+    )
 
 
 def build_bounded_scheduling_input_from_package(

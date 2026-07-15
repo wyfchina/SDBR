@@ -1343,6 +1343,8 @@ def _ddmrp_read_only_replenishment_runtime_line(
         "TopOfGreen": 100.0,
         "PlanningStatus": planning_status,
         "ExecutionStatus": planning_status,
+        "PlanningPriorityPercent": net_flow_position / 100.0 * 100.0,
+        "ExecutionPriorityPercent": net_flow_position / 20.0 * 100.0,
         "SuggestedReplenishmentQty": suggested_replenishment_qty,
         "RecommendedAction": (
             "Replenish" if suggested_replenishment_qty else "Monitor"

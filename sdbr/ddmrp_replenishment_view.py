@@ -35,7 +35,8 @@ SUMMARY_VIEW_FIELDS = (
 )
 ROW_VIEW_FIELDS = (
     "RowKey", "ItemID", "LocationID", "Uom", "PlanningStatus", "ExecutionStatus",
-    "BufferPercent", "QualifiedOnHandQty", "PhysicalOnHandQty",
+    "BufferPercent", "PlanningPriorityPercent", "ExecutionPriorityPercent",
+    "QualifiedOnHandQty", "PhysicalOnHandQty",
     "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualifiedOpenSupplyQty",
     "QualifiedDemandQty", "NetFlowPosition", "TopOfRed", "TopOfYellow",
     "TopOfGreen", "SuggestedReplenishmentQty", "StandardTargetReceiptAt",
@@ -554,15 +555,21 @@ def _project_row(
     recommendation = (
         recommendations[str(recommendation_id)] if recommendation_id is not None else None
     )
-    top_of_green = row["TopOfGreen"]
-    buffer_percent = (
-        (row["NetFlowPosition"] / top_of_green) * 100
-        if isinstance(top_of_green, (int, float)) and top_of_green > 0
-        else None
+    planning_priority_percent = (
+        row["PlanningPriorityPercent"]
+        if "PlanningPriorityPercent" in row
+        else _legacy_priority_percent(row["NetFlowPosition"], row["TopOfGreen"])
+    )
+    execution_priority_percent = (
+        row["ExecutionPriorityPercent"]
+        if "ExecutionPriorityPercent" in row
+        else _legacy_priority_percent(row["QualifiedOnHandQty"], row["TopOfRed"])
     )
     values = {
         **row,
-        "BufferPercent": buffer_percent,
+        "BufferPercent": planning_priority_percent,
+        "PlanningPriorityPercent": planning_priority_percent,
+        "ExecutionPriorityPercent": execution_priority_percent,
         "RecommendationVersion": (
             recommendation["RecommendationVersion"] if recommendation else None
         ),
@@ -584,6 +591,19 @@ def _project_row(
         "GateCodes": [_project(gate, GATE_FIELDS) for gate in row["GateCodes"]],
     }
     return _project(values, ROW_VIEW_FIELDS)
+
+
+def _legacy_priority_percent(numerator: object, denominator: object) -> float | None:
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in (numerator, denominator)
+    ):
+        raise DdmrpReplenishmentConflict(
+            "Legacy DDMRP priority source values must be numeric."
+        )
+    if denominator <= 0:
+        return None
+    return numerator / denominator * 100
 
 
 def _project_active_graph(

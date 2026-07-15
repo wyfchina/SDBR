@@ -371,6 +371,88 @@ def test_be_ddmrp_007_rejects_runtime_spike_without_accepted_threshold_authority
     assert error.value.status == "DdmrpRuntimeAuthorityError"
 
 
+def test_be_ddmrp_003_keeps_ddsop_qualified_spike_beyond_plain_dlt() -> None:
+    message = _runtime_message(status="AcceptedForBoundedPlanning")
+    demand = message["Payload"]["RuntimeEvidenceSnapshot"]["DemandSignals"][0]
+    demand.update(
+        {
+            "DueAt": "2026-07-31T09:00:00+08:00",
+            "DemandType": "SpikeCandidate",
+            "SpikeQualificationStatus": "QualifiedByDDSOP",
+            "SpikeQualificationMode": "ProvidedByDDSOP",
+            "SpikeQualificationEvidenceID": "DDSOP-SPIKE-EVIDENCE-001",
+        }
+    )
+    accepted_config = _accepted_configuration_for(message)
+    processed = process_runtime_planning_input_message(
+        message,
+        received_at=RECEIVED_AT,
+        accepted_configurations={
+            accepted_config["Payload"]["OperatingModelConfigurationID"]: accepted_config
+        },
+        contract_root=DEFAULT_CONTRACT_ROOT,
+    )
+    assert processed.processing_status == "Accepted"
+    assert processed.package_record is not None
+
+    result = evaluate_ddmrp_runtime_signals_from_package(
+        processed.package_record,
+        accepted_config,
+        evaluated_at=datetime.fromisoformat("2026-06-30T09:00:00+08:00"),
+    )
+
+    assert result["Lines"][0]["QualifiedDemandQty"] == demand["Quantity"]
+
+
+@pytest.mark.parametrize("mismatch_source", ["buffer", "demand", "supply"])
+def test_be_ddmrp_006_rejects_incompatible_item_location_uom(
+    mismatch_source: str,
+) -> None:
+    from sdbr.ddsop_runtime_planning_input import DdmrpRuntimeAuthorityError
+
+    message = _runtime_message(status="AcceptedForBoundedPlanning")
+    accepted_config = _accepted_configuration_for(message)
+    if mismatch_source == "buffer":
+        accepted_config["Payload"]["DDMRPConfiguration"]["StockBufferProfiles"][0][
+            "UnitOfMeasure"
+        ] = "KG"
+        accepted_config["Payload"]["Fingerprint"] = canonical_operating_model_fingerprint(
+            accepted_config["Payload"]
+        )
+        message["Payload"]["FrozenDdsopConfiguration"]["OperatingModelFingerprint"] = (
+            accepted_config["Payload"]["Fingerprint"]
+        )
+    elif mismatch_source == "demand":
+        message["Payload"]["RuntimeEvidenceSnapshot"]["DemandSignals"][0][
+            "UnitOfMeasure"
+        ] = "KG"
+    else:
+        message["Payload"]["RuntimeEvidenceSnapshot"]["OpenSupplySignals"][0][
+            "UnitOfMeasure"
+        ] = "KG"
+
+    processed = process_runtime_planning_input_message(
+        message,
+        received_at=RECEIVED_AT,
+        accepted_configurations={
+            accepted_config["Payload"]["OperatingModelConfigurationID"]: accepted_config
+        },
+        contract_root=DEFAULT_CONTRACT_ROOT,
+    )
+    assert processed.processing_status == "Accepted"
+    assert processed.package_record is not None
+
+    with pytest.raises(DdmrpRuntimeAuthorityError) as error:
+        evaluate_ddmrp_runtime_signals_from_package(
+            processed.package_record,
+            accepted_config,
+            evaluated_at=datetime.fromisoformat("2026-06-30T09:00:00+08:00"),
+        )
+
+    assert error.value.code == "REFERENCE_NOT_FOUND"
+    assert "UnitOfMeasure" in str(error.value)
+
+
 def test_bounded_scheduling_adapter_uses_explicit_executable_rows_only() -> None:
     message = _runtime_message(status="AcceptedForBoundedPlanning")
     package = _accepted_result(message).package_record

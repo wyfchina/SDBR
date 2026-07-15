@@ -115,10 +115,15 @@ EVALUATION_ROW_FIELDS = (
     "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualityState",
     "QualifiedOpenSupplyQty", "QualifiedDemandQty", "NetFlowPosition", "TopOfRed",
     "TopOfYellow", "TopOfGreen", "PlanningStatus", "ExecutionStatus",
+    "PlanningPriorityPercent", "ExecutionPriorityPercent",
     "SuggestedReplenishmentQty", "RecommendedAction", "StandardTargetReceiptAt",
     "TargetStatusCode", "RecommendationID", "DemandComponents", "SupplyComponents",
     "GateCodes", "OperationalActionAllowed", "AuthoritySignatureFingerprint",
     "EvaluationRowFingerprint",
+)
+LEGACY_EVALUATION_ROW_FIELDS = tuple(
+    field for field in EVALUATION_ROW_FIELDS
+    if field not in {"PlanningPriorityPercent", "ExecutionPriorityPercent"}
 )
 REPLENISHMENT_CHAIN_FIELDS = (
     "LogicalReplenishmentID", "ItemID", "LocationID", "CycleNumber",
@@ -259,7 +264,8 @@ _RUNTIME_LINE_FIELDS = (
     "ItemID", "LocationID", "BufferProfileID", "DLTMinutes", "OnHandQty",
     "QualifiedOnHandQty", "QualifiedOpenSupplyQty", "QualifiedDemandQty",
     "NetFlowPosition", "TopOfRed", "TopOfYellow", "TopOfGreen", "PlanningStatus",
-    "ExecutionStatus", "SuggestedReplenishmentQty", "RecommendedAction",
+    "ExecutionStatus", "PlanningPriorityPercent", "ExecutionPriorityPercent",
+    "SuggestedReplenishmentQty", "RecommendedAction",
     "DemandComponents", "SupplyComponents", "PhysicalOnHandQty",
     "AuthorityAllocatedQty", "AuthorityAvailableQty", "QualityState", "Uom",
 )
@@ -982,6 +988,8 @@ def prepare_ddmrp_evaluation(
             "TopOfGreen": deepcopy(line["TopOfGreen"]),
             "PlanningStatus": planning_status,
             "ExecutionStatus": deepcopy(line["ExecutionStatus"]),
+            "PlanningPriorityPercent": deepcopy(line["PlanningPriorityPercent"]),
+            "ExecutionPriorityPercent": deepcopy(line["ExecutionPriorityPercent"]),
             "SuggestedReplenishmentQty": deepcopy(suggested_qty),
             "RecommendedAction": deepcopy(line["RecommendedAction"]),
             "StandardTargetReceiptAt": None,
@@ -2160,7 +2168,14 @@ def _validate_evaluation_run_authority_provenance(
 
 
 def _validate_evaluation_row_contract(row: Mapping[str, object]) -> None:
-    _require_exact_fields(row, EVALUATION_ROW_FIELDS, context="DDMRP evaluation row")
+    actual_fields = frozenset(row)
+    if actual_fields not in {
+        frozenset(EVALUATION_ROW_FIELDS),
+        frozenset(LEGACY_EVALUATION_ROW_FIELDS),
+    }:
+        _require_exact_fields(
+            row, EVALUATION_ROW_FIELDS, context="DDMRP evaluation row"
+        )
     for values, fields, context in (
         (row["DemandComponents"], DEMAND_COMPONENT_FIELDS, "demand component"),
         (row["SupplyComponents"], SUPPLY_COMPONENT_FIELDS, "supply component"),

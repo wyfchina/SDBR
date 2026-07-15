@@ -319,6 +319,16 @@ def test_be_ddmrp_007_red_yellow_create_blocked_versions_green_above_remain_moni
     )
 
 
+def test_be_ddmrp_004_persists_planning_and_execution_priorities() -> None:
+    write_set = _prepare_evaluation(
+        lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)]
+    )
+
+    row = write_set.evaluation_rows[0]
+    assert row["PlanningPriorityPercent"] == 0.0
+    assert row["ExecutionPriorityPercent"] == 50.0
+
+
 def test_be_ddmrp_007_reevaluation_reuses_logical_chain_and_increments_version() -> None:
     first = _prepare_evaluation(lines=[_runtime_line("ITEM-RED", "LOC", "Red", 70)])
     second = _prepare_evaluation(
@@ -1188,6 +1198,7 @@ def _runtime_line(
         "QualifiedOpenSupplyQty": 5.0, "QualifiedDemandQty": 15.0,
         "NetFlowPosition": 0.0, "TopOfRed": 20.0, "TopOfYellow": 50.0,
         "TopOfGreen": 100.0, "PlanningStatus": status, "ExecutionStatus": "Red",
+        "PlanningPriorityPercent": 0.0, "ExecutionPriorityPercent": 50.0,
         "SuggestedReplenishmentQty": suggested_qty,
         "RecommendedAction": "Replenish" if suggested_qty else "Monitor",
         "DemandComponents": [{

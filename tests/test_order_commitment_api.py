@@ -2832,6 +2832,141 @@ class TestOrderCommitmentApiAcceptance:
 class TestOrderCommitmentBrowserSequence:
     """UI-COMMIT-001 / BE-SDBR-010: reproducible public browser fixture."""
 
+    def test_business_scenarios_are_calculated_by_the_order_commitment_engine(
+        self,
+    ):
+        client, _, fixture = _order_commitment_client()
+        template = fixture["IntakePayloadTemplate"]
+        cases = {
+            "ON-TIME-REFERENCE": {
+                "Quantity": 1.0,
+                "RequiredQty": 5.0,
+                "CapacityStatus": "OnTime",
+                "MaterialStatus": "Feasible",
+                "ThresholdState": "ReferenceFallback",
+                "Recommendation": "PlannerConfirmationRequired",
+                "LoadBeforeMinutes": 180.0,
+                "LoadAfterMinutes": 240.0,
+                "LoadAfterPercent": 50.0,
+            },
+            "OVER-PROTECTION": {
+                "Quantity": 4.0,
+                "RequiredQty": 20.0,
+                "CapacityStatus": "OnTime",
+                "MaterialStatus": "Feasible",
+                "ThresholdState": "ReferenceFallback",
+                "Recommendation": "PlannerConfirmationRequired",
+                "LoadBeforeMinutes": 180.0,
+                "LoadAfterMinutes": 420.0,
+                "LoadAfterPercent": 87.5,
+            },
+            "LATER-SAFE-DATE": {
+                "Quantity": 6.0,
+                "RequiredQty": 30.0,
+                "CapacityStatus": "LaterSafeDate",
+                "MaterialStatus": "Feasible",
+                "ThresholdState": "ReferenceFallback",
+                "Recommendation": "PlannerConfirmationRequired",
+            },
+            "MATERIAL-SHORTAGE": {
+                "Quantity": 1.0,
+                "RequiredQty": 120.0,
+                "CapacityStatus": "OnTime",
+                "MaterialStatus": "Shortage",
+                "ThresholdState": "ReferenceFallback",
+                "Recommendation": "DoNotRecommendAccept",
+            },
+            "MATERIAL-SKIPPED": {
+                "Quantity": 1.0,
+                "RequiredQty": 5.0,
+                "CapacityStatus": "OnTime",
+                "MaterialStatus": "SkippedPendingConfirmation",
+                "ThresholdState": "ReferenceFallback",
+                "Recommendation": "PlannerConfirmationRequired",
+            },
+        }
+        evaluations = {}
+        for suffix, expected in cases.items():
+            payload = deepcopy(template)
+            payload["OrderID"] = f"TST-MTO-SO-{suffix}"
+            payload["TraceID"] = f"TRACE-TST-MTO-{suffix}"
+            payload["Quantity"] = expected["Quantity"]
+            payload["MaterialRequirements"][0]["RequiredQty"] = expected[
+                "RequiredQty"
+            ]
+            payload["MaterialRequirements"][0]["RequirementLineID"] = (
+                f"{payload['OrderID']}:10:TST-MTO-RM-1"
+            )
+            intake = client.post(
+                "/planner/workbench/order-commitments/intake",
+                json=payload,
+                headers=_planner_headers(),
+            )
+            assert intake.status_code == 200
+            evaluations[suffix] = intake.json()["Data"]["Evaluation"]
+
+        skipped_id = evaluations["MATERIAL-SKIPPED"]["EvaluationID"]
+        skipped = client.post(
+            f"/planner/workbench/order-commitments/{skipped_id}/reevaluate",
+            json={
+                "RequestedBy": "planner-browser",
+                "OperationalStateSnapshotID": None,
+                "CheckMaterialAvailability": False,
+                "MaterialCheckSkipReason": (
+                    "Planner requested capacity-only MTO evaluation."
+                ),
+            },
+            headers=_planner_headers(),
+        )
+        assert skipped.status_code == 200
+        evaluations["MATERIAL-SKIPPED"] = skipped.json()["Data"]["Evaluation"]
+
+        for suffix, evaluation in tuple(evaluations.items()):
+            detail = client.get(
+                "/planner/workbench/order-commitments/"
+                f"{evaluation['EvaluationID']}",
+                headers=_planner_headers(),
+            )
+            assert detail.status_code == 200
+            evaluations[suffix] = detail.json()["Data"]
+
+        for suffix, expected in cases.items():
+            evaluation = evaluations[suffix]
+            shadow = evaluation["CapacityEvidence"]
+            material = evaluation["MaterialEvidence"]
+            recommendation = evaluation["Recommendation"]
+            assert shadow["Status"] == expected["CapacityStatus"]
+            assert material["Status"] == expected["MaterialStatus"]
+            assert recommendation["ThresholdState"] == expected[
+                "ThresholdState"
+            ]
+            assert recommendation["Decision"] == expected["Recommendation"]
+            if "LoadBeforeMinutes" in expected:
+                windows = shadow["SelectedAssessment"]["WindowAssessments"]
+                assert max(
+                    row["LoadBeforeMinutes"] for row in windows
+                ) == expected["LoadBeforeMinutes"]
+                assert max(
+                    row["LoadAfterMinutes"] for row in windows
+                ) == expected["LoadAfterMinutes"]
+                assert max(
+                    row["LoadAfterPercent"] for row in windows
+                ) == expected["LoadAfterPercent"]
+
+        later = evaluations["LATER-SAFE-DATE"]["CapacityEvidence"]
+        assert datetime.fromisoformat(
+            later["EarliestSafeAssessment"]["PromiseAt"]
+        ) > datetime.fromisoformat(
+            later["RequestedDateAssessment"]["PromiseAt"]
+        )
+        skipped_material = evaluations["MATERIAL-SKIPPED"][
+            "MaterialEvidence"
+        ]
+        assert skipped_material["CheckEnabled"] is False
+        assert skipped_material["SkipReason"] == (
+            "Planner requested capacity-only MTO evaluation."
+        )
+
     def test_public_sequence_creates_ordinary_skipped_accepted_and_stale_states(
         self,
     ):

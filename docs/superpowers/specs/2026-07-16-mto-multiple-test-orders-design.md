@@ -1,96 +1,96 @@
-# MTO Multiple Test Orders Design
+# MTO 多测试订单设计
 
-## Goal
+## 目标
 
-Provide multiple reproducible MTO order examples for the local test environment so planners can verify distinct order-commitment outcomes. The examples must use the existing order intake and evaluation APIs. Test data may be synthetic, but recommendation, capacity, material, and promise-date results must be calculated by the production evaluation logic.
+为本地测试环境提供多个可重复生成的 MTO 订单案例，使计划员能够验证不同的订单承诺结论。所有案例必须使用现有订单接收和评估 API。测试数据可以是构造数据，但推荐结果、产能结果、物料结果和承诺日期必须由正式评估逻辑计算产生。
 
-## Scope
+## 范围
 
-- Extend `scripts/seed_mto_order_commitment_browser.ps1`.
-- Document the script command and expected cases in `runme.md`.
-- Add automated tests for the seeded business outcomes.
-- Preserve the existing lifecycle examples for acceptance, rejection, stale evaluation, and material-check override.
-- Do not modify the MTO order-commitment algorithm, DDAE parameter semantics, production interfaces, or authoritative master data.
+- 扩展 `scripts/seed_mto_order_commitment_browser.ps1`。
+- 在 `runme.md` 中记录脚本命令和各案例的预期结果。
+- 为案例对应的业务结论增加自动化测试。
+- 保留现有的接受、拒绝、评估过期和跳过物料检查等流程案例。
+- 不修改 MTO 订单承诺算法、DDAE 参数语义、生产接口或权威主数据。
 
-## Existing Fixture Basis
+## 现有测试基础
 
-The current controlled MTO fixture provides:
+当前受控 MTO 测试数据提供：
 
-- One CCR resource with 480 available minutes in each test day.
-- 180 minutes of existing CCR planned load on the requested day.
-- A routing that consumes 60 CCR minutes and 30 non-CCR packaging minutes per unit.
-- 100 EA of qualified material availability for `TST-MTO-RM-1` at `TST-MAIN`.
-- An explicit 80 percent reference protection line because no accepted DDAE protection policy is frozen in this fixture.
+- 一个 CCR 资源，每个测试工作日有 480 分钟可用产能。
+- 请求日期当天已经存在 180 分钟 CCR 计划负荷。
+- 一条工艺路线，每生产 1 件产品占用 CCR 60 分钟，占用非 CCR 包装资源 30 分钟。
+- `TST-MAIN` 地点的 `TST-MTO-RM-1` 有 100 EA 合格可用量。
+- 由于测试数据中没有冻结已批准的 DDAE 保护策略，因此明确使用 80% 参考保护线。
 
-The 80 percent line is reference evidence only. It cannot produce an ordinary automatic acceptance recommendation. Any capacity-feasible result that depends on this fallback still requires a planner decision and CCR-risk acknowledgement.
+80% 保护线只属于参考证据，不能产生普通的自动接受建议。任何依赖该参考线得出的产能可行结果，仍然必须由计划员决定，并确认已复核 CCR 负荷风险。
 
-## Business Scenario Set
+## 业务案例集
 
-The script creates the following business examples before it performs any acceptance action, so accepted reservations cannot contaminate the other scenario evaluations.
+脚本必须在执行任何订单接受动作之前创建以下业务案例，避免已接受订单形成的产能预留影响其他案例的评估结果。
 
-| Scenario | Controlled input | Expected calculated outcome |
+| 案例 | 受控输入 | 预期计算结果 |
 | --- | --- | --- |
-| `TST-MTO-SO-ON-TIME-REFERENCE` | Quantity 1; 5 EA material requirement | Requested date is feasible. CCR load changes from 180 to 240 minutes, or 50 percent. Recommendation requires planner confirmation because the protection line is only the 80 percent fallback. |
-| `TST-MTO-SO-OVER-PROTECTION` | Quantity 4; 20 EA material requirement | Requested date remains capacity-feasible. CCR load changes from 180 to 420 minutes, or 87.5 percent. Recommendation requires planner confirmation because the reference protection line is exceeded. |
-| `TST-MTO-SO-LATER-SAFE-DATE` | Quantity 6; 30 EA material requirement | The requested-day window cannot contain the additional CCR load. The evaluator must calculate a later safe promise date. Under the fallback protection source, the later date still requires planner confirmation. |
-| `TST-MTO-SO-MATERIAL-SHORTAGE` | Quantity 1; 120 EA material requirement | Capacity remains assessable, but qualified material availability is insufficient. The recommendation is not to accept until material evidence changes. |
-| `TST-MTO-SO-MATERIAL-SKIPPED` | Quantity 1; 5 EA material requirement; planner re-evaluation with material check disabled and a reason | The result is capacity-only. Material remains pending confirmation, and the planner must make the final decision. No full material-feasibility claim is allowed. |
+| `TST-MTO-SO-ON-TIME-REFERENCE` | 数量 1；物料需求 5 EA | 请求日期可行。CCR 负荷由 180 分钟增加到 240 分钟，即 50%。由于保护线只是 80% 参考线，仍需计划员确认。 |
+| `TST-MTO-SO-OVER-PROTECTION` | 数量 4；物料需求 20 EA | 请求日期仍然满足产能。CCR 负荷由 180 分钟增加到 420 分钟，即 87.5%。由于超过参考保护线，需要计划员确认。 |
+| `TST-MTO-SO-LATER-SAFE-DATE` | 数量 6；物料需求 30 EA | 请求日期的产能窗口不能容纳新增 CCR 负荷。评估器必须计算一个更晚的安全承诺日期。由于仍使用参考保护线，采用较晚日期也需要计划员确认。 |
+| `TST-MTO-SO-MATERIAL-SHORTAGE` | 数量 1；物料需求 120 EA | 产能可以评估，但合格物料可用量不足。在物料证据发生变化前，系统暂不建议接受订单。 |
+| `TST-MTO-SO-MATERIAL-SKIPPED` | 数量 1；物料需求 5 EA；计划员重新评估时关闭物料检查并填写原因 | 结果只代表产能判断。物料仍处于待确认状态，必须由计划员作出最终决定，且系统不能声称订单已经通过完整物料可行性检查。 |
 
-Exact recommendation codes are asserted from the API response. The business-facing script report also records capacity status, threshold state, material status, selected promise date, CCR load before and after, and load percentage.
+脚本根据 API 实际返回值校验精确的推荐代码。面向业务人员的脚本报告同时记录产能状态、保护线状态、物料状态、选定承诺日期、CCR 负荷前后值和负荷百分比。
 
-## Lifecycle Scenario Set
+## 流程案例集
 
-The existing operational examples remain, but their names and output group identify them as lifecycle tests rather than distinct capacity or material cases:
+保留现有操作流程案例，但其名称和输出分组必须明确表明这些是流程测试，而不是不同的产能或物料业务场景：
 
-- planner accepts the requested date;
-- planner rejects the order;
-- a stale evaluation fingerprint is rejected with HTTP 409;
-- accepted order creates an internal CCR reservation and queued Planning Run;
-- external ERP/MES acceptance remains unexecuted.
+- 计划员接受请求日期；
+- 计划员拒绝订单；
+- 使用过期评估指纹进行决策时返回 HTTP 409；
+- 接受订单后建立内部 CCR 产能预留和排队中的 Planning Run；
+- 外部 ERP/MES 订单接受动作保持未执行。
 
-Where possible, lifecycle actions reuse a business scenario evaluation or create a separately named copy. They must not change the expected results already asserted for the five business scenarios.
+在不影响可读性的情况下，流程动作可以复用业务案例评估，也可以创建单独命名的副本。流程动作不得改变五个业务案例已经校验的预期结果。
 
-## Script Behavior
+## 脚本行为
 
-The PowerShell script will:
+PowerShell 脚本将执行以下步骤：
 
-1. Call `POST /planner/workbench/test-data/order-commitment/reset`.
-2. Clone only the controlled intake template inputs.
-3. Create all five business evaluations through `POST /planner/workbench/order-commitments/intake`.
-4. Re-evaluate the material-skipped case through the public re-evaluation endpoint with a non-empty skip reason.
-5. Compare every actual result with its expected business outcome.
-6. Stop with a non-zero error if any recommendation, capacity state, material state, threshold state, CCR load, or safe-date expectation differs.
-7. Create the separate lifecycle examples and verify their API outcomes.
-8. Write a local JSON evidence summary under `.tmp/`.
+1. 调用 `POST /planner/workbench/test-data/order-commitment/reset`。
+2. 只复制受控订单接收模板中的输入字段。
+3. 通过 `POST /planner/workbench/order-commitments/intake` 创建五个业务评估案例。
+4. 通过公开的重新评估接口处理“跳过物料检查”案例，并提供非空的跳过原因。
+5. 将每个案例的实际结果与预期业务结论进行比较。
+6. 如果任何推荐结果、产能状态、物料状态、保护线状态、CCR 负荷或安全日期不符合预期，脚本立即以非零状态退出。
+7. 创建独立的流程案例并校验对应 API 结果。
+8. 在 `.tmp/` 下写入本地 JSON 证据摘要。
 
-The script must not directly write the SQLite database or insert precomputed evaluation rows.
+脚本不得直接写入 SQLite 数据库，也不得插入预先计算好的评估结果。
 
-## Runbook Entry
+## 启动说明
 
-`runme.md` will include:
+`runme.md` 将增加以下内容：
 
-- prerequisite: the local service is running at `http://127.0.0.1:8765`;
-- the PowerShell command for seeding the MTO scenarios;
-- the output evidence path;
-- the order-commitment page route;
-- a concise expected-results table;
-- a warning that the reset endpoint clears existing MTO evaluation, reservation, and related test state.
+- 前提条件：本地服务正在 `http://127.0.0.1:8765` 运行；
+- 生成 MTO 多场景测试订单的 PowerShell 命令；
+- 输出证据文件路径；
+- 订单承诺页面路径；
+- 简明的预期结果表；
+- 明确提示：重置接口会清除现有 MTO 评估、产能预留和相关测试状态。
 
-## Verification
+## 验证
 
-Automated verification will cover:
+自动化验证覆盖：
 
-- all five scenario IDs exist;
-- each scenario returns the expected capacity, material, threshold, and recommendation outcome;
-- the safe-date scenario selects a date later than the requested date;
-- the skipped-material scenario records the skip reason and never claims material feasibility;
-- the accepted lifecycle scenario creates a CCR reservation and an internal queued Planning Run;
-- the stale decision remains rejected;
-- no production authority data is created or mutated.
+- 五个业务案例 ID 全部存在；
+- 每个案例返回预期的产能、物料、保护线和推荐结论；
+- 安全日期案例选择的日期晚于请求日期；
+- 跳过物料检查案例记录跳过原因，并且不声称物料可行；
+- 流程案例中的接受动作建立 CCR 产能预留和内部排队中的 Planning Run；
+- 使用过期评估进行决策时仍被拒绝；
+- 不创建或修改生产权威数据。
 
-## Specification Traceability
+## 规格追溯
 
-- Backend: `BE-SDBR-010` MTO order commitment evaluation and planner decision workflow.
-- UI: `UI-COMMIT-001` order commitment workbench and business-facing outcome display.
+- 后端：`BE-SDBR-010`，MTO 订单承诺评估和计划员决策流程。
+- 界面：`UI-COMMIT-001`，订单承诺工作台和业务结论展示。
 
-This change adds repeatable test evidence only. It does not change either capability boundary.
+本次变更只增加可重复执行的测试证据，不改变上述能力的业务边界。

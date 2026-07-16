@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 import sys
 
 import pytest
@@ -2831,6 +2832,22 @@ class TestOrderCommitmentApiAcceptance:
 
 class TestOrderCommitmentBrowserSequence:
     """UI-COMMIT-001 / BE-SDBR-010: reproducible public browser fixture."""
+
+    def test_browser_seed_script_declares_all_business_scenarios(self):
+        script = Path(
+            "scripts/seed_mto_order_commitment_browser.ps1"
+        ).read_text(encoding="utf-8")
+        for scenario in (
+            "ON-TIME-REFERENCE",
+            "OVER-PROTECTION",
+            "LATER-SAFE-DATE",
+            "MATERIAL-SHORTAGE",
+            "MATERIAL-SKIPPED",
+        ):
+            assert scenario in script
+        assert "ExpectedRecommendation" in script
+        assert "ExpectedCapacityStatus" in script
+        assert "ExpectedMaterialStatus" in script
 
     def test_business_scenarios_are_calculated_by_the_order_commitment_engine(
         self,

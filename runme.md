@@ -30,9 +30,9 @@ git branch --show-current
 git rev-parse --short HEAD
 ```
 
-当前预期分支是 `codex/p1-mto-ddmrp-integration`。后续所有命令都在已选择的 `$SDBR_ROOT` 下执行。MTO、DDMRP 与 P1 集成功能已于 2026-07-16 合并到本地主线，日常检查应优先选择 `master`。
+当前预期分支是 `codex/p1-mto-ddmrp-integration`。MTO、DDMRP 与 P1 集成功能已于 2026-07-16 合并到本地主线，日常检查应优先选择 `master`。
 
-> 注意：不要只打开 worktree 中的 `runme.md` 后直接复制旧的绝对路径。应先执行本节并核对终端打印的分支和提交号。
+> 注意：后续启动代码块均可独立复制，并默认使用 `D:\Documents\SDBR` 主目录。如果要启动其他 worktree，请修改代码块第一行的 `$SDBR_ROOT`，并核对终端打印的分支和提交号。
 
 ## 2. 安装依赖
 
@@ -97,6 +97,8 @@ data\test\workbench-state.db
 前台启动：
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "test"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
@@ -117,6 +119,8 @@ Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:8765/planner/workbench/
 ## 6. 后台启动测试系统服务
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
 $env:SDBR_ENVIRONMENT = "test"
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 $stdoutLog = Join-Path $SDBR_ROOT "uvicorn.out.log"
@@ -157,6 +161,8 @@ data\production\workbench-state.db
 ```
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\production\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "production"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8766
@@ -173,6 +179,8 @@ http://127.0.0.1:8766/planner/workbench
 如需使用独立数据库文件：
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
 $env:SDBR_ENVIRONMENT = "test"
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 python -m uvicorn sdbr.api:app --host 127.0.0.1 --port 8765
@@ -194,9 +202,15 @@ python -m sdbr.planning_worker --base-url http://127.0.0.1:8765 --worker-id work
 
 ## 10. 测试数据
 
-重置或生成测试数据：
+首次启动、切换到包含新测试案例的版本，或页面显示“无可用数据”时，需要初始化测试数据。该操作会清除当前测试库中的操作记录，只用于测试环境。
+
+服务尚未启动时，重建测试数据库：
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
+$env:SDBR_ENVIRONMENT = "test"
+$env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 sdbr-reset-test-data
 ```
 
@@ -205,6 +219,61 @@ sdbr-reset-test-data
 ```powershell
 python -m sdbr.test_data
 ```
+
+服务已经在 `8765` 端口运行时，使用应用内置端点重置当前活动测试库，然后刷新页面：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8765/planner/workbench/test-data/acceptance/reset"
+```
+
+核对 DDMRP 演示数据是否可用：
+
+```powershell
+$ddmrp = Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8765/planner/workbench/ddmrp/status"
+$ddmrp.Data.Summary | Format-List
+```
+
+预期至少显示 `DecouplingPointCount: 12`，以及红、黄、绿、高于绿区各 3 条。
+
+### 10.1 生成 MTO 多场景测试订单
+
+服务已经在 `8765` 端口运行时，执行以下脚本生成 MTO 业务案例和操作流程案例：
+
+```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
+pwsh -File .\scripts\seed_mto_order_commitment_browser.ps1 `
+  -BaseUrl http://127.0.0.1:8765 `
+  -OutputPath .tmp\mto-order-commitment-browser-fixture.json
+```
+
+脚本通过正式订单接收和评估 API 计算结果，并在结果与预期不一致时立即报错。成功后打开：
+
+```text
+http://127.0.0.1:8765/planner/workbench#order-commitment
+```
+
+可以按订单号搜索以下业务案例：
+
+| 订单 | 关键输入 | 预期业务结论 |
+| --- | --- | --- |
+| `TST-MTO-SO-ON-TIME-REFERENCE` | 1 件，物料需求 5 EA | CCR 负荷由 180 增至 240 分钟，即 50%；按期可行，但 80% 只是参考保护线，仍需计划员确认。 |
+| `TST-MTO-SO-OVER-PROTECTION` | 4 件，物料需求 20 EA | CCR 负荷由 180 增至 420 分钟，即 87.5%；可以按期，但超过参考保护线，需要计划员确认。 |
+| `TST-MTO-SO-LATER-SAFE-DATE` | 6 件，物料需求 30 EA | 请求日期的 CCR 产能不足，系统计算下一可行工作日作为安全承诺日期。 |
+| `TST-MTO-SO-MATERIAL-SHORTAGE` | 1 件，物料需求 120 EA，可用量 100 EA | 产能可以评估，但物料短缺，暂不建议接受。 |
+| `TST-MTO-SO-MATERIAL-SKIPPED` | 1 件，计划员关闭物料检查并填写原因 | 只表示产能可行，物料仍待确认，不能声称完整可行。 |
+
+脚本还会生成 `FLOW-ACCEPT`、`FLOW-REJECT` 和 `FLOW-STALE` 流程案例，分别验证计划员接受、拒绝和使用过期评估进行决策。
+
+结构化验证证据写入：
+
+```text
+.tmp\mto-order-commitment-browser-fixture.json
+```
+
+> 注意：该脚本首先重置 MTO 测试数据，会清除当前测试库中的 MTO 评估、CCR 产能预留和相关 Planning Run 流程状态。它只适用于测试环境。
 
 ## 11. Simio 可选验证
 
@@ -233,6 +302,8 @@ git status --short
 页面内容与预期不一致时，先执行以下命令，不要先重置测试数据：
 
 ```powershell
+$SDBR_ROOT = "D:\Documents\SDBR"
+Set-Location $SDBR_ROOT
 Write-Host "Source root: $SDBR_ROOT"
 git -C $SDBR_ROOT branch --show-current
 git -C $SDBR_ROOT rev-parse --short HEAD

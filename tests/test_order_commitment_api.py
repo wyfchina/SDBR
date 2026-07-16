@@ -2849,6 +2849,18 @@ class TestOrderCommitmentBrowserSequence:
         assert "ExpectedCapacityStatus" in script
         assert "ExpectedMaterialStatus" in script
 
+    def test_runbook_documents_multiple_mto_business_examples(self):
+        runbook = Path("runme.md").read_text(encoding="utf-8")
+        assert "seed_mto_order_commitment_browser.ps1" in runbook
+        for scenario in (
+            "TST-MTO-SO-ON-TIME-REFERENCE",
+            "TST-MTO-SO-OVER-PROTECTION",
+            "TST-MTO-SO-LATER-SAFE-DATE",
+            "TST-MTO-SO-MATERIAL-SHORTAGE",
+            "TST-MTO-SO-MATERIAL-SKIPPED",
+        ):
+            assert scenario in runbook
+
     def test_business_scenarios_are_calculated_by_the_order_commitment_engine(
         self,
     ):

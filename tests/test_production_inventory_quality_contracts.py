@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
-from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
@@ -12,10 +11,11 @@ from sdbr.production_inventory_quality_contracts import (
     ack_schema,
     process_inventory_quality_evidence_message,
 )
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 from sdbr.state_store import SQLiteWorkbenchStateStore
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 CONTRACT_DIR = CONTRACT_ROOT / "contracts" / "production-inventory-quality-evidence-v1"
 
 

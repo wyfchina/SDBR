@@ -18,6 +18,7 @@ from sdbr.ddsop_contracts import (
     build_variance_analysis_feedback_message,
     process_ddsop_config_message,
 )
+from sdbr.environment_paths import resolve_public_demo_package_root
 
 
 EXPECTED_PACKAGE_CHECKSUM = (
@@ -35,12 +36,7 @@ REVIEWED_CANDIDATES = ("PART-FPGA-SPACE", "WH-ELEC-QA", "EA")
 
 
 def public_demo_package_root() -> Path:
-    return Path(
-        os.environ.get(
-            "SDBR_PUBLIC_DEMO_PACKAGE_ROOT",
-            r"D:\Documents\DDAE_INTERFACE_CONTRACT\data\public-demo-golden-data-v1",
-        )
-    )
+    return resolve_public_demo_package_root()
 
 
 def expected_package_checksum() -> str:

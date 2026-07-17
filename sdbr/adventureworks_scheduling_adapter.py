@@ -17,6 +17,7 @@ from sdbr.ddsop_runtime_planning_input import (
     build_bounded_scheduling_input_from_package,
     process_runtime_planning_input_message,
 )
+from sdbr.environment_paths import resolve_public_demo_package_root
 
 
 ADVENTUREWORKS_ADAPTER_PROFILE_ID = (
@@ -56,12 +57,7 @@ def adventureworks_adapter_output_dir() -> Path:
 
 
 def adventureworks_public_demo_package_root() -> Path:
-    return Path(
-        os.environ.get(
-            "SDBR_PUBLIC_DEMO_PACKAGE_ROOT",
-            r"D:\Documents\DDAE_INTERFACE_CONTRACT\data\public-demo-golden-data-v1",
-        )
-    )
+    return resolve_public_demo_package_root()
 
 
 def build_adventureworks_scheduling_adapter_status(

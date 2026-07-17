@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-from pathlib import Path
 from threading import Thread
 
 from fastapi.testclient import TestClient
@@ -16,6 +15,7 @@ from sdbr.ddsop_contracts import (
     feedback_ack_schema,
     feedback_schema,
 )
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 from sdbr.state_store import WorkbenchStateStore
 from sdbr.test_data import (
     BASELINE_MASTER_DATA_VERSION_ID,
@@ -24,7 +24,7 @@ from sdbr.test_data import (
 )
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 CONFIG_EXAMPLES = CONTRACT_ROOT / "contracts" / "ddsop-config-inbound-v1" / "examples"
 
 

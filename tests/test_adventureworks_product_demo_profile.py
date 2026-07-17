@@ -10,9 +10,10 @@ from sdbr.adventureworks_product_demo_profile import (
     build_adventureworks_product_demo_profile_status,
 )
 from sdbr.api import create_app
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 CONTRACT_DIR = CONTRACT_ROOT / "contracts" / "adventureworks-product-demo-v1"
 
 

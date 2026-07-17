@@ -5,7 +5,6 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
-from pathlib import Path
 
 import pytest
 
@@ -20,10 +19,11 @@ from sdbr.ddsop_runtime_planning_input import (
     record_runtime_feedback_correlations,
     record_runtime_planning_input_processing_result,
 )
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 from sdbr.state_store import WorkbenchStateStore
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 RUNTIME_EXAMPLE = (
     CONTRACT_ROOT
     / "contracts"

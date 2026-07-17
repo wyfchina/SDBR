@@ -5,22 +5,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
+
 
 CONFIG_CONTRACT_ID = "DDSOP-CONFIG-INBOUND-V1"
 FEEDBACK_CONTRACT_ID = "DDSOP-FEEDBACK-OUTBOUND-V1"
 CONTRACT_VERSION = "1.0.0"
-DEFAULT_CONTRACT_ROOT = Path(
-    os.environ.get(
-        "DDAE_INTERFACE_CONTRACT_ROOT",
-        r"D:\Documents\DDAE_INTERFACE_CONTRACT",
-    )
-)
+DEFAULT_CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 
 
 @dataclass(frozen=True)

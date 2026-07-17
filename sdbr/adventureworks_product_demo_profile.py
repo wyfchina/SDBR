@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from jsonschema import Draft202012Validator
+
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 
 
 PROFILE_ID = "ADVENTUREWORKS_PRODUCT_DEMO_V1"
@@ -51,12 +52,7 @@ class ProfileAssetPaths:
 
 
 def default_contract_root() -> Path:
-    return Path(
-        os.environ.get(
-            "DDAE_INTERFACE_CONTRACT_ROOT",
-            r"D:\Documents\DDAE_INTERFACE_CONTRACT",
-        )
-    )
+    return resolve_ddae_interface_contract_root()
 
 
 def adventureworks_product_demo_contract_dir(contract_root: Path | None = None) -> Path:

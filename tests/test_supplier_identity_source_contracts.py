@@ -3,10 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
-from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 from sdbr.state_store import SQLiteWorkbenchStateStore
 from sdbr.supplier_identity_source_contracts import (
     SupplierSourceReferenceResolver,
@@ -15,7 +15,7 @@ from sdbr.supplier_identity_source_contracts import (
 )
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 CONTRACT_DIR = CONTRACT_ROOT / "contracts" / "production-supplier-identity-source-v1"
 
 

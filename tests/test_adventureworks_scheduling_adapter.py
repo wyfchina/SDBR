@@ -19,9 +19,10 @@ from sdbr.adventureworks_scheduling_adapter import (
 from sdbr.api import create_app
 from sdbr.ddsop_contracts import DEFAULT_CONTRACT_ROOT
 from sdbr.ddsop_runtime_planning_input import process_runtime_planning_input_message
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
 
 
-CONTRACT_ROOT = Path(r"D:\Documents\DDAE_INTERFACE_CONTRACT")
+CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 PACKAGE_ROOT = CONTRACT_ROOT / "data" / "public-demo-golden-data-v1"
 
 

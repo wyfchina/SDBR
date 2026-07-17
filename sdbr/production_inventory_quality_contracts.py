@@ -5,22 +5,18 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from sdbr.environment_paths import resolve_ddae_interface_contract_root
+
 
 CONTRACT_ID = "PRODUCTION-INVENTORY-QUALITY-EVIDENCE-V1"
 CONTRACT_VERSION = "1.0.0"
 CONSUMER_SYSTEM = "SDBR"
-DEFAULT_CONTRACT_ROOT = Path(
-    os.environ.get(
-        "DDAE_INTERFACE_CONTRACT_ROOT",
-        r"D:\Documents\DDAE_INTERFACE_CONTRACT",
-    )
-)
+DEFAULT_CONTRACT_ROOT = resolve_ddae_interface_contract_root()
 
 ACK_STATUSES = {"Accepted", "Rejected", "Duplicate", "DeadLettered"}
 SOURCE_AUTHORITATIVE_STATUS = "SourceAuthoritative"

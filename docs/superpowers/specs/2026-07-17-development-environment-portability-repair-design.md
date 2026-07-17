@@ -1,7 +1,9 @@
 # SDBR Development Environment Portability Repair Design
 
-**Date:** 2026-07-17  
-**Status:** Approved for implementation by the user  
+**Date:** 2026-07-17
+
+**Status:** Approved for implementation by the user
+
 **Applicable backend capabilities:** `BE-RUN-010`, `BE-INT-008`
 
 ## 1. Purpose

@@ -9,8 +9,13 @@
 ### 1.1 当前集成版（master，日常检查使用）
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
+$DDAE_CONTRACT_ROOT = (
+  Resolve-Path (Join-Path $HOME "Documents\DDAE_INTERFACE_CONTRACT")
+).Path
 Set-Location $SDBR_ROOT
+$env:DDAE_INTERFACE_CONTRACT_ROOT = $DDAE_CONTRACT_ROOT
+New-Item -ItemType Directory -Force .tmp | Out-Null
 git branch --show-current
 git rev-parse --short HEAD
 ```
@@ -24,7 +29,9 @@ master
 ### 1.2 P1 集成 worktree（继续独立开发时使用）
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR\.worktrees\p1-integration"
+$SDBR_ROOT = (
+  Resolve-Path (Join-Path $HOME "Documents\SDBR\.worktrees\p1-integration")
+).Path
 Set-Location $SDBR_ROOT
 git branch --show-current
 git rev-parse --short HEAD
@@ -32,7 +39,7 @@ git rev-parse --short HEAD
 
 当前预期分支是 `codex/p1-mto-ddmrp-integration`。MTO、DDMRP 与 P1 集成功能已于 2026-07-16 合并到本地主线，日常检查应优先选择 `master`。
 
-> 注意：后续启动代码块均可独立复制，并默认使用 `D:\Documents\SDBR` 主目录。如果要启动其他 worktree，请修改代码块第一行的 `$SDBR_ROOT`，并核对终端打印的分支和提交号。
+> 注意：后续启动代码块均可独立复制，并默认从 `$HOME\Documents\SDBR` 解析主目录。如果要启动其他 worktree，请修改代码块第一行的 `$SDBR_ROOT`，并核对终端打印的分支和提交号。`DDAE_INTERFACE_CONTRACT_ROOT` 选择外部契约仓库；仅在未设置该变量时才使用历史兼容路径 `D:\Documents\DDAE_INTERFACE_CONTRACT`。
 
 ## 2. 安装依赖
 
@@ -74,16 +81,16 @@ node --check sdbr\web\planner-workbench.js
 全量测试：
 
 ```powershell
-pytest -q --basetemp .tmp\pytest-full -p no:cacheprovider
+python -m pytest -q --basetemp .tmp\pytest-full -p no:cacheprovider
 ```
 
 常用定向测试：
 
 ```powershell
-pytest tests\test_api.py -q
-pytest tests\test_scheduling_solver.py -q
-pytest tests\test_dispatch_priority.py tests\test_integration_contracts.py -q
-pytest tests\test_simio_model_template.py tests\test_simio_validation.py -q
+python -m pytest tests\test_api.py -q
+python -m pytest tests\test_scheduling_solver.py -q
+python -m pytest tests\test_dispatch_priority.py tests\test_integration_contracts.py -q
+python -m pytest tests\test_simio_model_template.py tests\test_simio_validation.py -q
 ```
 
 ## 5. 启动测试系统服务
@@ -97,7 +104,7 @@ data\test\workbench-state.db
 前台启动：
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "test"
@@ -119,7 +126,7 @@ Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:8765/planner/workbench/
 ## 6. 后台启动测试系统服务
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 $env:SDBR_ENVIRONMENT = "test"
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
@@ -161,7 +168,7 @@ data\production\workbench-state.db
 ```
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\production\workbench-state.db"
 $env:SDBR_ENVIRONMENT = "production"
@@ -179,7 +186,7 @@ http://127.0.0.1:8766/planner/workbench
 如需使用独立数据库文件：
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 $env:SDBR_ENVIRONMENT = "test"
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
@@ -207,7 +214,7 @@ python -m sdbr.planning_worker --base-url http://127.0.0.1:8765 --worker-id work
 服务尚未启动时，重建测试数据库：
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 $env:SDBR_ENVIRONMENT = "test"
 $env:SDBR_WORKBENCH_DB_PATH = Join-Path $SDBR_ROOT "data\test\workbench-state.db"
@@ -242,7 +249,7 @@ $ddmrp.Data.Summary | Format-List
 服务已经在 `8765` 端口运行时，执行以下脚本生成 MTO 业务案例和操作流程案例：
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 pwsh -File .\scripts\seed_mto_order_commitment_browser.ps1 `
   -BaseUrl http://127.0.0.1:8765 `
@@ -302,7 +309,7 @@ git status --short
 页面内容与预期不一致时，先执行以下命令，不要先重置测试数据：
 
 ```powershell
-$SDBR_ROOT = "D:\Documents\SDBR"
+$SDBR_ROOT = (Resolve-Path (Join-Path $HOME "Documents\SDBR")).Path
 Set-Location $SDBR_ROOT
 Write-Host "Source root: $SDBR_ROOT"
 git -C $SDBR_ROOT branch --show-current

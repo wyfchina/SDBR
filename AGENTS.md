@@ -33,7 +33,7 @@
 - Planning Run work must freeze the `OperatingModelConfigurationID` used for that run so results can always be traced back to the DDS&OP/DDAE configuration version in force at scheduling time.
 - Time buffers, control points, DDMRP parameters, resource roles, and other DDAE-origin settings must be consumed according to the contract only. Do not silently extend their meaning or add implicit fields in SDBR.
 - Feedback from SDBR to DDAE must include configuration version, run version, timestamp, data source, exception reason, and a traceable ID.
-- Existing ERP/MES mock interfaces may remain inside SDBR, but DDAE connectivity must be governed separately by the Contract Agent and the contracts under `D:\Documents\DDAE_INTERFACE_CONTRACT`.
+- Existing ERP/MES mock interfaces may remain inside SDBR, but DDAE connectivity must be governed separately by the Contract Agent and the contracts under `DDAE_INTERFACE_CONTRACT_ROOT`; the legacy fallback is `D:\Documents\DDAE_INTERFACE_CONTRACT`.
 - If the execution layer discovers that a DDAE contract is insufficient, submit a contract change request. Do not first implement hidden SDBR-only fields or UI-side parameter workarounds.
 - DDMRP capability belongs inside the DDOM runtime path, but do not build DDMRP parameter configuration, Buffer Profile governance, adjustment-factor approval, or DDS&OP scenario-governance UI here. Those settings are external inputs until a later explicit scope change.
 
